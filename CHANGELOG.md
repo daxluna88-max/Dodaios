@@ -9,6 +9,10 @@ versioning per [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Optional pre-execution gate on `ToolExecutor` that can force a confirmation or refuse any tool call, including `safe` and `monitor` ones (ADR-0044)
+
 ---
 
 ## [4.0.1] — 2026-10-20
