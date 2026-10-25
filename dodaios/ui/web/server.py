@@ -69,6 +69,9 @@ WEB_DIR = Path(__file__).resolve().parent
 DIST_DIR = WEB_DIR / "dist"
 INDEX_FILE = DIST_DIR / "index.html"
 ASSETS_DIR = DIST_DIR / "assets"
+#: The phone panel (``/m/``): plain static files, no build step. No secret is in them;
+#: every call they make carries the Control Key as a Bearer token.
+MOBILE_DIR = WEB_DIR / "mobile"
 
 # The Verse ships pre-rendered plates and 3D models; Windows' MIME registry
 # does not know these types, and a wrong type makes the WebView refuse them.
@@ -2399,6 +2402,8 @@ class WebServer:
     # ------------------------------------------------------------------
 
     def _register_static_or_spa(self, app: FastAPI) -> None:
+        if MOBILE_DIR.is_dir():
+            app.mount("/m", StaticFiles(directory=str(MOBILE_DIR), html=True), name="mobile")
         if self.cfg.ui.dev_mode:
             return
 
