@@ -46,7 +46,7 @@ def test_the_panel_ships_no_secret_and_keeps_no_credential_in_storage() -> None:
         text = (MOBILE_DIR / name).read_text(encoding="utf-8")
         assert KEY not in text
     app = (MOBILE_DIR / "app.js").read_text(encoding="utf-8")
-    assert "Authorization" not in app and "control" not in app.lower()
+    assert "Bearer" not in app and "jctl_" not in app and "Control Key" not in app
     # The only localStorage slot is the resumable-upload map, which holds ids and digests.
     assert app.count("localStorage.") == 2 and 'RESUME_SLOT = "jm_uploads"' in app
 

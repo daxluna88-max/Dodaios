@@ -20,14 +20,14 @@ import secrets
 import sqlite3
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 try:  # POSIX advisory file locks; Windows falls back to the in-process lock alone
     import fcntl
-except ImportError:  # pragma: no cover - platform dependent
+except ImportError:  # no fcntl on Windows: the in-process lock alone applies (documented above)
     fcntl = None  # type: ignore[assignment]
 
 DEFAULT_MAX_FILE = 2 * 1024**3
@@ -45,6 +45,13 @@ _PUBLIC = ("id", "name", "size", "offset", "ready", "direction", "device_id", "c
 
 class TransferError(ValueError):
     """A refused operation; the message is safe to show the client."""
+
+
+class Revoked(TransferError):
+    """The caller's guard refused at the moment of the mutation (the device was revoked)."""
+
+
+Guard = Callable[[], bool]
 
 
 class NotFound(KeyError):
@@ -134,11 +141,11 @@ class TransferStore:
     def _fsync_dir(self) -> None:
         try:
             fd = os.open(self.root, os.O_RDONLY)
-        except OSError:  # not supported on every platform (Windows)
+        except OSError:  # directories cannot be opened on Windows: nothing to sync there
             return
         try:
             os.fsync(fd)
-        except OSError:
+        except OSError:  # a filesystem without directory sync: the blob fsync still holds
             pass
         finally:
             os.close(fd)
@@ -152,7 +159,7 @@ class TransferStore:
     # ------------------------------------------------------------- uploads
     def create(
         self, owner: str, device_id: str, name: str, size: int, sha256: str,
-        *, direction: str = "in",
+        *, direction: str = "in", guard: Guard | None = None,
     ) -> str:
         if not owner or not device_id:
             raise TransferError("owner and device required")
@@ -169,6 +176,8 @@ class TransferStore:
         now = time.time()
         transfer_id = secrets.token_hex(16)
         with self._db() as db:
+            if guard is not None and not guard():
+                raise Revoked("device revoked")
             used = db.execute("SELECT COALESCE(SUM(size),0) FROM transfers").fetchone()[0]
             count = db.execute("SELECT COUNT(*) FROM transfers").fetchone()[0]
             if used + size > self.quota or count >= MAX_TRANSFERS:
@@ -192,7 +201,9 @@ class TransferStore:
         with self._db() as db:
             return self._public(self._row(db, owner, transfer_id))
 
-    def append(self, owner: str, transfer_id: str, offset: int, data: bytes) -> int:
+    def append(
+        self, owner: str, transfer_id: str, offset: int, data: bytes, *, guard: Guard | None = None
+    ) -> int:
         if type(offset) is not int or offset < 0:
             raise TransferError("invalid offset")
         if not isinstance(data, bytes) or not 0 < len(data) <= self.chunk_size:
@@ -211,6 +222,8 @@ class TransferStore:
                     raise TransferError(
                         "offset conflict or completed transfer; read the status before retrying"
                     )
+                if guard is not None and not guard():  # last look before the bytes land
+                    raise Revoked("device revoked")
                 # Repair bytes written before a crash that never reached the database.
                 if handle.seek(0, 2) < offset:
                     raise TransferError("stored file is truncated")
@@ -226,7 +239,9 @@ class TransferStore:
                     )
         return offset + len(data)
 
-    def finish(self, owner: str, transfer_id: str) -> dict[str, Any]:
+    def finish(
+        self, owner: str, transfer_id: str, *, guard: Guard | None = None
+    ) -> dict[str, Any]:
         """Verify the digest, then make the file downloadable. Hashing holds only this
         transfer's lock, never the database."""
         with self._lock(transfer_id):
@@ -248,6 +263,8 @@ class TransferStore:
             if digest.hexdigest() != row["digest"]:
                 raise TransferError("checksum mismatch")
             with self._db() as db:
+                if guard is not None and not guard():  # revoked while the file was hashed
+                    raise Revoked("device revoked")
                 db.execute(
                     "UPDATE transfers SET ready=1, updated_at=? WHERE id=?",
                     (time.time(), transfer_id),
@@ -302,7 +319,7 @@ class TransferStore:
             try:
                 self.delete(row["owner"], row["id"])
                 dropped += 1
-            except (NotFound, TransferError):
+            except (NotFound, TransferError):  # already gone: the goal (no blob, no row) is met
                 continue
         return dropped
 
@@ -323,7 +340,7 @@ class TransferStore:
             if now - row["updated_at"] > ttl or missing:
                 try:
                     self.delete(row["owner"], row["id"])
-                except (NotFound, TransferError):
+                except (NotFound, TransferError):  # deleted by a caller meanwhile: nothing to do
                     continue
                 removed["missing_blobs" if missing else "expired"] += 1
         for blob in self.root.glob("*.blob"):
@@ -334,6 +351,6 @@ class TransferStore:
                 if now - blob.stat().st_mtime > 300:
                     blob.unlink()
                     removed["orphan_blobs"] += 1
-            except OSError:
+            except OSError:  # the blob vanished or is unreadable: the next sweep looks again
                 continue
         return removed

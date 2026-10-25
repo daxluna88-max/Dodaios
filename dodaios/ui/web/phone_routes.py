@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 
 from dodaios.agent_chat import attachments as chat_attachments
 from dodaios.phone.devices import DeviceRegistry, PairingError, csrf_matches
-from dodaios.phone.store import NotFound, TransferError, TransferStore
+from dodaios.phone.store import NotFound, Revoked, TransferError, TransferStore
 
 router = APIRouter(prefix="/api/phone", tags=["phone"])
 admin_router = APIRouter(prefix="/api/phone-admin", tags=["phone"])
@@ -106,9 +106,23 @@ def _owner(request: Request) -> str:
     return _hub(request).registry.owner
 
 
+def _guard(request: Request, device: dict[str, Any]) -> Any:
+    """A callable answering "is this device still paired?" for a mutation's last look."""
+    registry = _hub(request).registry
+    return lambda: registry.is_active(device["id"])
+
+
+def _ensure_active(request: Request, device: dict[str, Any]) -> None:
+    """Re-check membership after an await that may have outlived the request's entry check."""
+    if not _hub(request).registry.is_active(device["id"]):
+        raise HTTPException(status_code=401, detail="not paired")
+
+
 def _store_call(fn: Any, *args: Any, **kwargs: Any) -> Any:
     try:
         return fn(*args, **kwargs)
+    except Revoked as exc:
+        raise HTTPException(status_code=401, detail="not paired") from exc
     except NotFound as exc:
         raise HTTPException(status_code=404, detail="file not found") from exc
     except TransferError as exc:
@@ -139,7 +153,7 @@ async def redeem(body: RedeemBody, request: Request, response: Response) -> dict
 
 
 @router.get("/me")
-async def me(device: dict[str, Any] = Depends(_device)) -> dict[str, Any]:  # noqa: B008
+def me(device: dict[str, Any] = Depends(_device)) -> dict[str, Any]:  # noqa: B008
     return {"device": {k: v for k, v in device.items() if k != "csrf"}, "csrf": device["csrf"]}
 
 
@@ -240,6 +254,8 @@ async def send_message(
                 handle.close()
     if not body.text.strip() and not attachments:
         raise HTTPException(status_code=400, detail="write a message or attach a file")
+    # Preparing the attachments awaited; a device revoked meanwhile must not reach the agent.
+    _ensure_active(request, device)
     message = routes.MessageBody(text=body.text, attachments=attachments, timezone=body.timezone)
     return await routes.post_message(session_id, message, request)
 
@@ -255,7 +271,7 @@ async def approve(
     )
 
 
-@router.post("/chats/{session_id}/cancel")
+@router.post("/chats/{session_id}/cancel", openapi_extra={"x-jarvis-dangerous": True})
 async def cancel(
     session_id: str, request: Request, _device: dict[str, Any] = Depends(_device)  # noqa: B008
 ) -> dict[str, Any]:
@@ -290,8 +306,10 @@ async def create_file(
 ) -> dict[str, Any]:
     hub = _hub(request)
     transfer_id = await asyncio.to_thread(
-        _store_call, hub.store.create, _owner(request), device["id"], body.name, body.size,
-        body.sha256.lower(),
+        lambda: _store_call(
+            hub.store.create, _owner(request), device["id"], body.name, body.size,
+            body.sha256.lower(), guard=_guard(request, device),
+        )
     )
     return {"id": transfer_id, "offset": 0, "chunk_size": hub.store.chunk_size}
 
@@ -308,7 +326,7 @@ async def file_status(
 @router.put("/files/{file_id}/chunk")
 async def put_chunk(
     file_id: str, offset: int, request: Request,
-    _device: dict[str, Any] = Depends(_device),  # noqa: B008
+    device: dict[str, Any] = Depends(_device),  # noqa: B008
 ) -> dict[str, int]:
     hub = _hub(request)
     limit = hub.store.chunk_size
@@ -320,18 +338,26 @@ async def put_chunk(
         data.extend(part)
         if len(data) > limit:
             raise HTTPException(status_code=413, detail="chunk too large")
+    _ensure_active(request, device)  # the body took time to arrive
     new_offset = await asyncio.to_thread(
-        _store_call, hub.store.append, _owner(request), file_id, offset, bytes(data)
+        lambda: _store_call(
+            hub.store.append, _owner(request), file_id, offset, bytes(data),
+            guard=_guard(request, device),
+        )
     )
     return {"offset": new_offset}
 
 
 @router.post("/files/{file_id}/finish")
 async def finish_file(
-    file_id: str, request: Request, _device: dict[str, Any] = Depends(_device)  # noqa: B008
+    file_id: str, request: Request, device: dict[str, Any] = Depends(_device)  # noqa: B008
 ) -> dict[str, Any]:
     hub = _hub(request)
-    row = await asyncio.to_thread(_store_call, hub.store.finish, _owner(request), file_id)
+    row = await asyncio.to_thread(
+        lambda: _store_call(
+            hub.store.finish, _owner(request), file_id, guard=_guard(request, device)
+        )
+    )
     return _file_view(hub, row)
 
 

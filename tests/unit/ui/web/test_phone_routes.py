@@ -304,3 +304,58 @@ def test_a_message_carries_uploaded_files_through_the_chat_pipeline(
     assert phone.post(f"/api/phone/chats/{sid}/messages",
                       json={"text": "x", "file_ids": ["0" * 32]}).status_code == 404
     assert "body" not in seen
+
+
+# ------------------------------------------- revocation during long operations
+def test_a_device_revoked_while_attachments_are_prepared_dispatches_nothing(
+    app, owner, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    phone, _ = pair(app, owner)
+    svc = app.state.agent_chat
+    session = svc.store.create_session(provider="claude-code", title="x", surface="agent",
+                                       model="", effort="", cwd=str(tmp_path))
+    sent = upload(phone, "nota.txt", b"ciao")
+    device_id = phone.get("/api/phone/me").json()["device"]["id"]
+    dispatched: list[object] = []
+
+    class Found:
+        def to_dict(self) -> dict[str, Any]:
+            return {"name": "nota.txt"}
+
+    async def revoking_ingest(folder, **_kw):
+        # The owner revokes the phone while the attachment is being read and analysed.
+        app.state.phone_hub.registry.revoke(device_id)
+        return [Found()]
+
+    async def fake_post(session_id, body, request):
+        dispatched.append(body)
+        return {"turn_id": "t"}
+
+    monkeypatch.setattr(phone_routes.chat_attachments, "ingest", revoking_ingest)
+    monkeypatch.setattr("dodaios.ui.web.agent_chat_routes.post_message", fake_post)
+    res = phone.post(f"/api/phone/chats/{session.session_id}/messages",
+                     json={"text": "leggi", "file_ids": [sent["id"]]})
+    assert res.status_code == 401 and dispatched == []
+
+
+def test_a_device_revoked_during_the_chunk_stream_or_finish_changes_nothing(
+    app, owner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, _ = pair(app, owner)
+    data = b"abcdefgh"
+    fid = phone.post("/api/phone/files", json={"name": "v.bin", "size": 8,
+                                               "sha256": sha(data)}).json()["id"]
+    phone.put(f"/api/phone/files/{fid}/chunk", params={"offset": 0}, content=data[:4])
+    registry = app.state.phone_hub.registry
+    # After the request's entry check passes, membership is gone: nothing may be written.
+    monkeypatch.setattr(registry, "is_active", lambda _id: False)
+    refused = phone.put(f"/api/phone/files/{fid}/chunk", params={"offset": 4}, content=data[4:])
+    assert refused.status_code == 401
+    monkeypatch.undo()
+    assert phone.get(f"/api/phone/files/{fid}").json()["offset"] == 4
+    phone.put(f"/api/phone/files/{fid}/chunk", params={"offset": 4}, content=data[4:])
+    monkeypatch.setattr(registry, "is_active", lambda _id: False)
+    assert phone.post(f"/api/phone/files/{fid}/finish").status_code == 401
+    monkeypatch.undo()
+    assert phone.get(f"/api/phone/files/{fid}").json()["ready"] is False
+    assert phone.post(f"/api/phone/files/{fid}/finish").json()["ready"] is True

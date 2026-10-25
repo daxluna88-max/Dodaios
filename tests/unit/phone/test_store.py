@@ -179,3 +179,22 @@ def test_delete_for_device_drops_only_its_unfinished_uploads(tmp_path: Path) -> 
     assert [row["id"] for row in store.list(OWNER)] == [finished]
     with pytest.raises(NotFound):
         store.status(OWNER, unfinished)
+
+
+def test_a_guard_gets_the_last_word_before_every_mutation(tmp_path: Path) -> None:
+    from dodaios.phone.store import Revoked
+
+    store = TransferStore(tmp_path, chunk_size=3)
+    with pytest.raises(Revoked):
+        make(store, guard=lambda: False)
+    assert store.list(OWNER) == []
+    key = make(store)
+    with pytest.raises(Revoked):
+        store.append(OWNER, key, 0, b"abc", guard=lambda: False)
+    assert store.status(OWNER, key)["offset"] == 0
+    store.append(OWNER, key, 0, b"abc", guard=lambda: True)
+    store.append(OWNER, key, 3, b"def")
+    with pytest.raises(Revoked):
+        store.finish(OWNER, key, guard=lambda: False)  # revoked while the file was hashed
+    assert store.status(OWNER, key)["ready"] is False
+    assert store.finish(OWNER, key, guard=lambda: True)["ready"] is True
