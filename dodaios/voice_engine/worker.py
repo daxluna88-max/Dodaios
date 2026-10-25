@@ -206,6 +206,8 @@ class Worker:
             session.on_tool_result(str(message.get("call_id", "")), message.get("result") or {})
         elif kind == p.TEXT:
             session.on_text(str(message.get("content", "")))
+        elif kind == p.TURN_CONTEXT:
+            session.on_turn_context(str(message.get("content") or ""))
         elif kind == p.INTERRUPT:
             session.on_interrupt()
         elif kind == p.TRUNCATE:

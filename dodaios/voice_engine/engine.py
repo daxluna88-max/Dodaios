@@ -37,6 +37,9 @@ log = logging.getLogger("dodaios.voice_engine.engine")
 
 INPUT_RATE = p.INPUT_RATE
 OUTPUT_RATE = p.OUTPUT_RATE
+#: Upper bound of one turn's extra context (characters): a bigger block slows every answer.
+MAX_TURN_CONTEXT_CHARS = 2000
+
 LANGUAGE_NAMES = {"de": "German", "en": "English", "es": "Spanish", "fr": "French",
                   "it": "Italian", "pt": "Portuguese", "nl": "Dutch"}
 # Small local models otherwise act on mood: "I'm so tired" set the volume and
@@ -183,6 +186,7 @@ class ConversationSession:
         self._awaiting_request = False
         self._pending_user_text = ""
         self._merge_prefix = ""
+        self._turn_context = ""
         self._response: _Response | None = None
         self._tool_waiters: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._seq = 0
@@ -224,6 +228,14 @@ class ConversationSession:
             return
         self._cancel_response(self_initiated=True)
         self._start_response(text)
+
+    def on_turn_context(self, text: str) -> None:
+        """Context for the NEXT answer only (ADR-0048), e.g. the owner's memory for this turn.
+
+        It rides on the user message of that one model call: it is not stored in the history, does
+        not touch the system prompt (so the primed prefix stays valid) and is dropped when it has
+        been used or when the user starts speaking again. An empty text clears it."""
+        self._turn_context = text.strip()[:MAX_TURN_CONTEXT_CHARS] if not self._closed else ""
 
     def on_tool_result(self, call_id: str, result: dict[str, Any]) -> None:
         waiter = self._tool_waiters.pop(call_id, None)
@@ -312,6 +324,7 @@ class ConversationSession:
             self._speculative = None
 
     def _begin_utterance(self, now: float, *, carry_preroll: bool) -> None:
+        self._turn_context = ""  # the user speaks again: context prepared for the old text is stale
         if self._awaiting_request:
             # The user continued after the transcript left but before the app
             # asked for an answer: one turn, not two.
@@ -420,7 +433,9 @@ class ConversationSession:
         response.task = self._loop.create_task(self._respond(response, user_text))
 
     async def _respond(self, response: _Response, user_text: str) -> None:
-        messages = self._bounded_messages() + [{"role": "user", "content": user_text}]
+        context, self._turn_context = self._turn_context, ""
+        call_text = f"{context}\n\n{user_text}" if context else user_text
+        messages = self._bounded_messages() + [{"role": "user", "content": call_text}]
         self._messages.append({"role": "user", "content": user_text})
         speech: asyncio.Queue[str | None] = asyncio.Queue()
         speaker = self._loop.create_task(self._speak(response, speech))

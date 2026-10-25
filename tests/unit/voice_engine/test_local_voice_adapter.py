@@ -424,3 +424,18 @@ async def test_stop_also_cancels_a_direct_prespawn_handshake(
     await engine.stop()
     assert launch.cancelled() and client.closed
     assert engine._client is None and engine.phase == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_turn_context_is_its_own_message_and_never_replaces_the_instructions() -> None:
+    engine, client = await _running_engine()
+    cfg = SimpleNamespace(language="it", instructions="Sei Jarvis.", tools=(), history=(),
+                          turn_pause_ms=None)
+    session = await engine.open(LocalVoiceProvider(_settings()), cfg)
+    before = len(client.sent)
+    await session.set_turn_context("## Memoria\n- Dax prende il treno")
+    await session.set_turn_context("")
+    sent = client.sent[before:]
+    assert [m["type"] for m in sent] == ["turn.context", "turn.context"]  # no session.update
+    assert sent[0]["content"].startswith("## Memoria") and sent[1]["content"] == ""
+    assert sent[0]["session"] == session.session_id

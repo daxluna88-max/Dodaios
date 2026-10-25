@@ -537,6 +537,15 @@ class LocalVoiceSession:
         await self._engine.send({"type": "response.request", "session": self.session_id,
                                  "language": self.language})
 
+    async def set_turn_context(self, text: str) -> None:
+        """Context for the next answer only (ADR-0048); an empty text clears it.
+
+        Not ``update_session(turn_directive=...)``: that REPLACES the engine's instructions with the
+        directive. This rides on the next user message and leaves the primed system prompt alone."""
+        await self._engine.send(
+            {"type": "turn.context", "session": self.session_id, "content": text}
+        )
+
     async def update_session(self, *, instructions: str | None = None,
                              language: str | None = None,
                              tools: tuple[dict[str, Any], ...] | None = None,
