@@ -23,7 +23,8 @@ from the owner's past approvals) therefore cannot stop them.
    invalid value counts as `ask`, never `allow`.
 4. `MissionToolAutoApprover` only answers `risk_tier` and `plausibility`, so it
    never auto-approves a `gate` confirmation.
-5. With no gate installed behaviour is unchanged.
+5. `set_default_gate()` installs one process-wide gate used by every executor without its own, so the several construction sites need no patching.
+6. With no gate installed behaviour is unchanged.
 
 ## Consequences
 

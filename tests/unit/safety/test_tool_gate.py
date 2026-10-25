@@ -163,3 +163,32 @@ async def test_gate_failure_counts_as_ask(gate: _Gate) -> None:
     await executor.execute(tool, {}, config_snapshot=_SNAP)
     assert tool.calls == 0
     assert [e.reason for e in required] == [GATE_REASON]
+
+
+async def test_default_gate_applies_to_executors_without_their_own() -> None:
+    from dodaios.safety.gate import set_default_gate
+
+    gate = _Gate(GateDecision("deny", "no"))
+    set_default_gate(gate)
+    try:
+        executor, _bus, _r, denied = _build(None)
+        tool = _Tool()
+        result = await executor.execute(tool, {}, config_snapshot=_SNAP)
+    finally:
+        set_default_gate(None)
+    assert not result.success and tool.calls == 0
+    assert denied and gate.requests
+
+
+async def test_own_gate_wins_over_default_gate() -> None:
+    from dodaios.safety.gate import set_default_gate
+
+    default = _Gate(GateDecision("deny", "no"))
+    set_default_gate(default)
+    try:
+        executor, _bus, _r, _d = _build(_Gate(GateDecision("allow")))
+        tool = _Tool()
+        result = await executor.execute(tool, {}, config_snapshot=_SNAP)
+    finally:
+        set_default_gate(None)
+    assert result.success and default.requests == []

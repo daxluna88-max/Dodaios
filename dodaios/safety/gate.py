@@ -63,3 +63,19 @@ def coerce_decision(raw: object) -> GateDecision:
     if isinstance(raw, GateDecision) and raw.verdict in VALID_VERDICTS:
         return raw
     return GateDecision("ask", "gate returned an invalid decision")
+
+
+_default_gate: ToolGate | None = None
+
+
+def set_default_gate(gate: ToolGate | None) -> None:
+    """Install (or clear) the process-wide gate used by every ``ToolExecutor``
+    that has no gate of its own. The app has several executor construction
+    sites; an integration installs its gate once here instead of patching each.
+    """
+    global _default_gate
+    _default_gate = gate
+
+
+def get_default_gate() -> ToolGate | None:
+    return _default_gate

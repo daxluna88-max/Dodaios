@@ -41,7 +41,7 @@ from .approval_surface import (
     UNATTENDED,
     resolve_approval_surface,
 )
-from .gate import GATE_REASON, GateDecision, GateRequest, ToolGate, coerce_decision
+from .gate import GATE_REASON, GateDecision, GateRequest, ToolGate, coerce_decision, get_default_gate
 from .origin import OriginLedger, TargetOrigin, classify_targets
 from .risk_tier import ActionBlocked, RiskTierEvaluator
 
@@ -150,6 +150,10 @@ class ToolExecutor:
         """Install or remove the pre-execution gate (idempotent)."""
         self._gate = gate
 
+    def _active_gate(self) -> ToolGate | None:
+        """This executor's own gate, else the process-wide default (ADR-0044)."""
+        return self._gate if self._gate is not None else get_default_gate()
+
     async def _review_with_gate(
         self,
         tool: Tool,
@@ -160,7 +164,7 @@ class ToolExecutor:
     ) -> GateDecision:
         """Ask the gate about one call. Never raises and never returns an
         implicit ``allow``: an error, a timeout or a malformed answer is ``ask``."""
-        gate = self._gate
+        gate = self._active_gate()
         if gate is None:
             return GateDecision("allow")
         request = GateRequest(
@@ -378,7 +382,7 @@ class ToolExecutor:
         # 1.5 Optional gate (ADR-0044). It runs after the blacklist and can
         # only tighten: deny refuses now, ask forces a confirmation below.
         gate_confirm = False
-        if self._gate is not None:
+        if self._active_gate() is not None:
             gate_decision = await self._review_with_gate(tool, args, decision, origin, tid)
             if gate_decision.verdict == "deny":
                 reason = f"gate: {gate_decision.reason}" if gate_decision.reason else "gate"
