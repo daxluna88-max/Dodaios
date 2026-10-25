@@ -26,6 +26,7 @@ Progress = Callable[[str, float], None]
 SELFTEST_PHRASES = {
     "de": "Hallo, ich bin bereit.",  # i18n-allow: German readiness phrase
     "en": "Hello, I am ready.",
+    "it": "Ciao, sono pronto.",  # i18n-allow: Italian readiness phrase
 }
 
 

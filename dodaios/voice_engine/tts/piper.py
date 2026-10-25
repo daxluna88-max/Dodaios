@@ -15,7 +15,13 @@ import numpy as np
 from dodaios.voice_engine.models import is_present, model_path
 from dodaios.voice_engine.stt import default_threads
 
-VOICES = {"de": "piper-de-thorsten-medium", "en": "piper-en-ryan-medium"}
+VOICES = {
+    "de": "piper-de-thorsten-medium",
+    "en": "piper-en-ryan-medium",
+    "it": "piper-it-paola-medium",
+}
+#: Other registered voices, selectable with ``voice=`` (name in the model registry).
+ALTERNATIVE_VOICES = {"it": ("piper-it-riccardo-x-low",)}
 
 
 class PiperTts:
@@ -40,10 +46,15 @@ class PiperTts:
         self.sample_rate = int(self._tts.sample_rate)
 
     @classmethod
-    def for_language(cls, language: str, *, threads: int | None = None) -> PiperTts:
-        voice = VOICES.get(language)
-        if voice is None or not is_present(voice):
-            raise RuntimeError(f"no Piper voice installed for language {language!r}")
+    def for_language(
+        cls, language: str, *, voice: str | None = None, threads: int | None = None
+    ) -> PiperTts:
+        allowed = (VOICES.get(language), *ALTERNATIVE_VOICES.get(language, ()))
+        voice = voice or VOICES.get(language)
+        if voice is None or voice not in allowed or not is_present(voice):
+            raise RuntimeError(
+                f"no Piper voice {voice or ''!r} installed for language {language!r}"
+            )
         return cls(model_path(voice), threads=threads)
 
     def stream(self, text: str, *, stop: threading.Event | None = None) -> Iterator[np.ndarray]:
