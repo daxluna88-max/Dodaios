@@ -192,3 +192,43 @@ async def test_own_gate_wins_over_default_gate() -> None:
     finally:
         set_default_gate(None)
     assert result.success and default.requests == []
+
+
+class _AskTool(_Tool):
+    name = "send_mail"
+    risk_tier = "ask"
+
+
+async def _deny_on_request(bus: EventBus) -> None:
+    async def _deny(e: ActionApprovalRequired) -> None:
+        await bus.publish(ActionDenied(trace_id=e.trace_id, tool_name=e.tool_name, reason="owner said no"))
+
+    bus.subscribe(ActionApprovalRequired, _deny)
+
+
+async def test_gate_ask_on_top_of_tier_ask_is_not_bypassed() -> None:
+    executor, bus, required, _d = _build(_Gate(GateDecision("ask")), mode="bypass")
+    approved: list[ActionApproved] = []
+
+    async def _on_approved(e: ActionApproved) -> None:
+        approved.append(e)
+
+    bus.subscribe(ActionApproved, _on_approved)
+    await _deny_on_request(bus)
+    tool = _AskTool()
+    result = await executor.execute(tool, {}, config_snapshot=_SNAP)
+    assert tool.calls == 0 and not result.success
+    assert [e.reason for e in required] == [GATE_REASON]  # not "risk_tier"
+    assert [e for e in approved if e.approved_by == "bypass"] == []
+
+
+async def test_gate_ask_on_top_of_plausibility_keeps_the_gate_reason() -> None:
+    executor, bus, required, _d = _build(_Gate(GateDecision("ask")), mode="bypass")
+    executor._evaluate_plausibility = lambda tool, decision: type(  # type: ignore[method-assign]
+        "P", (), {"reason": "low_confidence", "require_confirmation": True}
+    )()
+    await _deny_on_request(bus)
+    tool = _Tool()
+    result = await executor.execute(tool, {}, config_snapshot=_SNAP)
+    assert tool.calls == 0 and not result.success
+    assert [e.reason for e in required] == [GATE_REASON]  # so auto-approvers skip it

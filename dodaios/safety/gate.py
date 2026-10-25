@@ -79,3 +79,14 @@ def set_default_gate(gate: ToolGate | None) -> None:
 
 def get_default_gate() -> ToolGate | None:
     return _default_gate
+
+
+class FailClosedGate:
+    """Refuses every call. Installed when an integration that was REQUIRED did not start
+    (``DODAIOS_BOOT_HOOK_REQUIRED``), so the app never runs unprotected by accident."""
+
+    def __init__(self, reason: str = "required integration is not ready") -> None:
+        self.reason = reason
+
+    async def review(self, request: GateRequest) -> GateDecision:
+        return GateDecision("deny", self.reason)

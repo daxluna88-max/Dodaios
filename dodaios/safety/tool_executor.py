@@ -430,9 +430,7 @@ class ToolExecutor:
                         tool.name, exc,
                     )
         # A gate "ask" is not waived by explicit intent (that waiver is applied
-        # above, to the tier requirement only) and is remembered as gate-only
-        # when neither the tier nor plausibility already required one.
-        gate_only = gate_confirm and not tier_confirm and not plaus_confirm
+        # above, to the tier requirement only).
         if gate_confirm:
             tier_confirm = True
         needs_confirm = tier_confirm or plaus_confirm
@@ -443,9 +441,10 @@ class ToolExecutor:
         bypass_default = self._evaluator.bypass_permissions and not (
             config_snapshot or {}
         ).get("approval_ref")
-        # A confirmation only the gate asked for is never approved by bypass:
-        # the gate exists to stop what the tier would let through.
-        if gate_only:
+        # A confirmation the gate asked for is never approved by bypass, even
+        # when the tier or plausibility check ALSO asked for one: the gate
+        # exists to stop what the other checks would let through.
+        if gate_confirm:
             bypass_default = False
         # WHO can answer this gate — declared by the calling layer, never by
         # the model (see ``approval_surface``). It changes only how the
@@ -484,10 +483,13 @@ class ToolExecutor:
             raise
 
         if approval_ticket is not None:
-            if plaus is not None and plaus.require_confirmation:
-                reason = "plausibility"
-            elif gate_only:
+            if gate_confirm:
+                # Wins over the other reasons: the pre-authorization bridges only
+                # answer ``risk_tier`` and ``plausibility``, so a request the
+                # gate also asked for is never auto-approved by them.
                 reason = GATE_REASON
+            elif plaus is not None and plaus.require_confirmation:
+                reason = "plausibility"
             else:
                 reason = "risk_tier"
 
