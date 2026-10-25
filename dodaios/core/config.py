@@ -4677,9 +4677,10 @@ class GoogleAuthConfig(BaseModel):
 
 
 #: Voices the local voice engine can load today (ADR-0037). Pocket TTS is the
-#: natural default; Piper is the floor every machine can run. Qwen3-TTS stays
-#: out of the switchable set until its premium phase (plan section 6, P4).
-VOICE_ENGINE_VOICES: tuple[str, ...] = ("pocket", "piper")
+#: natural default; Kokoro is an optional natural voice (Italian only today,
+#: ADR-0047); Piper is the floor every machine can run. Qwen3-TTS stays out of
+#: the switchable set until its premium phase (plan section 6, P4).
+VOICE_ENGINE_VOICES: tuple[str, ...] = ("pocket", "kokoro", "piper")
 
 
 class VoiceEngineConfig(BaseModel):
@@ -4693,8 +4694,10 @@ class VoiceEngineConfig(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    #: Voice backend: ``pocket`` (natural, CPU) or ``piper`` (floor). An
-    #: unknown value falls back to ``pocket`` instead of failing the config.
+    #: Voice backend: ``pocket`` (natural, CPU), ``kokoro`` (natural, Italian
+    #: only, ~350 MB) or ``piper`` (floor). A language a backend cannot speak
+    #: falls back to Piper. An unknown value falls back to ``pocket`` instead
+    #: of failing the config.
     tts: str = "pocket"
     #: Ollama tag the engine answers with. Empty = automatic: the model setup
     #: picked (installed models first), else the machine-class default.

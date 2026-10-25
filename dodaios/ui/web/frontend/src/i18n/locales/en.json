@@ -2758,6 +2758,7 @@
     "local_voice_llm_missing": "This model is not downloaded yet. Setup downloads it.",
     "local_voice_voice_label": "Voice",
     "local_voice_voice_pocket": "Natural (Pocket TTS)",
+    "local_voice_voice_kokoro": "Natural, Italian (Kokoro)",
     "local_voice_voice_piper": "Basic and fastest (Piper)",
     "local_voice_unverified": "Not verified on this system yet. It may work, but it has not been tested here.",
     "local_voice_selftest_cta": "Run self-test",

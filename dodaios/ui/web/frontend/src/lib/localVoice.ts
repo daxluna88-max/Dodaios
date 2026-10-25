@@ -37,7 +37,7 @@ export const LOCAL_VOICE_SETUP_STAGES = [
 ] as const;
 export type LocalVoiceSetupStage = (typeof LOCAL_VOICE_SETUP_STAGES)[number];
 
-export const LOCAL_VOICE_VOICES = ["pocket", "piper"] as const;
+export const LOCAL_VOICE_VOICES = ["pocket", "kokoro", "piper"] as const;
 export type LocalVoiceVoice = (typeof LOCAL_VOICE_VOICES)[number];
 
 export interface LocalVoiceSetupRun {

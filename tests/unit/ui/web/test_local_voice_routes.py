@@ -94,7 +94,7 @@ def test_settings_are_written_and_applied(client: TestClient, tmp_path: Path) ->
 
 
 def test_an_unknown_voice_is_rejected(client: TestClient) -> None:
-    resp = client.put("/api/providers/local-voice/settings", json={"voice": "kokoro"})
+    resp = client.put("/api/providers/local-voice/settings", json={"voice": "qwen3"})
     assert resp.status_code == 400
 
 

@@ -23,6 +23,9 @@ Piper runtime) runs it, so no new package is needed.
 4. Selftest phrase for Italian; `ClauseChunker` learns the unambiguous Italian abbreviations (dott., sig., prof.,
    ing., avv., ecc., ...) so a title does not end a sentence.
 5. Nothing changes for German and English, and the default TTS ladder is untouched: Kokoro is opt-in.
+6. Kokoro is selectable: `kokoro` joins `VOICE_ENGINE_VOICES` (card, config, four-locale labels, parity test). Setup
+   downloads the ~350 MB model only when `tts = "kokoro"` and `it` is configured. Kokoro speaks Italian only; every
+   other language, and any load failure, falls back to Piper per language (already the runtime behaviour).
 
 ## Consequences
 

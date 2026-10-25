@@ -363,12 +363,14 @@ def _engine_python(home: Path) -> Path:
     return venv_python(home)
 
 
-def _models_for(languages: list[str]) -> list[str]:
+def _models_for(languages: list[str], voice: str = "") -> list[str]:
     from dodaios.voice_engine.models import REGISTRY  # noqa: PLC0415
 
     core = ["silero-vad-v6", "smart-turn-v3.2", "parakeet-tdt-0.6b-v3-int8"]
     piper = [name for lang in languages for name in REGISTRY if name.startswith(f"piper-{lang}-")]
-    return core + piper
+    # Kokoro is a ~350 MB download: only when chosen and a configured language can use it.
+    kokoro = ["kokoro-multi-lang-v1_0"] if voice == "kokoro" and "it" in languages else []
+    return core + piper + kokoro
 
 
 def _copy_engine(source: Path, home: Path) -> None:
@@ -421,7 +423,7 @@ def _run_setup(deps: SetupDeps) -> None:
     _copy_engine(deps.package_source, home)
 
     languages = deps.languages()
-    names = _models_for(languages)
+    names = _models_for(languages, deps.configured_voice())
     for index, name in enumerate(names):
         def report(_file: str, done: int, total: int, index: int = index, name: str = name) -> None:
             part = done / total if total else 0.0
