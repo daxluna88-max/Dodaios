@@ -2758,6 +2758,7 @@
     "local_voice_llm_missing": "Dieses Modell ist noch nicht heruntergeladen. Die Einrichtung lädt es.",
     "local_voice_voice_label": "Stimme",
     "local_voice_voice_pocket": "Natürlich (Pocket TTS)",
+    "local_voice_voice_kokoro": "Natürlich, nur Italienisch (Kokoro)",
     "local_voice_voice_piper": "Einfach und am schnellsten (Piper)",
     "local_voice_unverified": "Auf diesem System noch nicht geprüft. Es kann funktionieren, wurde hier aber noch nicht getestet.",
     "local_voice_selftest_cta": "Selbsttest starten",

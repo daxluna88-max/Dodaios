@@ -99,6 +99,34 @@ REGISTRY: dict[str, ModelSource] = {
             unpacks_to="vits-piper-en_US-ryan-medium",
             licence="CC-BY-4.0 voice; Apache-2.0 runtime",
         ),
+        # Italian voices (ADR-0047); checksums measured on the downloaded archives (2026-10-25).
+        ModelSource(
+            name="piper-it-paola-medium",
+            url=f"{_GH_SHERPA}/tts-models/vits-piper-it_IT-paola-medium.tar.bz2",
+            size=67_221_173,
+            sha256="7541f75778afa164e44e34baaef63befad7698595df26a95ca944b63ef1a16b4",
+            unpacks_to="vits-piper-it_IT-paola-medium",
+            # Dataset paolapersico1/Voice-Dataset-Italian declares CC0-1.0; the model was fine-tuned
+            # from the en_US lessac checkpoint, whose own terms were NOT checked here.
+            licence="dataset CC0-1.0 (declared); lessac base unchecked; Apache-2.0 runtime",
+        ),
+        ModelSource(
+            name="piper-it-riccardo-x-low",
+            url=f"{_GH_SHERPA}/tts-models/vits-piper-it_IT-riccardo-x_low.tar.bz2",
+            size=26_496_614,
+            sha256="8ad0791558ae2b3e96054fc5756ae3ae2f6457fb1765bc01f43bbab85e0a7021",
+            unpacks_to="vits-piper-it_IT-riccardo-x_low",
+            # Trained from scratch on the M-AILABS Italian dataset; its terms were NOT checked here.
+            licence="dataset M-AILABS (terms unchecked); Apache-2.0 runtime",
+        ),
+        ModelSource(
+            name="kokoro-multi-lang-v1_0",
+            url=f"{_GH_SHERPA}/tts-models/kokoro-multi-lang-v1_0.tar.bz2",
+            size=349_906_910,
+            sha256="c5f7e2d2caf082bc1d20fb70334a61d99d20b484500aad32e7cf84c128ea3298",
+            unpacks_to="kokoro-multi-lang-v1_0",
+            licence="Apache-2.0 (weights, runtime); bundled espeak-ng data GPL-3.0",
+        ),
     )
 }
 

@@ -2758,6 +2758,7 @@
     "local_voice_llm_missing": "此模型尚未下载，设置时会自动下载。",
     "local_voice_voice_label": "音色",
     "local_voice_voice_pocket": "自然（Pocket TTS）",
+    "local_voice_voice_kokoro": "自然，仅意大利语（Kokoro）",
     "local_voice_voice_piper": "基础且最快（Piper）",
     "local_voice_unverified": "尚未在此系统上验证。可能可以运行，但还没在这里测试过。",
     "local_voice_selftest_cta": "运行自检",

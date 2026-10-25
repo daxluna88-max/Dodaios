@@ -476,7 +476,7 @@ class NativeLiveVoiceSession(LiveVoiceSession):
             }
         )
 
-    async def _request_native_response(self, language: str = "") -> None:
+    async def _request_native_response(self, language: str = "", user_text: str = "") -> None:
         # The turn's language is decided once (``turn_language``); a provider
         # that can take it per session hears it before it answers.
         update = getattr(self._connection, "update_session", None)
@@ -490,6 +490,7 @@ class NativeLiveVoiceSession(LiveVoiceSession):
                     log.warning(
                         "Native voice language update failed; answering anyway", exc_info=True
                     )
+        await self._send_turn_memory(user_text)
         try:
             await self._connection.request_response()
         except asyncio.CancelledError:
@@ -497,6 +498,25 @@ class NativeLiveVoiceSession(LiveVoiceSession):
         except Exception:
             if not self._closing:
                 log.exception("Native voice response request failed")
+
+    async def _send_turn_memory(self, user_text: str) -> None:
+        """Optional external memory for THIS answer (ADR-0045/0048): bounded, never raising.
+
+        Only for connections that take a per-turn context (the local engine); a connection that
+        answers by itself cannot be given context before it speaks. An empty block still goes
+        out, so a context prepared for an earlier turn can never stand in for this one."""
+        setter = getattr(self._connection, "set_turn_context", None)
+        if not callable(setter):
+            return
+        from dodaios.brain.turn_memory import recall_block  # noqa: PLC0415
+
+        try:
+            block = await recall_block(user_text, budget_ms=200.0)
+            await setter(block)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - memory must never stop a spoken answer
+            log.warning("Native voice turn memory failed; answering without it", exc_info=True)
 
     async def _pump(self) -> None:
         try:
@@ -572,7 +592,9 @@ class NativeLiveVoiceSession(LiveVoiceSession):
                     )
                     self._tools.language = self._language
                     if not getattr(self._connection, "creates_responses_automatically", True):
-                        task = asyncio.create_task(self._request_native_response(self._language))
+                        task = asyncio.create_task(
+                            self._request_native_response(self._language, event.text or "")
+                        )
                         self._control_tasks.add(task)
                         task.add_done_callback(self._control_tasks.discard)
             if role == "assistant":

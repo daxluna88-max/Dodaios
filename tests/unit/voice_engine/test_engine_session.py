@@ -300,3 +300,57 @@ async def test_an_incomplete_verdict_is_rescored_instead_of_waited_out() -> None
     await out.wait(p.TRANSCRIPT_INPUT)
     assert time.monotonic() - started < 2.5
     assert turn.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_turn_context_rides_on_one_answer_and_stays_out_of_the_history() -> None:
+    llm = FakeLlm([(["It is noon."], []), (["Still noon."], [])])
+    session, out, _ = _session(llm, stt=FakeStt(["what time is it", "and now"]))
+    await _say(session)
+    await out.wait(p.TRANSCRIPT_INPUT)
+    session.on_turn_context("## Personal memory\n- Dax takes the train")
+    session.on_response_request("en")
+    await out.wait(p.RESPONSE_DONE)
+    first_user = llm.calls[0][-1]
+    assert first_user["role"] == "user"
+    assert first_user["content"] == "## Personal memory\n- Dax takes the train\n\nwhat time is it"
+    system = llm.calls[0][0]
+    assert system["role"] == "system" and "Personal memory" not in system["content"]
+    # history keeps what the user said, not the injected context
+    assert session._messages[1] == {"role": "user", "content": "what time is it"}
+    await _say(session)
+    await out.wait(p.TRANSCRIPT_INPUT, count=2)
+    session.on_response_request("en")
+    await out.wait(p.RESPONSE_DONE, count=2)
+    assert llm.calls[1][-1]["content"] == "and now"  # consumed: not repeated on the next turn
+    assert all("Personal memory" not in str(m.get("content")) for m in llm.calls[1][:-1])
+
+
+@pytest.mark.asyncio
+async def test_turn_context_is_dropped_when_the_user_keeps_talking_or_it_is_cleared() -> None:
+    llm = FakeLlm([(["Ok."], [])])
+    session, out, _ = _session(llm, stt=FakeStt(["first part", "first part and more"]))
+    await _say(session)
+    await out.wait(p.TRANSCRIPT_INPUT)
+    session.on_turn_context("stale context for the first part")
+    session.on_audio(_speech(0.8))  # the user continues: context for the old text is stale
+    session.on_audio(_silence(0.4))
+    await out.wait(p.TRANSCRIPT_INPUT, count=2)
+    session.on_response_request("en")
+    await out.wait(p.RESPONSE_DONE)
+    assert "stale context" not in llm.calls[0][-1]["content"]
+    session.on_turn_context("x")
+    session.on_turn_context("")  # an empty block clears
+    assert session._turn_context == ""
+
+
+@pytest.mark.asyncio
+async def test_turn_context_is_bounded_and_ignored_after_close() -> None:
+    from dodaios.voice_engine.engine import MAX_TURN_CONTEXT_CHARS
+
+    session, _out, _ = _session(FakeLlm([([], [])]))
+    session.on_turn_context("a" * (MAX_TURN_CONTEXT_CHARS * 3))
+    assert len(session._turn_context) == MAX_TURN_CONTEXT_CHARS
+    session.close()
+    session.on_turn_context("late")
+    assert session._turn_context == ""

@@ -2758,6 +2758,7 @@
     "local_voice_llm_missing": "Este modelo ainda não foi transferido. A configuração transfere-o.",
     "local_voice_voice_label": "Voz",
     "local_voice_voice_pocket": "Natural (Pocket TTS)",
+    "local_voice_voice_kokoro": "Natural, só italiano (Kokoro)",
     "local_voice_voice_piper": "Básica e mais rápida (Piper)",
     "local_voice_unverified": "Ainda não verificado neste sistema. Pode funcionar, mas não foi testado aqui.",
     "local_voice_selftest_cta": "Executar autoteste",

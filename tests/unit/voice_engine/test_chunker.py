@@ -41,3 +41,18 @@ def test_runaway_text_is_split_at_a_space() -> None:
     clauses = _run([text], max_chars=50)
     assert all(len(c) <= 50 for c in clauses)
     assert " ".join(clauses).split() == text.split()
+
+
+def test_italian_titles_do_not_end_a_sentence() -> None:
+    text = "Il dott. Rossi e l'ing. Bianchi arrivano domani. Poi vedremo, ecc. e il resto."
+    assert _run([text]) == [
+        "Il dott. Rossi e l'ing. Bianchi arrivano domani.",
+        "Poi vedremo, ecc. e il resto.",
+    ]
+
+
+def test_italian_title_with_suffix_is_not_cut_inside() -> None:
+    assert _run(["La dott.ssa Verdi risponde subito. Grazie."]) == [
+        "La dott.ssa Verdi risponde subito.",
+        "Grazie.",
+    ]

@@ -17,6 +17,8 @@ _ABBREVIATIONS = frozenset(
         "vgl", "inkl", "evtl", "ggf", "bspw", "sog", "zzgl", "abs", "st", "mio", "mrd",
         # English
         "e", "g", "i", "mr", "mrs", "ms", "vs", "approx", "no", "jr", "sr",
+        # Italian (only unambiguous ones: "es", "tel", "art" also end real sentences)
+        "dott", "sig", "sigg", "prof", "ing", "avv", "geom", "rag", "ecc", "pag", "cfr",
     }
 )
 _SENTENCE_END = re.compile(r"[.!?…]+[\"')\]]*(?=\s)")

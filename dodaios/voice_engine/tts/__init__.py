@@ -1,7 +1,8 @@
 """Text-to-speech backends behind one streaming interface.
 
 The ladder (``docs/local-live-voice-rebuild.md`` section 4.7): Piper is the
-floor that runs everywhere, Pocket TTS the natural CPU voice, Qwen3-TTS the
+floor that runs everywhere, Kokoro an optional natural CPU voice (ADR-0047),
+Pocket TTS the natural CPU voice, Qwen3-TTS the
 premium GPU/MLX voice. Each backend is loaded for one language and yields
 float32 chunks at its own ``sample_rate``.
 """
@@ -34,6 +35,10 @@ def load_tts(kind: str, language: str, **options: object) -> TtsEngine:
         from dodaios.voice_engine.tts.piper import PiperTts  # noqa: PLC0415
 
         return PiperTts.for_language(language, **options)  # type: ignore[arg-type]
+    if kind == "kokoro":
+        from dodaios.voice_engine.tts.kokoro import KokoroTts  # noqa: PLC0415
+
+        return KokoroTts.for_language(language, **options)  # type: ignore[arg-type]
     if kind == "pocket":
         from dodaios.voice_engine.tts.pocket import PocketTts  # noqa: PLC0415
 

@@ -86,6 +86,31 @@ def test_a_failed_voice_prefetch_degrades_to_piper(_isolated_home: Path) -> None
     assert snapshot["warnings"] and "Piper" in snapshot["warnings"][0]
 
 
+def test_kokoro_is_fetched_only_when_chosen_and_italian_is_configured(
+    _isolated_home: Path,
+) -> None:
+    chosen = _world(_isolated_home, installed={"qwen3.5:4b"}, voice="kokoro",
+                    languages=["it", "en"])
+    setup.run_setup_blocking(chosen.deps(PACKAGE))
+    assert "kokoro-multi-lang-v1_0" in chosen.fetched
+    assert "piper-it-paola-medium" in chosen.fetched  # the per-language fallback stays
+    assert setup.setup_snapshot()["error"] == ""
+
+    assert "kokoro-multi-lang-v1_0" not in setup._models_for(["it"], "pocket")
+    assert "kokoro-multi-lang-v1_0" not in setup._models_for(["de", "en"], "kokoro")
+
+
+def test_kokoro_is_a_switchable_voice() -> None:
+    assert VoiceEngineConfig(tts="Kokoro").tts == "kokoro"
+    assert VoiceEngineConfig(tts="nonsense").tts == "pocket"
+    assert "kokoro" in asyncio.run(setup.card_status(JarvisConfig(), installed_llms=_no_llms,
+                                                     machine="cpu"))["voices"]
+
+
+async def _no_llms() -> tuple[set[str], str | None]:
+    return set(), None
+
+
 def test_a_failed_selftest_fails_setup_with_its_reason(_isolated_home: Path) -> None:
     world = _world(_isolated_home, installed={"qwen3.5:4b"},
                    selftest_report={"ok": False, "reason": "The voice could not hear itself."})
@@ -199,7 +224,7 @@ def test_status_before_setup_names_the_next_step(_isolated_home: Path) -> None:
     assert "setup" in status["reason"]
     assert status["llm_model"] == "qwen3.5:4b" and status["llm_source"] == "default"
     assert status["llm_installed"] is True
-    assert status["voice"] == "pocket" and status["voices"] == ["pocket", "piper"]
+    assert status["voice"] == "pocket" and status["voices"] == ["pocket", "kokoro", "piper"]
     assert status["selftest"] is None and status["selftest_running"] is False
     assert set(status) >= {"expected_latency", "os_verified", "platform", "machine_class"}
 
