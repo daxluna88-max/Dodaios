@@ -1395,6 +1395,11 @@ def _phase2_full_brain(
                 from dodaios.brain.wiki_context import WikiContextInjector
                 manager._wiki_injector = WikiContextInjector(search=None)
 
+    # ADR-0046: optional external integration (tool gate, per-turn memory).
+    from dodaios.brain.boot_hook import run_boot_hook
+
+    run_boot_hook(bus, config)
+
     return manager
 
 

@@ -676,7 +676,7 @@ class ActionApprovalRequired(Event):
 
     tool_name: str = ""
     risk_tier: RiskTier = "ask"
-    reason: str = "risk_tier"  # "risk_tier" | "plausibility"
+    reason: str = "risk_tier"  # "risk_tier" | "plausibility" | "gate"
     args_preview: str = ""
     expires_at_ns: int = 0
     mission_id: str | None = None

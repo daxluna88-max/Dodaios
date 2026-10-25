@@ -11324,6 +11324,22 @@ class BrainManager:
             log.warning("WikiContextInjector raised unexpectedly — skipping", exc_info=True)
             self._wiki_context_suffix = ""
 
+        # ADR-0045: optional external turn memory, appended to the same
+        # per-turn suffix (and reset with it). Bounded and never raising.
+        if not (
+            turn_override is not None
+            and turn_override.tool_context.get("tool_origin") == "society"
+        ):
+            from dodaios.brain.turn_memory import recall_block
+
+            memory_block = await recall_block(user_text)
+            if memory_block:
+                self._wiki_context_suffix = (
+                    f"{self._wiki_context_suffix}\n\n{memory_block}"
+                    if self._wiki_context_suffix
+                    else memory_block
+                )
+
         # Wave 2 (omni-latency): assemble the per-turn dynamic context (date +
         # wiki) once. In cache-optimized mode it rides on the user
         # message (keeping the cached system prompt stable); empty in legacy

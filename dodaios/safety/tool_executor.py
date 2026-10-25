@@ -11,6 +11,7 @@ the executor fetches transcript confidence + wake age and decides whether
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Callable
@@ -40,6 +41,7 @@ from .approval_surface import (
     UNATTENDED,
     resolve_approval_surface,
 )
+from .gate import GATE_REASON, GateDecision, GateRequest, ToolGate, coerce_decision, get_default_gate
 from .origin import OriginLedger, TargetOrigin, classify_targets
 from .risk_tier import ActionBlocked, RiskTierEvaluator
 
@@ -105,6 +107,8 @@ class ToolExecutor:
         default_timeout_s: float = 60.0,
         plausibility_config: BrainPlausibilityConfig | None = None,
         plausibility_context_fn: PlausibilityContextFn | None = None,
+        gate: ToolGate | None = None,
+        gate_timeout_s: float = 5.0,
     ) -> None:
         self._bus = bus
         self._evaluator = evaluator
@@ -112,6 +116,10 @@ class ToolExecutor:
         self._default_timeout_s = default_timeout_s
         self._plausibility_config = plausibility_config
         self._plausibility_context_fn = plausibility_context_fn
+        # ADR-0044: optional pre-execution gate. It can only make a call
+        # stricter, and a gate that fails counts as "ask".
+        self._gate = gate
+        self._gate_timeout_s = gate_timeout_s
         # Two-turn voice/chat confirmation: actions deferred by ``execute`` on a
         # conversational turn, keyed by trace_id, awaiting an ``execute_confirmed``
         # (user said "ja") or ``cancel_pending`` (user said "nein"). The tool +
@@ -137,6 +145,44 @@ class ToolExecutor:
         except (TypeError, ValueError):
             return self._default_timeout_s
         return max(self._default_timeout_s, min(asked, self.MAX_APPROVAL_TIMEOUT_S))
+
+    def set_gate(self, gate: ToolGate | None) -> None:
+        """Install or remove the pre-execution gate (idempotent)."""
+        self._gate = gate
+
+    def _active_gate(self) -> ToolGate | None:
+        """This executor's own gate, else the process-wide default (ADR-0044)."""
+        return self._gate if self._gate is not None else get_default_gate()
+
+    async def _review_with_gate(
+        self,
+        tool: Tool,
+        args: dict[str, Any],
+        decision: Any,
+        origin: TargetOrigin,
+        tid: UUID,
+    ) -> GateDecision:
+        """Ask the gate about one call. Never raises and never returns an
+        implicit ``allow``: an error, a timeout or a malformed answer is ``ask``."""
+        gate = self._active_gate()
+        if gate is None:
+            return GateDecision("allow")
+        request = GateRequest(
+            tool_name=tool.name,
+            args=dict(args),
+            tier=decision.tier,
+            approved_by=decision.approved_by,
+            effect=origin.effect,
+            target_origin=origin.origin,
+            origin_source=origin.source,
+            trace_id=tid,
+        )
+        try:
+            raw = await asyncio.wait_for(gate.review(request), timeout=self._gate_timeout_s)
+        except Exception as exc:  # noqa: BLE001 - a broken gate must not allow a call
+            log.warning("gate failed for %s (%r): asking for a confirmation", tool.name, exc)
+            return GateDecision("ask", "gate unavailable")
+        return coerce_decision(raw)
 
     def set_plausibility_context_fn(
         self, fn: PlausibilityContextFn | None,
@@ -333,6 +379,19 @@ class ToolExecutor:
         # sits between arming it and ``ActionProposed``.
         origin = self._target_origin(tool, args, tid, user_utterance)
 
+        # 1.5 Optional gate (ADR-0044). It runs after the blacklist and can
+        # only tighten: deny refuses now, ask forces a confirmation below.
+        gate_confirm = False
+        if self._active_gate() is not None:
+            gate_decision = await self._review_with_gate(tool, args, decision, origin, tid)
+            if gate_decision.verdict == "deny":
+                reason = f"gate: {gate_decision.reason}" if gate_decision.reason else "gate"
+                await self._bus.publish(ActionDenied(
+                    trace_id=tid, tool_name=tool.name, reason=reason,
+                ))
+                return ToolResult(success=False, output=None, error=f"gate-denied ({reason})")
+            gate_confirm = gate_decision.verdict == "ask"
+
         # 2. Plausibility check (Phase 4): the result can force confirmation
         # even when the tier workflow does not (for example, ``monitor``).
         plaus = self._evaluate_plausibility(tool, decision)
@@ -370,6 +429,10 @@ class ToolExecutor:
                         "intent_confirms_args on %r raised %r — keeping confirmation",
                         tool.name, exc,
                     )
+        # A gate "ask" is not waived by explicit intent (that waiver is applied
+        # above, to the tier requirement only).
+        if gate_confirm:
+            tier_confirm = True
         needs_confirm = tier_confirm or plaus_confirm
         # A bound chat owns its approval stance through ChatApprovalBridge.
         # Calls from voice, tasks, missions and other app surfaces use the
@@ -378,6 +441,11 @@ class ToolExecutor:
         bypass_default = self._evaluator.bypass_permissions and not (
             config_snapshot or {}
         ).get("approval_ref")
+        # A confirmation the gate asked for is never approved by bypass, even
+        # when the tier or plausibility check ALSO asked for one: the gate
+        # exists to stop what the other checks would let through.
+        if gate_confirm:
+            bypass_default = False
         # WHO can answer this gate — declared by the calling layer, never by
         # the model (see ``approval_surface``). It changes only how the
         # approval is obtained, never whether one is needed: ``needs_confirm``
@@ -415,11 +483,16 @@ class ToolExecutor:
             raise
 
         if approval_ticket is not None:
-            reason = (
-                "plausibility"
-                if plaus is not None and plaus.require_confirmation
-                else "risk_tier"
-            )
+            if gate_confirm:
+                # Wins over the other reasons: the pre-authorization bridges only
+                # answer ``risk_tier`` and ``plausibility``, so a request the
+                # gate also asked for is never auto-approved by them.
+                reason = GATE_REASON
+            elif plaus is not None and plaus.require_confirmation:
+                reason = "plausibility"
+            else:
+                reason = "risk_tier"
+
             # An unattended call expires immediately: it will not be waited on,
             # so advertising a 60-second window would invite a UI to offer a
             # decision that can no longer reach anybody.
