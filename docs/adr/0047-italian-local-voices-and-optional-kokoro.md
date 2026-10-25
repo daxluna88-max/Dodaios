@@ -33,5 +33,7 @@ Piper runtime) runs it, so no new package is needed.
   Piper's first clause is far faster than Kokoro's; Kokoro is the more natural-sounding option only after listening.
 - Both Piper and Kokoro phonemize Italian with espeak-ng data; the dental diacritic (U+032A) is not in either
   model's vocabulary and is skipped by sherpa-onnx, so pronunciation is close, not exact.
+- Licence check 2026-10-25: Paola's dataset declares CC0-1.0 but its card has no provenance; Riccardo's M-AILABS terms
+  rest on third-party listings (public domain, LibriVox), the primary page was unreachable.
 - The Paola voice was fine-tuned from the en_US lessac checkpoint whose own terms are unchecked: review before
   any commercial redistribution.

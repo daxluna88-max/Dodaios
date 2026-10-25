@@ -106,9 +106,13 @@ REGISTRY: dict[str, ModelSource] = {
             size=67_221_173,
             sha256="7541f75778afa164e44e34baaef63befad7698595df26a95ca944b63ef1a16b4",
             unpacks_to="vits-piper-it_IT-paola-medium",
-            # Dataset paolapersico1/Voice-Dataset-Italian declares CC0-1.0; the model was fine-tuned
-            # from the en_US lessac checkpoint, whose own terms were NOT checked here.
-            licence="dataset CC0-1.0 (declared); lessac base unchecked; Apache-2.0 runtime",
+            # Dataset paolapersico1/Voice-Dataset-Italian declares CC0-1.0 on Hugging Face, but its
+            # card is empty: no recorder or provenance (checked 2026-10-25). The model was
+            # fine-tuned from the en_US lessac checkpoint, whose terms were NOT checked here.
+            licence=(
+                "dataset CC0-1.0 (declared, no provenance); lessac base unchecked; "
+                "Apache-2.0 runtime"
+            ),
         ),
         ModelSource(
             name="piper-it-riccardo-x-low",
@@ -116,7 +120,9 @@ REGISTRY: dict[str, ModelSource] = {
             size=26_496_614,
             sha256="8ad0791558ae2b3e96054fc5756ae3ae2f6457fb1765bc01f43bbab85e0a7021",
             unpacks_to="vits-piper-it_IT-riccardo-x_low",
-            # Trained from scratch on the M-AILABS Italian dataset; its terms were NOT checked here.
+            # Trained from scratch on the M-AILABS Italian dataset. Third-party listings call the
+            # audio (LibriVox) and texts public domain, but the M-AILABS licence text could not be
+            # fetched (caito.de unreachable, 2026-10-25): NOT verified at the primary source.
             licence="dataset M-AILABS (terms unchecked); Apache-2.0 runtime",
         ),
         ModelSource(
