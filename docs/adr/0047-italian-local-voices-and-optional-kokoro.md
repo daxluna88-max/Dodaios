@@ -28,7 +28,7 @@ Piper runtime) runs it, so no new package is needed.
 
 - Piper stays the floor. Measured on a 4-core Linux CPU (see the Jarvis integration repository, `docs/VOICE.md`),
   Piper's first clause is far faster than Kokoro's; Kokoro is the more natural-sounding option only after listening.
-- Kokoro phonemizes Italian with the bundled espeak-ng data; a dental diacritic (U+032A) is not in Kokoro's
-  vocabulary and is skipped by sherpa-onnx, so pronunciation is close, not exact.
+- Both Piper and Kokoro phonemize Italian with espeak-ng data; the dental diacritic (U+032A) is not in either
+  model's vocabulary and is skipped by sherpa-onnx, so pronunciation is close, not exact.
 - The Paola voice was fine-tuned from the en_US lessac checkpoint whose own terms are unchecked: review before
   any commercial redistribution.
