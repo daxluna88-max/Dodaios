@@ -41,6 +41,18 @@ footer textarea{flex:1;resize:none;max-height:120px;font:inherit;color:var(--fg)
 .chips{display:flex;gap:6px;flex-wrap:wrap;padding:0 10px}
 .chip{font-size:13px;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:3px 10px}
 input[type=password],input[type=text]{width:100%;font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin:8px 0}
+.tabs{display:flex;border-top:1px solid var(--line)}
+.tabs button{flex:1;border:0;border-radius:0;background:transparent;color:var(--mute)}
+.tabs button.on{color:var(--acc);font-weight:600}
+.file{display:flex;gap:10px;align-items:center}
+.file .grow{flex:1;min-width:0}
+.file .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file img{width:48px;height:48px;object-fit:cover;border-radius:8px}
+.file a{color:var(--acc);text-decoration:none;padding:8px}
+.bar{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin-top:6px}
+.bar i{display:block;height:100%;background:var(--acc);width:0}
+.bar.err i{background:var(--bad)}
+h2{font-size:14px;color:var(--mute);margin:14px 0 6px;font-weight:600;text-transform:uppercase}
 .hide{display:none!important}
 .mic.on{background:var(--bad);border-color:var(--bad);color:#fff}
 </style>
@@ -62,7 +74,12 @@ input[type=password],input[type=text]{width:100%;font:inherit;color:var(--fg);ba
     <button id="send" class="primary">Invia</button>
     <input id="file" type="file" multiple class="hide">
   </footer>
+  <nav id="tabs" class="tabs hide">
+    <button id="tab-chat" class="on">Chat</button>
+    <button id="tab-files">File</button>
+  </nav>
 </div>
+<script src="/m/sha256.js"></script>
 <script src="/m/app.js"></script>
 </body>
 </html>

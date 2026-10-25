@@ -798,6 +798,11 @@ class WebServer:
         app.state.agent_chat = None
         app.state.agent_chat_factory = self._build_agent_chat_service
         app.include_router(agent_chat_router)
+        from .phone_routes import admin_router as phone_admin_router
+        from .phone_routes import router as phone_router
+
+        app.include_router(phone_router)
+        app.include_router(phone_admin_router)
         from .agent_server_routes import router as agent_server_router
 
         app.include_router(agent_server_router)

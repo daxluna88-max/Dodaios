@@ -1,6 +1,6 @@
 // Shell only: the panel opens offline, but every /api call goes to the network (never cached).
-const SHELL = "jarvis-panel-v1";
-const FILES = ["/m/", "/m/app.js", "/m/manifest.webmanifest", "/m/icon-256.png"];
+const SHELL = "jarvis-panel-v2";
+const FILES = ["/m/", "/m/app.js", "/m/sha256.js", "/m/manifest.webmanifest", "/m/icon-256.png"];
 self.addEventListener("install", (e) => e.waitUntil(caches.open(SHELL).then((c) => c.addAll(FILES))));
 self.addEventListener("activate", (e) => e.waitUntil(
   caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== SHELL).map((k) => caches.delete(k))))));
