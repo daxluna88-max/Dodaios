@@ -1,4 +1,4 @@
-"""Per-turn memory for native live voice (ADR-0048): context reaches the engine before it answers."""
+"""Per-turn memory for native live voice (ADR-0048): context reaches the engine pre-answer."""
 
 from __future__ import annotations
 
