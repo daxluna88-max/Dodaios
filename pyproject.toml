@@ -892,6 +892,7 @@ conductor = ["core/schema.sql", "seed/*.yaml"]
 dodaios = [
     "ui/web/dist/**/*",
     "ui/web/dist/*",
+    "ui/web/mobile/*",
     "assets/**/*",
     # The original brand marks (+ their LOGOS.md provenance ledgers) the
     # artifact brief inlines for a worker (dodaios/artifacts/brand_marks.py).
