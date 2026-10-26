@@ -194,6 +194,7 @@ def destination_of(provider: str, brain: Any = None) -> Destination:
     try:
         host = urlsplit(root if "//" in root else f"//{root}").hostname
     except ValueError:
+        log.debug("endpoint of %s is not a valid URL: treated as remote", provider)
         return Destination(None, False, "the endpoint is not a valid URL")
     if not is_loopback_host(host):
         return Destination(host, False, f"endpoint host {host!r} is not this machine")
