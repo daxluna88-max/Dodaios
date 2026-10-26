@@ -56,7 +56,10 @@ class StdioTransport:
         except (OSError, ValueError, p.ProtocolError) as exc:
             log.error("input stream failed: %s", exc)
         finally:
-            loop.call_soon_threadsafe(inbox.put_nowait, None)
+            try:
+                loop.call_soon_threadsafe(inbox.put_nowait, None)
+            except RuntimeError:  # the worker loop already ended (shutdown): nobody left to tell
+                log.debug("input stream closed after the worker loop ended")
 
     def _blocking_read(self) -> bytes:
         if hasattr(self._source, "read1"):

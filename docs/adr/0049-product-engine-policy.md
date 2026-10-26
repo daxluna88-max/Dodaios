@@ -37,8 +37,8 @@ Consumer and an unset product are untouched: no restriction and no wrapper.
 ## Not decided here (open, see docs/engine-inventory.md)
 
 Consumer orchestration is ADR-0050. Live voice through a selectable provider is ADR-0051. Still open:
-`local-realtime` (self-hosted URL, endpoint not checked, so it is refused under Work), tool/update/telemetry egress,
-embeddings and vision paths not reached through these doors, and a network-negative end-to-end offline profile.
+`local-realtime` (self-hosted URL, endpoint not checked, so it is refused under Work). Egress outside the brain
+registry (tools, updates, telemetry, embeddings, vision) is covered only by the opt-in strict offline profile (ADR-0053).
 Work is therefore NOT yet certified offline: it is enforced at the doors listed above, and each has a test.
 
 ## Consequences

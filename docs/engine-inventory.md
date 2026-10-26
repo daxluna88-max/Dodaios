@@ -23,8 +23,9 @@ Also gated (same product check): `core.registry.load` for `jarvis.stt` / `jarvis
 - `local-realtime` (self-hosted URL) is refused under Work until its endpoint is checked.
 - Subscription launchers and CLIs (`codex_app_server.py`, `claude-cli` runners) outside the brain registry were not
   audited one by one.
-- Tools (browser, GitHub, email), update checks and telemetry: a strict offline profile is a separate item.
-- Embeddings, reranking and vision/document extraction clients outside the brain registry: not audited.
+- Tools (browser, GitHub, email), update checks, telemetry, embeddings, reranking and vision clients outside the
+  brain registry are NOT individually gated. The opt-in strict offline profile (`JARVIS_NETWORK_POLICY=local-only`,
+  ADR-0053) refuses every non-local connection and DNS lookup at the socket layer instead; it is not on by default.
 - `get_class` callers that only probe metadata (`subscription_connected`, signatures) do not run inference.
 
 ## Local live voice
