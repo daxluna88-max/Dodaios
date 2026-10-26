@@ -114,4 +114,57 @@ describe("ConsumerFanoutGroup", () => {
     fireEvent.click(screen.getByTestId("fanout-run"));
     await waitFor(() => expect(screen.getByTestId("fanout-error")).toBeTruthy());
   });
+
+  it("asks for one final answer only when an engine is picked, and shows what was kept back", async () => {
+    const posts = serve(STATUS, {
+      final: { status: "ok", text: "The final word", reason: "", sources: ["b1"], withheld: 1 },
+      branches: [{ branch: "b1", provider: "ollama", status: "ok", text: "local", reason: "" }],
+      report: { budget_reserved: 0, budget_limit: 1, branches: [] },
+      egress: [],
+    });
+    render(<ConsumerFanoutGroup />);
+    fireEvent.change(await screen.findByTestId("fanout-task"), { target: { value: "q" } });
+    fireEvent.click(screen.getByTestId("fanout-engine-ollama"));
+    fireEvent.change(screen.getByTestId("fanout-synth"), { target: { value: "claude-api" } });
+    fireEvent.change(screen.getByTestId("fanout-synth-cost"), { target: { value: "0.2" } });
+    fireEvent.click(screen.getByTestId("fanout-run"));
+    await screen.findByTestId("fanout-final");
+    expect(posts[0]).toMatchObject({ synthesizer: { provider: "claude-api", est_cost: 0.2 } });
+    expect(screen.getByTestId("fanout-final-text").textContent).toBe("The final word");
+    expect(screen.getByTestId("fanout-final-withheld")).toBeTruthy();
+  });
+
+  it("a local synthesizer is free; a disconnected engine cannot be chosen; no choice sends no key", async () => {
+    const posts = serve(STATUS, { branches: [], report: { budget_reserved: 0, budget_limit: 1, branches: [] }, egress: [] });
+    render(<ConsumerFanoutGroup />);
+    fireEvent.change(await screen.findByTestId("fanout-task"), { target: { value: "q" } });
+    fireEvent.click(screen.getByTestId("fanout-engine-ollama"));
+    const options = Array.from((screen.getByTestId("fanout-synth") as HTMLSelectElement).options).map((o) => o.value);
+    expect(options).toEqual(["", "ollama", "claude-api"]); // "openai" is not connected
+    fireEvent.click(screen.getByTestId("fanout-run"));
+    await screen.findByTestId("fanout-results");
+    expect(posts[0]).not.toHaveProperty("synthesizer");
+    fireEvent.change(screen.getByTestId("fanout-synth"), { target: { value: "ollama" } });
+    expect(screen.queryByTestId("fanout-synth-cost")).toBeNull();
+    fireEvent.click(screen.getByTestId("fanout-run"));
+    await waitFor(() => expect(posts).toHaveLength(2));
+    expect(posts[1]).toMatchObject({ synthesizer: { provider: "ollama", est_cost: 0 } });
+  });
+
+  it("shows a refused final answer as such, with the reason and no invented text", async () => {
+    serve(STATUS, {
+      final: { status: "no_input", text: "", reason: "every answer contains local-only material", sources: [], withheld: 2 },
+      branches: [],
+      report: { budget_reserved: 0, budget_limit: 1, branches: [] },
+      egress: [],
+    });
+    render(<ConsumerFanoutGroup />);
+    fireEvent.change(await screen.findByTestId("fanout-task"), { target: { value: "q" } });
+    fireEvent.click(screen.getByTestId("fanout-engine-ollama"));
+    fireEvent.change(screen.getByTestId("fanout-synth"), { target: { value: "claude-api" } });
+    fireEvent.click(screen.getByTestId("fanout-run"));
+    expect((await screen.findByTestId("fanout-final-status")).textContent).toBe("settings_view.fanout.status_no_input");
+    expect(screen.queryByTestId("fanout-final-text")).toBeNull();
+    expect(screen.getByText("every answer contains local-only material")).toBeTruthy();
+  });
 });

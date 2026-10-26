@@ -3172,7 +3172,14 @@
       "status_stale": "Superseded",
       "total": "{s} s in total",
       "sent": "Sent {chars} characters",
-      "budget_used": "Budget used: {used} of {limit}"
+      "budget_used": "Budget used: {used} of {limit}",
+      "synth_label": "Write one final answer with",
+      "synth_none": "Nobody: only compare the answers",
+      "synth_cost_label": "Estimated cost for the final answer",
+      "final_title": "Final answer",
+      "status_no_input": "Not written",
+      "final_sources": "Built from: {sources}",
+      "final_withheld": "{n} answer(s) were kept back from this engine because they contain material that must not leave this computer."
     },
     "silence_window": {
       "title": "Thinking pause",

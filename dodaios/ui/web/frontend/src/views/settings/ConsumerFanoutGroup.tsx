@@ -37,6 +37,8 @@ export function ConsumerFanoutGroup() {
   const [costs, setCosts] = useState<Record<string, string>>({});
   const [budget, setBudget] = useState("1");
   const [allowUnknown, setAllowUnknown] = useState(false);
+  const [synth, setSynth] = useState("");
+  const [synthCost, setSynthCost] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<FanoutResult | null>(null);
@@ -58,6 +60,7 @@ export function ConsumerFanoutGroup() {
 
   if (!status || !status.available) return null;
 
+  const synthEngine = (status.providers ?? []).find((engine) => engine.id === synth && engine.authenticated);
   const ceiling = parseCost(budget);
   const canRun = !busy && task.trim() !== "" && chosen.length > 0 && ceiling !== null;
 
@@ -71,6 +74,15 @@ export function ConsumerFanoutGroup() {
           task: task.trim(),
           budget: ceiling ?? 0,
           allow_unknown_cost: allowUnknown,
+          // Only when asked: without it the request is the same as before (compare only).
+          ...(synthEngine
+            ? {
+                synthesizer: {
+                  provider: synthEngine.id,
+                  est_cost: synthEngine.kind === "local" ? 0 : parseCost(synthCost),
+                },
+              }
+            : {}),
           branches: chosen.map((engine) => ({
             provider: engine.id,
             // Local engines cost no money; everything else only counts if the owner gave an estimate.
@@ -143,6 +155,39 @@ export function ConsumerFanoutGroup() {
           </fieldset>
           <div className="flex flex-wrap items-center gap-3 text-sm">
             <label className="flex items-center gap-2">
+              <span className="text-muted-foreground">{t("settings_view.fanout.synth_label")}</span>
+              <select
+                className={`${FIELD} w-44`}
+                value={synthEngine ? synth : ""}
+                disabled={busy}
+                onChange={(event) => setSynth(event.target.value)}
+                aria-label={t("settings_view.fanout.synth_label")}
+                data-testid="fanout-synth"
+              >
+                <option value="">{t("settings_view.fanout.synth_none")}</option>
+                {status.providers
+                  .filter((engine) => engine.authenticated)
+                  .map((engine) => (
+                    <option key={engine.id} value={engine.id}>
+                      {engine.id}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            {synthEngine && synthEngine.kind !== "local" && (
+              <input
+                className={`${FIELD} w-28`}
+                inputMode="decimal"
+                placeholder={t("settings_view.fanout.cost_placeholder")}
+                aria-label={t("settings_view.fanout.synth_cost_label")}
+                value={synthCost}
+                onChange={(event) => setSynthCost(event.target.value)}
+                data-testid="fanout-synth-cost"
+              />
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <label className="flex items-center gap-2">
               <span className="text-muted-foreground">{t("settings_view.fanout.budget_label")}</span>
               <input
                 className={`${FIELD} w-24`}
@@ -180,6 +225,34 @@ export function ConsumerFanoutGroup() {
         </SettingsRow>
         {result && (
           <div data-testid="fanout-results" className="space-y-3 px-4 py-3.5">
+            {result.final && (
+              <div className="space-y-1 rounded-md border border-border p-3" data-testid="fanout-final">
+                <div className="flex flex-wrap items-baseline gap-x-3 text-sm">
+                  <span className="font-medium text-foreground">{t("settings_view.fanout.final_title")}</span>
+                  <span data-testid="fanout-final-status" className="text-muted-foreground">
+                    {t(`settings_view.fanout.status_${result.final.status}`)}
+                  </span>
+                </div>
+                {result.final.text && (
+                  <div className="whitespace-pre-wrap text-sm text-foreground" data-testid="fanout-final-text">
+                    {result.final.text}
+                  </div>
+                )}
+                {result.final.reason && (
+                  <div className="text-sm text-muted-foreground">{result.final.reason}</div>
+                )}
+                {result.final.sources.length > 0 && (
+                  <div className="text-xs text-muted-foreground">
+                    {fill(t("settings_view.fanout.final_sources"), { sources: result.final.sources.join(", ") })}
+                  </div>
+                )}
+                {result.final.withheld > 0 && (
+                  <div className="text-xs text-muted-foreground" data-testid="fanout-final-withheld">
+                    {fill(t("settings_view.fanout.final_withheld"), { n: result.final.withheld })}
+                  </div>
+                )}
+              </div>
+            )}
             {result.branches.map((branch) => {
               const timing = reportFor(branch.provider);
               const sent = sentFor(branch.provider);

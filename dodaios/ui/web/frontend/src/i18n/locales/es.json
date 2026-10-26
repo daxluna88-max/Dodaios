@@ -3172,7 +3172,14 @@
       "status_stale": "Superado",
       "total": "{s} s en total",
       "sent": "Enviados {chars} caracteres",
-      "budget_used": "Presupuesto usado: {used} de {limit}"
+      "budget_used": "Presupuesto usado: {used} de {limit}",
+      "synth_label": "Redactar una respuesta final con",
+      "synth_none": "Nadie: solo comparar las respuestas",
+      "synth_cost_label": "Coste estimado de la respuesta final",
+      "final_title": "Respuesta final",
+      "status_no_input": "No redactada",
+      "final_sources": "Elaborada a partir de: {sources}",
+      "final_withheld": "Se retuvieron {n} respuesta(s) para este motor porque contienen material que no debe salir de este equipo."
     },
     "silence_window": {
       "title": "Pausa para pensar",

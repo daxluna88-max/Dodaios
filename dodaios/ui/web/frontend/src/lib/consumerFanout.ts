@@ -42,7 +42,19 @@ export interface FanoutReportBranch {
   total_s: number | null;
 }
 
+export interface FanoutFinal {
+  status: "ok" | "no_input" | "refused" | "failed" | "timeout" | "stale" | "cancelled";
+  text: string;
+  reason: string;
+  /** Branch ids whose answers were offered to the synthesizer. */
+  sources: string[];
+  /** Answers kept back because the synthesizer is not on this computer. */
+  withheld: number;
+}
+
 export interface FanoutResult {
+  /** Null when no final answer was asked for. */
+  final?: FanoutFinal | null;
   branches: FanoutBranchResult[];
   report: { budget_reserved: number; budget_limit: number; branches: FanoutReportBranch[] };
   egress: Array<{ branch: string; destination: string; chars: number; items: number }>;
@@ -66,6 +78,8 @@ export async function runFanout(request: {
   branches: FanoutBranchRequest[];
   budget: number;
   allow_unknown_cost: boolean;
+  /** Omitted: compare the answers only. */
+  synthesizer?: FanoutBranchRequest;
 }): Promise<FanoutResult> {
   return readJson<FanoutResult>(
     await fetch("/api/consumer/fanout", {

@@ -3172,7 +3172,14 @@
       "status_stale": "已过期",
       "total": "共 {s} 秒",
       "sent": "已发送 {chars} 个字符",
-      "budget_used": "已用预算：{used} / {limit}"
+      "budget_used": "已用预算：{used} / {limit}",
+      "synth_label": "用以下引擎撰写最终答案",
+      "synth_none": "不用：只比较各个回答",
+      "synth_cost_label": "最终答案的预估费用",
+      "final_title": "最终答案",
+      "status_no_input": "未撰写",
+      "final_sources": "依据：{sources}",
+      "final_withheld": "有 {n} 个回答未提供给该引擎，因为其中含有不得离开本机的内容。"
     },
     "silence_window": {
       "title": "思考停顿",
