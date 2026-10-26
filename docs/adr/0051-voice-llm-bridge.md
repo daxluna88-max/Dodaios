@@ -1,6 +1,6 @@
 # ADR-0051 — Live voice answered by an app-side provider (LLM bridge)
 
-**Status:** Accepted (config key only; no UI) · **Date:** 2026-10-26
+**Status:** Accepted · **Date:** 2026-10-26
 
 ## Context
 
@@ -23,12 +23,15 @@ loop stay local.
    converted to a normalized `BrainRequest`; one task per call id; cancel closes the stream and sends nothing more.
 4. Tool calls still go through the engine's `tool.call` and the ToolExecutor gate; a provider switch never
    approves or executes anything. The engine passes `session=` only to models that ask (`needs_session`).
-5. Config: `[voice_engine].llm_source = "ollama"` (default, unchanged behaviour) or `"brain"` with `llm_provider`
-   and `llm_provider_model`. `EngineSettings` forwards `llm.source = "bridge"` in `configure`.
+5. Config and card: `[voice_engine].answer_source = "ollama"` (default, unchanged behaviour) or `"brain"` with `answer_provider`
+   and `answer_provider_model`. `EngineSettings` forwards `llm.source = "bridge"` in `configure`. The Local voice card has an "Answers from"
+   select (this machine's Ollama or a provider). It lists local providers only under the Work product, the route
+   rejects a remote one there (HTTP 400), and the card shows a note when the chosen provider is remote. Choosing a
+   provider hides the Ollama model row; the model of the provider itself is a config key without UI.
 
 ## Not decided here
 
-A settings UI and translations for the source, a provider capability check at selection time (a text-only provider
+A capability check at selection time (a text-only provider
 with tools fails at call time), mid-session switching (the source is fixed at engine start; a change needs an
 engine restart), measured latency of cloud providers for voice, audio-native providers, and the privacy gate
 (ADR-0050) in front of a remote provider chosen for voice.

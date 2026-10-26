@@ -114,10 +114,10 @@ class EngineSettings:
     llm_model: str = DEFAULT_LLM
     llm_base_url: str = "http://127.0.0.1:11434"
     #: ``ollama``: the worker talks to a local server. ``brain``: the app answers each model call
-    #: with ``llm_provider`` / ``llm_provider_model`` through the provider registry (ADR-0051).
-    llm_source: str = "ollama"
-    llm_provider: str = ""
-    llm_provider_model: str = ""
+    #: with ``answer_provider`` / ``answer_provider_model`` through the provider registry (ADR-0051).
+    answer_source: str = "ollama"
+    answer_provider: str = ""
+    answer_provider_model: str = ""
 
     @classmethod
     def from_config(cls, cfg: Any) -> EngineSettings:
@@ -148,16 +148,16 @@ class EngineSettings:
             tts_options=dict(pick("tts_options", {})),
             llm_model=str(pick("llm_model", recorded.get("llm_model") or DEFAULT_LLM)),
             llm_base_url=str(pick("llm_base_url", _ollama_root())),
-            llm_source="brain" if str(pick("llm_source", "ollama")) == "brain" else "ollama",
-            llm_provider=str(pick("llm_provider", "")),
-            llm_provider_model=str(pick("llm_provider_model", "")),
+            answer_source="brain" if str(pick("answer_source", "ollama")) == "brain" else "ollama",
+            answer_provider=str(pick("answer_provider", "")),
+            answer_provider_model=str(pick("answer_provider_model", "")),
         )
 
     def configure_message(self) -> dict[str, Any]:
         return {"type": "configure", "languages": self.languages, "tts": self.tts,
                 "tts_options": self.tts_options,
                 "llm": {"model": self.llm_model, "base_url": self.llm_base_url,
-                        "source": "bridge" if self.llm_source == "brain" else "ollama"}}
+                        "source": "bridge" if self.answer_source == "brain" else "ollama"}}
 
 
 def _no_provider() -> Any:
@@ -414,8 +414,8 @@ class _Engine:
 
             settings = self.settings
             resolver = (
-                brain_resolver(settings.llm_provider, settings.llm_provider_model or None)
-                if settings.llm_provider
+                brain_resolver(settings.answer_provider, settings.answer_provider_model or None)
+                if settings.answer_provider
                 else _no_provider
             )
             self._bridge = BrainLlmBridge(self.send, resolver)

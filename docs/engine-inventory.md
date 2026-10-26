@@ -31,8 +31,8 @@ Also gated (same product check): `core.registry.load` for `jarvis.stt` / `jarvis
 ## Local live voice
 
 `voice_engine/llm.py` streams from a local Ollama server directly (default, unchanged). ADR-0051 adds an
-optional bridge: with `[voice_engine].llm_source = "brain"` the app answers each model call with a registry
-provider (policy applies there; Work reaches only local providers). Configuration is a config key only: no UI, no
+optional bridge: with `[voice_engine].answer_source = "brain"` the app answers each model call with a registry
+provider (policy applies there; Work reaches only local providers). Selectable from the Local voice card (ADR-0051); no
 mid-session switch, no measured latency, no capability check at selection time.
 
 ## Reuse points for the next steps

@@ -4703,11 +4703,11 @@ class VoiceEngineConfig(BaseModel):
     #: picked (installed models first), else the machine-class default.
     llm_model: str = ""
     #: Who answers the engine's model calls: ``ollama`` (a local server, the default) or
-    #: ``brain`` (the app, through ``llm_provider`` / ``llm_provider_model``; Work allows only
+    #: ``brain`` (the app, through ``answer_provider`` / ``answer_provider_model``; Work allows only
     #: local providers).
-    llm_source: str = "ollama"
-    llm_provider: str = ""
-    llm_provider_model: str = ""
+    answer_source: str = "ollama"
+    answer_provider: str = ""
+    answer_provider_model: str = ""
     #: Languages the engine loads a voice for; the first is the fallback voice.
     languages: list[str] = Field(default_factory=lambda: ["de", "en"])
 
@@ -4717,14 +4717,14 @@ class VoiceEngineConfig(BaseModel):
         text = str(value or "").strip().lower()
         return text if text in VOICE_ENGINE_VOICES else "pocket"
 
-    @field_validator("llm_model", "llm_provider", "llm_provider_model", mode="before")
+    @field_validator("llm_model", "answer_provider", "answer_provider_model", mode="before")
     @classmethod
     def _strip_model(cls, value: object) -> str:
         return str(value or "").strip()
 
-    @field_validator("llm_source", mode="before")
+    @field_validator("answer_source", mode="before")
     @classmethod
-    def _known_llm_source(cls, value: object) -> str:
+    def _known_answer_source(cls, value: object) -> str:
         return "brain" if str(value or "").strip().lower() == "brain" else "ollama"
 
     @field_validator("languages", mode="before")

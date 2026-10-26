@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -1533,9 +1534,15 @@ def set_voice_engine_settings(
     *,
     tts: str | None = None,
     llm_model: str | None = None,
+    answer_source: str | None = None,
+    answer_provider: str | None = None,
+    answer_provider_model: str | None = None,
     path: Path = DEFAULT_CONFIG_FILE,
 ) -> None:
     """Persist the Local voice card's choices to ``[voice_engine]``.
+
+    ``answer_source`` is ``ollama`` (default) or ``brain`` (the app answers with
+    ``answer_provider``; ADR-0051). A ``brain`` source needs a provider name in the same write.
 
     ``tts`` must be one of ``config.VOICE_ENGINE_VOICES``; ``llm_model`` is an
     Ollama tag, and an empty string means "automatic". Both land in ONE atomic
@@ -1553,6 +1560,23 @@ def set_voice_engine_settings(
         if any(ch.isspace() for ch in model) or len(model) > 200:
             raise ValueError(f"not an Ollama model tag: {llm_model!r}")
         values["llm_model"] = model
+    if answer_source is not None:
+        source = answer_source.strip().lower()
+        if source not in ("ollama", "brain"):
+            raise ValueError(f"unknown answer source {answer_source!r}: use 'ollama' or 'brain'")
+        values["answer_source"] = source
+    if answer_provider is not None:
+        provider = answer_provider.strip().lower()
+        if provider and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", provider):
+            raise ValueError(f"not a provider name: {answer_provider!r}")
+        values["answer_provider"] = provider
+    if answer_provider_model is not None:
+        pmodel = answer_provider_model.strip()
+        if any(ch.isspace() for ch in pmodel) or len(pmodel) > 200:
+            raise ValueError(f"not a model name: {answer_provider_model!r}")
+        values["answer_provider_model"] = pmodel
+    if values.get("answer_source") == "brain" and not values.get("answer_provider"):
+        raise ValueError("choose a provider for the app to answer with")
     if not values:
         return
     first_key, *rest = values

@@ -258,5 +258,5 @@ def test_engine_passes_the_session_only_to_models_that_ask_for_it():
 def test_config_source_values(raw):
     from dodaios.core.config import VoiceEngineConfig
 
-    assert VoiceEngineConfig(llm_source=raw).llm_source == "brain"
-    assert VoiceEngineConfig(llm_source="x").llm_source == "ollama"
+    assert VoiceEngineConfig(answer_source=raw).answer_source == "brain"
+    assert VoiceEngineConfig(answer_source="x").answer_source == "ollama"
