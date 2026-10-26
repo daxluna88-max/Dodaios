@@ -245,15 +245,37 @@ def activate_from_argv(
 
 
 def _pin_credential_service(service: str, env: dict[str, str]) -> None:
-    """The credential service is bound when ``dodaios.core.config`` is first imported."""
+    """Bind this process to the product's credential service, or confirm it already is.
+
+    ``dodaios.core.config`` binds the service and the data directory when it is first imported.
+    Before that the service is pinned here. After it, activating again (``__main__`` selects the
+    product, then the launcher is handed the same environment) is safe ONLY when everything
+    already bound is the requested product's: credential service, data directory and legacy
+    fallback. Anything else is refused, never rebound.
+    """
     import sys
 
-    if "dodaios.core.config" in sys.modules:
-        raise ProductError("the product was selected after the credential store was bound")
-    env[KEYRING_SERVICE_ENV] = service
-    from dodaios.core import branding
+    config = sys.modules.get("dodaios.core.config")
+    if config is None:
+        env[KEYRING_SERVICE_ENV] = service
+        from dodaios.core import branding
 
-    branding.pin_product_service(service)
+        branding.pin_product_service(service)
+        return
+    data_dir = env.get(DATA_DIR_ENV)
+    bound_dir = getattr(config, "DATA_DIR", None)
+    matches = (
+        getattr(config, "KEYRING_SERVICE", None) == service
+        and not getattr(config, "LEGACY_KEYRING_SERVICES", ("shared",))
+        and env.get(KEYRING_SERVICE_ENV) == service
+        and bool(data_dir)
+        and bound_dir is not None
+        and Path(str(bound_dir)).resolve() == Path(str(data_dir)).resolve()
+    )
+    if not matches:
+        raise ProductError(
+            "the product was selected after the credential store was bound to something else"
+        )
 
 
 def scoped_service(env: Mapping[str, str] | None = None) -> str | None:

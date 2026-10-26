@@ -302,3 +302,103 @@ def _entry_env_run(home: Path, inherited: dict[str, str], *args: str):
                          capture_output=True, text=True, timeout=120, check=False)
     states = [ln for ln in out.stdout.splitlines() if ln.startswith("STATE ")]
     return (json.loads(states[-1][6:]) if states else None), out.stderr
+
+
+# -- main -> launcher: the path that failed after __main__ had already imported config ------------
+# STARTUP STUBS (labelled): a fake ``webview`` module so the desktop dependency check passes, and
+# ``launcher._select_instance_early`` replaced by a sentinel so the run stops right after the
+# product selection instead of opening a window or a server. Nothing past that point is exercised.
+
+_MAIN_TO_LAUNCHER = (
+    "import sys, types, json, os, runpy, importlib.machinery as m\n"
+    "web = types.ModuleType('webview'); web.__spec__ = m.ModuleSpec('webview', None)\n"
+    "sys.modules['webview'] = web  # STUB: the desktop dependency\n"
+    "from dodaios.ui.web import launcher\n"
+    "def stop(argv):\n"
+    "    raise SystemExit(77)  # the launcher swallows ordinary exceptions; 77 means 'got here'\n"
+    "launcher._select_instance_early = stop  # STUB: stop after the product selection\n"
+    "sys.argv = ['dodaios', *sys.argv[1:]]\n"
+    "status = 'completed'\n"
+    "try:\n"
+    "    held = runpy.run_module('dodaios.__main__', run_name='__main__')\n"
+    "except SystemExit as exc:\n"
+    "    status = 'reached-launcher' if exc.code == 77 else 'exit:' + str(exc.code)\n"
+    "cfg = sys.modules.get('dodaios.core.config')\n"
+    "print('STATE ' + json.dumps({'status': status,\n"
+    "    'service': cfg.KEYRING_SERVICE if cfg else None,\n"
+    "    'data': os.environ.get('JARVIS_DATA_DIR'),\n"
+    "    'env': {k: v for k, v in os.environ.items() if k.startswith('JARVIS_')}}), flush=True)\n"
+    "if os.environ.get('HOLD'):\n"
+    "    sys.stdin.readline()\n"
+)
+
+
+def _through_launcher(home: Path, *args: str, extra: dict[str, str] | None = None,
+                      hold: bool = False):
+    env = _entry_env(home, ({"HOLD": "1"} if hold else {}) | (extra or {}))
+    proc = subprocess.Popen([sys.executable, "-c", _MAIN_TO_LAUNCHER, *args], env=env,  # noqa: S603
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
+    if hold:
+        line = ""
+        while not line.startswith("STATE ") and proc.poll() is None:
+            line = proc.stdout.readline()
+        return proc, (json.loads(line[6:]) if line.startswith("STATE ") else None)
+    out, err = proc.communicate(timeout=180)
+    states = [ln for ln in out.splitlines() if ln.startswith("STATE ")]
+    return (json.loads(states[-1][6:]) if states else None), err
+
+
+@pytest.mark.parametrize("product", ["work", "consumer"])
+@pytest.mark.parametrize("command", [("serve",), ("--foreground",)], ids=["headless", "desktop"])
+def test_main_to_launcher_keeps_the_product_after_config_is_imported(tmp_path, product, command):
+    state, err = _through_launcher(tmp_path, "--product", product, *command)
+    assert state is not None, err[-600:]
+    assert state["status"] == "reached-launcher", (state["status"], err[-600:])
+    assert state["service"] == f"dodaios-{product}"
+    assert state["data"].endswith(f"-{product}") and state["data"].count(f"-{product}") == 1
+
+
+@pytest.mark.parametrize("product", ["work", "consumer"])
+def test_a_relaunched_child_reaches_the_launcher_while_the_parent_holds_the_lock(
+    tmp_path, product
+):
+    parent, state = _through_launcher(tmp_path, "--product", product, "--foreground", hold=True)
+    try:
+        assert state is not None and state["status"] == "reached-launcher"
+        child, err = _through_launcher(tmp_path, "--foreground", extra=state["env"])
+        assert child is not None and child["status"] == "reached-launcher", err[-600:]
+        assert child["data"] == state["data"], "no second suffix"
+    finally:
+        parent.communicate("\n", timeout=60)
+
+
+def test_repeated_activation_with_a_conflicting_bound_state_is_still_refused(tmp_path):
+    code = (
+        "import os, sys, json\n"
+        "from dodaios.core import product_profile as pp\n"
+        "paths, _, lock = pp.activate_from_argv(['--product', 'work'])\n"
+        "from dodaios.core import config  # binds the work vault and directory\n"
+        "res = {}\n"
+        "env = dict(os.environ)\n"
+        "res['same'] = pp.activate_from_argv([], env)[0].product\n"
+        "for label, change in (('service', {'JARVIS_KEYRING_SERVICE': 'dodaios-consumer'}),\n"
+        "                      ('data', {'JARVIS_DATA_DIR': '/elsewhere'}),\n"
+        "                      ('product', {'JARVIS_PRODUCT_ACTIVE': 'consumer'})):\n"
+        "    try:\n"
+        "        pp.activate_from_argv([], {**env, **change})\n"
+        "        res[label] = 'accepted'\n"
+        "    except pp.ProductError as exc:\n"
+        "        res[label] = 'refused'\n"
+        "try:\n"
+        "    pp.activate_from_argv(['--product', 'consumer'], env)\n"
+        "    res['flag'] = 'accepted'\n"
+        "except pp.ProductError:\n"
+        "    res['flag'] = 'refused'\n"
+        "print('STATE ' + json.dumps(res))\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], env=_entry_env(tmp_path),  # noqa: S603
+                         capture_output=True, text=True, timeout=120, check=False)
+    state = json.loads(next(ln for ln in out.stdout.splitlines() if ln.startswith("STATE "))[6:])
+    assert state == {"same": "work", "service": "refused", "data": "refused",
+                     "product": "refused", "flag": "refused"}, out.stderr[-400:]
