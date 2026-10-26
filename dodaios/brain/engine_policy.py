@@ -124,6 +124,85 @@ def check_provider(
             )
 
 
+# -- destination locality: where a call REALLY goes (Consumer privacy) ----------------------
+#
+# ``check_provider`` answers "may this product use the provider" and, for Work, accepts a LAN
+# host the owner listed. Consumer privacy asks a stricter question: does the context stay on THIS
+# machine? Only a loopback destination counts. A provider NAME proves nothing (``ollama`` and
+# ``local-openai`` accept any endpoint), a LAN allowlist does not make a host private, and an
+# unknown or malformed endpoint is remote.
+
+
+@dataclass(frozen=True, slots=True)
+class Destination:
+    host: str | None
+    local: bool
+    reason: str
+
+
+def is_loopback_host(host: str | None) -> bool:
+    """Loopback literal or ``localhost`` only. Ignores ``JARVIS_LOCAL_ALLOWED_HOSTS``."""
+    if not host:
+        return False
+    host = host.strip().strip("[]").lower()
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:  # any other name is never resolved, so never considered local
+        return False
+
+
+def _instance_root(brain: Any) -> str | None:
+    """The endpoint the built adapter really uses (looked through policy/metering wrappers)."""
+    seen = 0
+    while brain is not None and seen < 4:
+        root = getattr(brain, "_server_root", None)
+        if isinstance(root, str) and root:
+            return root
+        brain = getattr(brain, "_inner", None) or getattr(brain, "inner", None)
+        seen += 1
+    return None
+
+
+def _configured_root(provider: str) -> tuple[str | None, bool]:
+    from dodaios.core import config as cfg  # noqa: PLC0415 - heavy, imported on use
+
+    default = None
+    if provider == "ollama":
+        from dodaios.plugins.brain.ollama import default_server_root  # noqa: PLC0415
+
+        default = default_server_root()
+    ep = cfg.resolve_provider_endpoint(provider, vendor_default_base_url=default)
+    return (ep.base_url or None), bool(getattr(ep, "via_proxy", False))
+
+
+def destination_of(provider: str, brain: Any = None) -> Destination:
+    """Whether a call to ``provider`` stays on this machine. Fails closed (remote)."""
+    if provider not in LOCAL_PROVIDERS:
+        return Destination(None, False, f"{provider} is a remote provider")
+    try:
+        configured, via_proxy = _configured_root(provider)
+    except Exception as exc:  # noqa: BLE001 - an unreadable endpoint is an unknown one: remote
+        log.debug("endpoint of %s could not be read: %s", provider, type(exc).__name__)
+        return Destination(None, False, "the endpoint could not be read")
+    if via_proxy:
+        return Destination(None, False, f"{provider} is routed through the team proxy")
+    root = _instance_root(brain) or configured
+    if not root:
+        return Destination(None, False, "no endpoint is configured")
+    try:
+        host = urlsplit(root if "//" in root else f"//{root}").hostname
+    except ValueError:
+        return Destination(None, False, "the endpoint is not a valid URL")
+    if not is_loopback_host(host):
+        return Destination(host, False, f"endpoint host {host!r} is not this machine")
+    bound = _instance_root(brain)
+    if bound and configured and bound.rstrip("/") != configured.rstrip("/"):
+        return Destination(host, False, "the endpoint changed after the engine was built")
+    return Destination(host, True, "loopback")
+
+
 # -- speech and realtime plugins: the same door for the Work product ----------------------
 
 #: Local-only speech/realtime plugins, by group slot. Anything else in these groups is a
@@ -311,6 +390,7 @@ def enforce(brain: Any, provider_name: str) -> Any:
 __all__ = [
     "EngineCapabilities",
     "EnginePolicyError",
+    "Destination",
     "EngineSelection",
     "LOCAL_PROVIDERS",
     "PolicyBrain",
@@ -319,9 +399,11 @@ __all__ = [
     "check_provider",
     "check_service",
     "current_product",
+    "destination_of",
     "endpoint_problem",
     "enforce",
     "guard_stream",
     "host_is_local",
+    "is_loopback_host",
     "select_engine",
 ]
