@@ -3172,7 +3172,14 @@
       "status_stale": "Überholt",
       "total": "{s} s insgesamt",
       "sent": "{chars} Zeichen gesendet",
-      "budget_used": "Budget genutzt: {used} von {limit}"
+      "budget_used": "Budget genutzt: {used} von {limit}",
+      "synth_label": "Eine endgültige Antwort schreiben mit",
+      "synth_none": "Niemand: nur die Antworten vergleichen",
+      "synth_cost_label": "Geschätzte Kosten für die endgültige Antwort",
+      "final_title": "Endgültige Antwort",
+      "status_no_input": "Nicht geschrieben",
+      "final_sources": "Erstellt aus: {sources}",
+      "final_withheld": "{n} Antwort(en) wurden dieser Engine vorenthalten, weil sie Material enthalten, das diesen Computer nicht verlassen darf."
     },
     "silence_window": {
       "title": "Denkpause",

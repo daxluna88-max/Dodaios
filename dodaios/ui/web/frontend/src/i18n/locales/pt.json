@@ -3172,7 +3172,14 @@
       "status_stale": "Substituído",
       "total": "{s} s no total",
       "sent": "{chars} caracteres enviados",
-      "budget_used": "Orçamento usado: {used} de {limit}"
+      "budget_used": "Orçamento usado: {used} de {limit}",
+      "synth_label": "Escrever uma resposta final com",
+      "synth_none": "Ninguém: só comparar as respostas",
+      "synth_cost_label": "Custo estimado da resposta final",
+      "final_title": "Resposta final",
+      "status_no_input": "Não escrita",
+      "final_sources": "Construída a partir de: {sources}",
+      "final_withheld": "{n} resposta(s) foram retidas deste motor porque contêm material que não pode sair deste computador."
     },
     "silence_window": {
       "title": "Pausa para pensar",
