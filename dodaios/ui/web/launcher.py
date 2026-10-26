@@ -148,7 +148,31 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
             "wake word / hotkeys / channels). Same as JARVIS_INSTANCE=NAME."
         ),
     )
+    p.add_argument(
+        "--product",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Run as one of the two independent products: 'work' (local models only) or "
+            "'consumer'. Each has its own data directory, config, credentials and launch "
+            "lock; the two can run side by side and never share state."
+        ),
+    )
     return p.parse_args(argv)
+
+
+def _select_product_early(argv: list[str]) -> tuple[str | None, object | None]:
+    """``--product`` (own data dir, config, credential service, lock) BEFORE any import that
+    binds them. Returns ``(error sentence, launch lock)``; the lock must stay referenced for the
+    life of the process. A launch that came through ``python -m dodaios`` has already selected
+    the product (the environment says so) and this is then a no-op."""
+    from dodaios.core import product_profile as pp
+
+    try:
+        _paths, _rest, lock = pp.activate_from_argv(argv)
+    except pp.ProductError as exc:  # reported to the person by the caller, which exits
+        return str(exc), None
+    return None, lock
 
 
 def _select_instance_early(argv: list[str]) -> str | None:
@@ -2249,6 +2273,10 @@ def _main(argv: list[str] | None = None) -> int:
 
     # Which instance this process IS — decided first, before any module that
     # derives a path, a port or an OS identity from it gets imported.
+    _product_error, _product_lock = _select_product_early(_raw_argv)
+    if _product_error is not None:
+        _report_startup_failure(_product_error)
+        return 2
     _instance_error = _select_instance_early(_raw_argv)
     if _instance_error is not None:
         _report_startup_failure(_instance_error)
