@@ -88,6 +88,7 @@ def test_udp_to_a_non_local_address_is_refused():
     sock.close()
 
 
+@pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="no Unix sockets on this platform")
 def test_unix_sockets_are_local_by_construction(tmp_path):
     path = str(tmp_path / "s")
     srv = socket.socket(socket.AF_UNIX)
