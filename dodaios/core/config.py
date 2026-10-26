@@ -4735,6 +4735,25 @@ class VoiceEngineConfig(BaseModel):
         return cleaned or ["de", "en"]
 
 
+class NetworkConfig(BaseModel):
+    """``[network]`` — the opt-in strict offline profile (ADR-0053).
+
+    ``policy = "local-only"`` refuses every connection and DNS lookup that is not this machine (or a host
+    listed in ``JARVIS_LOCAL_ALLOWED_HOSTS``). It is read at process start, so a change needs a restart;
+    ``JARVIS_NETWORK_POLICY`` overrides it. Written only through ``config_writer.set_network_policy``.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    policy: str = "off"
+
+    @field_validator("policy", mode="before")
+    @classmethod
+    def _known_policy(cls, value: object) -> str:
+        text = str(value or "").strip().lower()
+        return text if text in ("off", "local-only") else "off"
+
+
 class SelfBuildConfig(BaseModel):
     """``[self_build]`` — the self-building loop (docs/self-build.md).
 
@@ -4786,6 +4805,7 @@ class JarvisConfig(BaseModel):
     live: LiveConfig = Field(default_factory=LiveConfig)
     # [voice_engine] — the Jarvis-owned local voice engine (ADR-0037).
     voice_engine: VoiceEngineConfig = Field(default_factory=VoiceEngineConfig)
+    network: NetworkConfig = Field(default_factory=NetworkConfig)
     # Google key routing (AI Studio vs Vertex express) — see GoogleAuthConfig.
     google: GoogleAuthConfig = Field(default_factory=GoogleAuthConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)

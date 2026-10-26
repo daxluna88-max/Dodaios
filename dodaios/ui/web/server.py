@@ -565,6 +565,7 @@ class WebServer:
         from .missions_ws_routes import (
             router as missions_ws_router,
         )
+        from .network_policy_routes import router as network_policy_router
         from .onboarding_routes import router as onboarding_router
         from .outputs_routes import router as outputs_router
         from .permissions_routes import router as permissions_router
@@ -635,6 +636,7 @@ class WebServer:
         # Local voice card (setup, status, self-test) — ADR-0037.
         app.include_router(local_voice_router)
         app.include_router(consumer_fanout_router)
+        app.include_router(network_policy_router)
         app.include_router(live_router)
         from dodaios.agent_chat.tasks import run_subscription_task
         from dodaios.core.task_agent import register_runner

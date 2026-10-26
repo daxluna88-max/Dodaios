@@ -634,6 +634,8 @@
     "hero_hands_free": "O pulsa {0} una vez para dictar sin manos.",
     "hero_shortcuts": "Cambiar atajo",
     "hero_assign": "Asignar una tecla",
+    "local_voice_section_title": "En este equipo (experimental)",
+    "local_voice_section_desc": "Llamadas de voz que se ejecutan en este equipo. Elige quién responde: el modelo local o cualquier proveedor al que la app pueda llegar.",
     "engine_title": "Reconocimiento",
     "engine_on_device": "En este ordenador",
     "engine_cloud_short": "Nube",

@@ -634,6 +634,8 @@
     "hero_hands_free": "Ou prime {0} uma vez para ditar mãos-livres.",
     "hero_shortcuts": "Alterar atalho",
     "hero_assign": "Atribuir uma tecla",
+    "local_voice_section_title": "Neste computador (experimental)",
+    "local_voice_section_desc": "Chamadas de voz que rodam neste computador. Escolha quem responde: o modelo local ou qualquer provedor que o app consiga alcançar.",
     "engine_title": "Reconhecimento",
     "engine_on_device": "Neste computador",
     "engine_cloud_short": "Cloud",

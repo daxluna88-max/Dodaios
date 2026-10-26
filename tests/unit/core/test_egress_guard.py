@@ -200,3 +200,70 @@ def test_the_app_entry_point_refuses_an_unknown_network_policy_and_accepts_local
     bad = run("mostly-local")
     assert bad.returncode == 2 and "only supported policy" in bad.stderr
     assert run("local-only").returncode == 0
+
+
+# -- the config file (settings screen) -----------------------------------------------------
+
+
+def test_policy_from_file_values(tmp_path):
+    f = tmp_path / "jarvis.toml"
+    assert eg.policy_from_file(f) is None  # no file yet
+    f.write_text('[network]\npolicy = "local-only"\n', encoding="utf-8")
+    assert eg.policy_from_file(f) == "local-only"
+    f.write_text('[network]\npolicy = "off"\n', encoding="utf-8")
+    assert eg.policy_from_file(f) == "off"
+    f.write_text('[brain]\nprimary = "ollama"\n', encoding="utf-8")
+    assert eg.policy_from_file(f) is None
+    f.write_text('[network]\npolicy = "mostly"\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="only supported"):
+        eg.policy_from_file(f)  # a typo in the file must not leave the network open either
+    f.write_text("[network\nbroken", encoding="utf-8")
+    assert eg.policy_from_file(f) is None  # unreadable file: logged, policy stays off
+
+
+def test_install_from_settings_env_wins_over_the_file(tmp_path):
+    eg.uninstall()
+    f = tmp_path / "jarvis.toml"
+    f.write_text('[network]\npolicy = "local-only"\n', encoding="utf-8")
+    # env says off: the file is ignored
+    assert eg.install_from_settings(f, {eg.POLICY_ENV: "off"}) == "none"
+    assert eg.status()["active"] is False
+    assert eg.install_from_settings(f, {}) == "config"
+    st = eg.status()
+    assert st["active"] is True and st["source"] == "config"
+    with pytest.raises(eg.EgressBlocked):
+        socket.socket().connect((TEST_NET, 80))
+    assert eg.status()["blocked"] == 1 and eg.status()["recent"] == [f"{TEST_NET}:80"]
+    eg.uninstall()
+    assert eg.install_from_settings(f, {eg.POLICY_ENV: "local-only"}) == "env"
+    assert eg.status()["source"] == "env"
+
+
+def test_install_from_settings_with_no_file_and_no_env_installs_nothing(tmp_path):
+    eg.uninstall()
+    assert eg.install_from_settings(tmp_path / "missing.toml", {}) == "none"
+    assert eg.status() == {"active": False, "source": "none", "blocked": 0, "recent": []}
+
+
+def test_the_app_entry_point_reads_the_policy_from_the_config_file(tmp_path, monkeypatch, capsys):
+    from dodaios import __main__ as entry
+    from dodaios.core import config as cfg_mod
+
+    f = tmp_path / "dodaios.toml"
+    f.write_text('[network]\npolicy = "local-only"\n', encoding="utf-8")
+    monkeypatch.setattr(cfg_mod, "DEFAULT_CONFIG_FILE", f)
+    monkeypatch.delenv(eg.POLICY_ENV, raising=False)
+    eg.uninstall()
+    try:
+        try:
+            entry.main(["--version"])
+        except SystemExit:
+            pass
+        assert eg.status()["active"] is True and eg.status()["source"] == "config"
+        with pytest.raises(eg.EgressBlocked):
+            socket.create_connection((TEST_NET, 443), timeout=1)
+    finally:
+        eg.uninstall()
+    f.write_text('[network]\npolicy = "mostly"\n', encoding="utf-8")
+    assert entry.main(["--version"]) == 2  # a typo in the file ends startup, network untouched
+    assert "only supported policy" in capsys.readouterr().err

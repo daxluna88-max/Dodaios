@@ -161,7 +161,8 @@ def install(*, allowed_hosts: frozenset[str] | None = None) -> bool:
 
 def uninstall() -> None:
     """Restore the original socket functions (for tests; the app never uninstalls)."""
-    global _installed, _blocked_count
+    global _installed, _blocked_count, _source
+    _source = "none"
     with _lock:
         originals, _installed = _installed, None
         _blocked.clear()
@@ -174,6 +175,57 @@ def uninstall() -> None:
     socket.getaddrinfo = originals["getaddrinfo"]  # type: ignore[assignment]
     socket.gethostbyname = originals["gethostbyname"]  # type: ignore[assignment]
     socket.gethostbyname_ex = originals["gethostbyname_ex"]  # type: ignore[assignment]
+
+
+def policy_from_file(path: Any) -> str | None:
+    """``[network] policy`` in the config file: ``local-only``, ``off`` or None (absent/unreadable).
+
+    An unknown value is an error (a typo must not leave the network open), exactly like the env var.
+    """
+    import tomllib  # noqa: PLC0415 - only needed at start
+
+    try:
+        with open(path, "rb") as fh:
+            data = tomllib.load(fh)
+    except FileNotFoundError:  # no config file yet: nothing is configured
+        return None
+    except (OSError, tomllib.TOMLDecodeError):
+        log.warning("network policy: config file unreadable; the policy stays off", exc_info=True)
+        return None
+    section = data.get("network")
+    value = str(section.get("policy", "") if isinstance(section, dict) else "").strip().lower()
+    if not value or value == "off":
+        return value or None
+    if value != "local-only":
+        raise ValueError(f"[network] policy = {value!r}: the only supported policy is 'local-only'")
+    return value
+
+
+_source: str = "none"
+
+
+def install_from_settings(path: Any = None, env: dict[str, str] | None = None) -> str:
+    """Install the guard from the env var (wins) or the config file. Returns the source used:
+    ``env``, ``config`` or ``none`` (guard not installed)."""
+    global _source
+    environ = env if env is not None else os.environ
+    if (environ.get(POLICY_ENV) or "").strip():
+        _source = "env" if install_from_env(environ) else "none"
+        return _source
+    if path is not None and policy_from_file(path) == "local-only":
+        install()
+        _source = "config"
+        return _source
+    _source = "none"
+    return _source
+
+
+def status() -> dict[str, Any]:
+    """What this process enforces, for the settings screen. Targets only, never any payload."""
+    count, targets = blocked_attempts()
+    active = _installed is not None
+    return {"active": active, "source": _source if active else "none",
+            "blocked": count, "recent": list(targets)[-5:]}
 
 
 def install_from_env(env: dict[str, str] | None = None) -> bool:

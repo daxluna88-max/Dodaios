@@ -1589,6 +1589,14 @@ def set_voice_engine_settings(
     )
 
 
+def set_network_policy(policy: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
+    """Persist ``[network] policy`` (``off`` | ``local-only``; ADR-0053), applied at next start."""
+    value = policy.strip().lower()
+    if value not in ("off", "local-only"):
+        raise ValueError(f"unknown network policy {policy!r}; expected 'off' or 'local-only'")
+    _patch_table(path, "network", "policy", value)
+
+
 def set_silence_window_ms(ms: int, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
     """Persist the voice silence window to ``[speech] vad_silence_ms`` in jarvis.toml.
 

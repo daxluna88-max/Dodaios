@@ -634,6 +634,8 @@
     "hero_hands_free": "Or press {0} once to dictate hands-free.",
     "hero_shortcuts": "Change shortcut",
     "hero_assign": "Assign a key",
+    "local_voice_section_title": "On this machine (experimental)",
+    "local_voice_section_desc": "Voice calls that run on this computer. Choose who answers: the local model, or any provider the app can reach.",
     "engine_title": "Recognition",
     "engine_on_device": "On this computer",
     "engine_cloud_short": "Cloud",

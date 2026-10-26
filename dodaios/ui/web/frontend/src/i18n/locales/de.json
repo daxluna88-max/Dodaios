@@ -634,6 +634,8 @@
     "hero_hands_free": "Oder drücke einmal {0}, um freihändig zu diktieren.",
     "hero_shortcuts": "Tastenkürzel ändern",
     "hero_assign": "Taste festlegen",
+    "local_voice_section_title": "Auf diesem Rechner (experimentell)",
+    "local_voice_section_desc": "Sprachanrufe, die auf diesem Rechner laufen. Wähle, wer antwortet: das lokale Modell oder ein Anbieter, den die App erreichen kann.",
     "engine_title": "Erkennung",
     "engine_on_device": "Auf diesem Computer",
     "engine_cloud_short": "Cloud",
