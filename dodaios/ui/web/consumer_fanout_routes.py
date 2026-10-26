@@ -68,6 +68,9 @@ class FanOutBody(BaseModel):
     #: Categories a remote branch may receive. Local-only items never go, whatever is listed here.
     allowed_categories: list[str] = Field(default_factory=lambda: ["task"], max_length=10)
     max_concurrent: int = Field(default=3, ge=1, le=6)
+    #: When set, ONE final answer is written by this engine from the branch answers, through the
+    #: same privacy gate, budget and cancellation as the branches.
+    synthesizer: BranchBody | None = None
 
 
 def connection_kind(provider: str) -> str:
@@ -132,13 +135,12 @@ async def consumer_fanout(body: FanOutBody) -> dict[str, Any]:
     known = set(registry.available())
     branches: list[Branch] = []
     refused: list[dict[str, Any]] = []
-    for index, spec in enumerate(body.branches):
+    def build(spec: BranchBody, branch_id: str) -> Branch | None:
         provider = spec.provider.strip().lower()
-        branch_id = f"b{index + 1}"
         if provider not in known:
             refused.append({"branch": branch_id, "provider": provider, "status": "refused",
                             "reason": f"{provider!r} is not an installed provider"})
-            continue
+            return None
         kind = connection_kind(provider)
         try:
             brain = (registry.instantiate(provider, model=spec.model) if spec.model
@@ -146,25 +148,41 @@ async def consumer_fanout(body: FanOutBody) -> dict[str, Any]:
         except engine_policy.EnginePolicyError as exc:  # reason returned to caller
             refused.append({"branch": branch_id, "provider": provider, "status": "refused",
                             "reason": str(exc)})
-            continue
+            return None
         except Exception as exc:  # noqa: BLE001 - one unbuildable provider must not fail the request
             log.warning("fan-out provider %s could not be built: %s", provider, type(exc).__name__)
             refused.append({"branch": branch_id, "provider": provider, "status": "refused",
                             "reason": f"could not be built ({type(exc).__name__})"})
-            continue
-        branches.append(Branch(
+            return None
+        return Branch(
             branch_id, provider, brain, kind,
             authenticated=_authenticated(provider, kind, registry),
             needs_api=spec.needs_api, est_cost=spec.est_cost, timeout_s=spec.timeout_s,
-            instruction=spec.instruction))
+            instruction=spec.instruction)
+
+    for index, spec in enumerate(body.branches):
+        built = build(spec, f"b{index + 1}")
+        if built is not None:
+            branches.append(built)
+    synthesizer = build(body.synthesizer, "synthesis") if body.synthesizer else None
     items = [ContextItem(body.task, "task"),
              *(ContextItem(c.text, c.category, c.local_only) for c in body.context)]
     gate = PrivacyGate(allowed_categories=frozenset(body.allowed_categories) | {"task"})
     orchestrator = Orchestrator(gate, Budget(body.budget), max_concurrent=body.max_concurrent,
                                 allow_unknown_cost=body.allow_unknown_cost)
     results = await orchestrator.run("fanout", items, branches, first_success=body.first_success)
+    final: dict[str, Any] | None = None
+    if body.synthesizer is not None:
+        if synthesizer is None:
+            final = {"status": "refused", "text": "", "reason": "the synthesizer is unavailable",
+                     "sources": [], "withheld": 0}
+        else:
+            synth = await orchestrator.synthesize("fanout", items, results, synthesizer)
+            final = {"status": synth.status, "text": synth.text, "reason": synth.reason,
+                     "sources": list(synth.sources), "withheld": synth.withheld}
     report = fan_out_report(results, orchestrator.budget)
     return {
+        "final": final,
         "branches": [{"branch": r.branch_id, "provider": r.provider, "status": r.status,
                       "text": r.text, "reason": r.reason} for r in results] + refused,
         "report": report,
