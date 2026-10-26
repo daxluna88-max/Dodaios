@@ -79,8 +79,12 @@ def _start_process_from(fake: Path) -> subprocess.Popen[bytes]:
     # Keep executable mode without copying the macOS system file's SIP flags.
     shutil.copy(sleep_bin, target)
     target.chmod(0o755)
+    # argv[0] stays "sleep": a multi-call coreutils (default on newer Ubuntu images) chooses its
+    # applet from argv[0] and would exit at once as "jarvis-fake"; the running executable (what
+    # the bootstrap scan matches) is still the copy inside the fake dir.
     return subprocess.Popen(  # noqa: S603 — self-copied system binary
-        [str(target), "120"],
+        ["sleep", "120"],
+        executable=str(target),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

@@ -545,8 +545,12 @@ def _start_fake_install_process(fake_dir: Path) -> subprocess.Popen[bytes]:
     target = bin_dir / "jarvis-fake"
     shutil.copy2(source_str, target)
     target.chmod(0o755)
+    # argv[0] stays "sleep": a multi-call coreutils (the default on newer Ubuntu images) picks
+    # its applet from argv[0] and would exit at once as "jarvis-fake"; the running executable,
+    # which is what the uninstall scan matches, is still the copy inside fake_dir.
     return subprocess.Popen(  # noqa: S603 — self-copied system binary
-        [str(target), "60"],
+        ["sleep", "60"],
+        executable=str(target),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
