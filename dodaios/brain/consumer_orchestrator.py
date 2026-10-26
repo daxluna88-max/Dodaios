@@ -33,6 +33,7 @@ import asyncio
 import logging
 import re
 import threading
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -202,6 +203,12 @@ class BranchResult:
     reason: str = ""
     egress: EgressRecord | None = None
     usage: dict[str, int] = field(default_factory=dict)
+    #: Measured, not estimated: None when the branch never produced a token (never a made-up zero).
+    first_token_s: float | None = None
+    total_s: float | None = None
+    #: What this branch consumes: ``subscription_quota`` (plan limits), ``api_charge`` (money) or
+    #: ``local_resources`` (CPU/RAM/GPU of this machine). The three are never added together.
+    cost_basis: str = ""
 
 
 class Orchestrator:
@@ -278,34 +285,46 @@ class Orchestrator:
             req = BrainRequest(messages=(BrainMessage(role="user", content=text),), tools=())
             out: list[str] = []
             usage: dict[str, int] = {}
+            basis = {"subscription": "subscription_quota", "api": "api_charge"}.get(
+                b.kind, "local_resources"
+            )
+            timing: dict[str, float] = {}
+
+            def done(status: str, **fields: Any) -> BranchResult:
+                began = timing.get("start")
+                return BranchResult(
+                    b.branch_id, b.provider, status, egress=record,
+                    first_token_s=timing.get("first"),
+                    total_s=None if began is None else time.perf_counter() - began,
+                    cost_basis=basis, **fields,
+                )
+
             async with sem:
+                started = timing["start"] = time.perf_counter()
                 try:
                     async with asyncio.timeout(b.timeout_s):
                         async for delta in b.brain.complete(req):
                             if self._current.get(turn_id) != gen:
-                                return BranchResult(b.branch_id, b.provider, "stale", egress=record)
+                                return done("stale")
                             if delta.tool_call is not None:
                                 continue  # tools are centralized: a branch cannot ask to run one
                             if delta.content:
+                                timing.setdefault("first", time.perf_counter() - started)
                                 out.append(delta.content)
                             if delta.usage:
                                 usage = dict(delta.usage)
                 except TimeoutError:  # reported to the caller as status=timeout, never swallowed
-                    return BranchResult(b.branch_id, b.provider, "timeout", egress=record)
+                    return done("timeout")
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001 - a failed branch must not sink the rest
                     log.warning(
                         "branch %s (%s) failed: %s", b.branch_id, b.provider, type(exc).__name__
                     )
-                    return BranchResult(
-                        b.branch_id, b.provider, "failed", reason=type(exc).__name__, egress=record
-                    )
+                    return done("failed", reason=type(exc).__name__)
             if self._current.get(turn_id) != gen:
-                return BranchResult(b.branch_id, b.provider, "stale", egress=record)
-            return BranchResult(
-                b.branch_id, b.provider, "ok", text="".join(out), egress=record, usage=usage
-            )
+                return done("stale")
+            return done("ok", text="".join(out), usage=usage)
 
         for b in branches:
             tasks[b.branch_id] = asyncio.ensure_future(one(b))
@@ -339,12 +358,34 @@ def _provider(branches: Sequence[Branch], branch_id: str) -> str:
     return next((b.provider for b in branches if b.branch_id == branch_id), "")
 
 
+def fan_out_report(results: Sequence[BranchResult], budget: Budget) -> dict[str, Any]:
+    """Measured numbers for one fan-out, apart by cost basis. Unknown stays None, never zero."""
+    branches = []
+    for r in results:
+        branches.append({
+            "branch": r.branch_id, "provider": r.provider, "status": r.status,
+            "cost_basis": r.cost_basis or None, "first_token_s": r.first_token_s,
+            "total_s": r.total_s, "usage": dict(r.usage) or None,
+            "data_sent": None if r.egress is None else {
+                "categories": list(r.egress.categories), "items": r.egress.items,
+                "chars": r.egress.chars},
+        })
+    return {
+        "budget_reserved": budget.reserved, "budget_limit": budget.limit,
+        "branches_ok": sum(r.status == "ok" for r in results), "branches": branches,
+        # Spend and quota are different currencies: report each basis on its own, never one total.
+        "by_basis": {basis: sum(r.status == "ok" for r in results if r.cost_basis == basis)
+                     for basis in ("subscription_quota", "api_charge", "local_resources")},
+    }
+
+
 __all__ = [
     "Branch",
     "BranchResult",
     "Budget",
     "ContextItem",
     "EgressRecord",
+    "fan_out_report",
     "OrchestrationError",
     "Orchestrator",
     "PrivacyGate",

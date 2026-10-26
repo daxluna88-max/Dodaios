@@ -39,5 +39,5 @@ mid-session switch, no measured latency, no capability check at selection time.
 `BrainProviderRegistry` (entry points `jarvis.brain`: claude-api, openai, gemini, vertex, openrouter, nvidia,
 codex, antigravity, claude-cli, grok, ollama, local-openai), `BrainRequest`/`BrainDelta`, `MeteredBrain`
 (usage ledger), `core.config.resolve_provider_endpoint`, protected credential storage. Consumer orchestration, privacy gate and aggregate budget: `consumer_orchestrator.py` (ADR-0050), library only.
-Not built: a normalized capability catalog beyond what plugins declare (`engine_policy.capabilities_of`), wiring
-into chat/voice, UI.
+Overrides, fallback and per-branch reporting: `engine_routing.py` (ADR-0052), library only. Not built: a normalized
+capability catalog beyond what plugins declare (`engine_policy.capabilities_of`), wiring into chat/voice/jobs, UI.
