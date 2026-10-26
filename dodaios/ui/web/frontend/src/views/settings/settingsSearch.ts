@@ -23,6 +23,8 @@ const SEARCH_GROUPS = [
   { id: "music", keys: ["music", "music_group_title"] },
   { id: "more", keys: ["rows", "team_proxy", "codex_title", "safety_title"] },
   { id: "overlay-taskbar", keys: ["overlay_style", "bar_size", "overlay_taskbar_group_title"] },
+  { id: "network-policy", keys: ["settings_view.network_policy"] },
+  { id: "consumer-fanout", keys: ["settings_view.fanout"] },
 ] as const;
 
 const SEARCH_PAGES = [

@@ -91,6 +91,26 @@ def _authenticated(provider: str, kind: str, registry: Any) -> bool:
     return bool(get_provider_secret(provider))
 
 
+@router.get("/status", summary="Whether fan-out is available and which engines could take part")
+async def consumer_status() -> dict[str, Any]:
+    """Providers the owner could pick, with their connection kind and whether they are usable now.
+
+    Reads stored credentials and plan-login state only; it never contacts a provider. Under the Work
+    product (local only) fan-out is not available and the list is empty.
+    """
+    from dodaios.brain.provider_registry import BrainProviderRegistry  # noqa: PLC0415
+
+    if engine_policy.current_product() == "work":
+        return {"available": False, "reason": "work_local_only", "providers": []}
+    registry = BrainProviderRegistry()
+    rows = []
+    for name in sorted(registry.available()):
+        kind = connection_kind(name)
+        rows.append({"id": name, "kind": kind, "local": kind == "local",
+                     "authenticated": _authenticated(name, kind, registry)})
+    return {"available": True, "reason": "", "providers": rows}
+
+
 @router.post("/fanout", summary="Send one task to several chosen engines")
 async def consumer_fanout(body: FanOutBody) -> dict[str, Any]:
     from dodaios.brain.provider_registry import BrainProviderRegistry  # noqa: PLC0415

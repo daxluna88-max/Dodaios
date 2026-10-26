@@ -173,3 +173,20 @@ def test_work_product_is_refused_with_403_and_nothing_is_built(client, monkeypat
 )
 def test_request_limits_are_enforced(client, patch):
     assert client.post("/api/consumer/fanout", json=body(**patch)).status_code == 422
+
+
+def test_status_lists_engines_with_kind_and_authentication_without_contacting_them(client):
+    data = client.get("/api/consumer/status").json()
+    assert data["available"] is True
+    rows = {r["id"]: r for r in data["providers"]}
+    assert rows["ollama"] == {"id": "ollama", "kind": "local", "local": True, "authenticated": True}
+    assert rows["codex"]["kind"] == "subscription" and rows["codex"]["authenticated"] is True
+    assert rows["claude-api"]["kind"] == "api" and rows["claude-api"]["authenticated"] is True
+    assert rows["openai"]["authenticated"] is False  # no stored key
+    assert Fake.built == [] and Fake.prompts == []  # nothing was built or called
+
+
+def test_status_under_work_says_fanout_is_not_available_and_lists_nothing(client, monkeypatch):
+    monkeypatch.setenv("JARVIS_PRODUCT", "work")
+    data = client.get("/api/consumer/status").json()
+    assert data == {"available": False, "reason": "work_local_only", "providers": []}
