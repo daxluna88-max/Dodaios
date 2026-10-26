@@ -1127,8 +1127,11 @@ def _brain_key(grant: Grant, model: str, login: str | None) -> tuple[str, ...]:
 
 def _new_brain(provider: str, model: str, login: str | None) -> Any:
     from dodaios.agent_chat.runner_api import build_brain
+    from dodaios.brain import engine_policy
     from dodaios.brain.usage_meter import meter_brain
 
+    # Product policy (ADR-0049): this path builds a remote client directly, not via the registry.
+    engine_policy.check_provider(provider)
     if login:
         # No API key: the person's Claude Code login answers, which
         # Anthropic bills as extra usage.
