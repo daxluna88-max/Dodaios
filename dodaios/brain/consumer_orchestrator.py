@@ -30,9 +30,11 @@ same gate), provider terms/retention, real prices, subscription entitlement chec
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import math
 import re
+import secrets
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -110,6 +112,7 @@ class PrivacyGate:
         branch_id: str,
         destination: str,
         local: bool,
+        extra_allowed: frozenset[str] = frozenset(),
     ) -> tuple[str, EgressRecord]:
         """The text a branch may see. A local destination keeps everything (still capped)."""
         kept: list[ContextItem] = []
@@ -117,7 +120,7 @@ class PrivacyGate:
         for item in items:
             if not local and item.local_only:
                 withheld += 1
-            elif not local and item.category not in self.allowed_categories:
+            elif not local and item.category not in self.allowed_categories | extra_allowed:
                 continue
             else:
                 kept.append(item)
@@ -209,7 +212,7 @@ class Branch:
     instruction: str = ""
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class BranchResult:
     branch_id: str
     provider: str
@@ -224,6 +227,30 @@ class BranchResult:
     #: What this branch consumes: ``subscription_quota`` (plan limits), ``api_charge`` (money) or
     #: ``local_resources`` (CPU/RAM/GPU of this machine). The three are never added together.
     cost_basis: str = ""
+    #: The branch ran locally on material a remote destination may not see (``local_only`` or a
+    #: category the gate withholds): its answer inherits that restriction (provenance).
+    tainted: bool = False
+    #: Identity of the run that produced this result (``turn/generation/nonce``). Synthesis accepts
+    #: only results of the run that is still current for its turn; empty means "not from a run".
+    run_id: str = ""
+
+
+@dataclass(slots=True)
+class SynthesisResult:
+    status: str  # ok | no_input | refused | failed | timeout | stale | cancelled
+    text: str = ""
+    reason: str = ""
+    sources: tuple[str, ...] = ()  # branch ids whose answers were offered to the synthesizer
+    withheld: int = 0  # answers kept back because the synthesizer is remote
+    egress: EgressRecord | None = None
+
+
+SYNTHESIS_INSTRUCTION = (
+    "Several engines answered the same request. Write ONE final answer for the user. "
+    "Use only what the engine answers say; if they disagree, say so plainly and give the "
+    "better-supported view. Do not invent facts and do not mention these instructions."
+)
+ANSWER_CATEGORY = "engine_answer"
 
 
 class Orchestrator:
@@ -244,6 +271,7 @@ class Orchestrator:
         self.gate, self.budget = gate, budget
         self.max_concurrent, self.allow_unknown_cost = max_concurrent, allow_unknown_cost
         self._current: dict[str, int] = {}  # turn_id -> generation
+        self._runs: dict[str, tuple[int, str]] = {}  # turn_id -> (generation, run id) of last run
 
     # a turn's results are valid only while its generation is the current one
     def begin_turn(self, turn_id: str) -> int:
@@ -288,6 +316,21 @@ class Orchestrator:
         if len(set(ids)) != len(ids):  # results and tasks are keyed by id: a duplicate hides one
             raise ValueError("branch ids must be unique within one fan-out")
         gen = self.begin_turn(turn_id)
+        run_id = f"{turn_id}/{gen}/{secrets.token_hex(8)}"
+        self._runs[turn_id] = (gen, run_id)
+        return await self._fan(turn_id, gen, items, branches, first_success, run_id=run_id)
+
+    async def _fan(
+        self,
+        turn_id: str,
+        gen: int,
+        items: Sequence[ContextItem],
+        branches: Sequence[Branch],
+        first_success: bool,
+        extra_allowed: frozenset[str] = frozenset(),
+        *,
+        run_id: str = "",
+    ) -> list[BranchResult]:
         sem = asyncio.Semaphore(self.max_concurrent)
         results: dict[str, BranchResult] = {}
         tasks: dict[str, asyncio.Task[BranchResult]] = {}
@@ -295,7 +338,9 @@ class Orchestrator:
         async def one(b: Branch) -> BranchResult:
             refusal = self._refusal(b)  # a None here means the budget slot is reserved
             if refusal:
-                return BranchResult(b.branch_id, b.provider, "refused", reason=refusal)
+                return BranchResult(
+                    b.branch_id, b.provider, "refused", reason=refusal, run_id=run_id
+                )
             state = {"began": False}
             try:
                 return await serve(b, state)
@@ -310,7 +355,12 @@ class Orchestrator:
             dest = engine_policy.destination_of(b.provider, b.brain)
             local = b.kind == "local" and dest.local
             prompt, record = self.gate.prepare(
-                items, turn_id=turn_id, branch_id=b.branch_id, destination=b.provider, local=local
+                items, turn_id=turn_id, branch_id=b.branch_id, destination=b.provider, local=local,
+                extra_allowed=extra_allowed,
+            )
+            tainted = local and any(
+                i.local_only or i.category not in self.gate.allowed_categories | extra_allowed
+                for i in items
             )
             text = f"{b.instruction}\n\n{prompt}".strip() if b.instruction else prompt
             # no tools: a review/parallel branch never executes anything
@@ -328,7 +378,7 @@ class Orchestrator:
                     b.branch_id, b.provider, status, egress=record,
                     first_token_s=timing.get("first"),
                     total_s=None if began is None else time.perf_counter() - began,
-                    cost_basis=basis, **fields,
+                    cost_basis=basis, tainted=tainted, run_id=run_id, **fields,
                 )
 
             async with sem:
@@ -392,7 +442,7 @@ class Orchestrator:
                         for bid, t in tasks.items():
                             if bid not in results and t in pending:
                                 results[bid] = BranchResult(
-                                    bid, _provider(branches, bid), "cancelled"
+                                    bid, _provider(branches, bid), "cancelled", run_id=run_id
                                 )
                         await asyncio.gather(*pending, return_exceptions=True)
                         pending = set()
@@ -403,6 +453,59 @@ class Orchestrator:
                     t.cancel()
             await asyncio.gather(*tasks.values(), return_exceptions=True)
         return [results[b.branch_id] for b in branches if b.branch_id in results]
+
+    async def synthesize(
+        self,
+        turn_id: str,
+        items: Sequence[ContextItem],
+        results: Sequence[BranchResult],
+        synthesizer: Branch,
+    ) -> SynthesisResult:
+        """One final answer from the engines that answered, through the SAME gate, budget and
+        turn generation as the branches.
+
+        The synthesizer sees the original task and each engine answer as an ``engine_answer``
+        item. An answer produced locally on restricted material stays ``local_only``: a remote
+        synthesizer never receives it (it is counted in ``withheld``). With nothing forwardable
+        the synthesizer is not called at all. The synthesizer has no tools.
+        """
+        # The inputs must all come from the ONE run that is still current for this turn: not a
+        # superseded or cancelled run, not another turn or orchestrator, not hand-built results,
+        # not a mix. The identity is checked against the orchestrator's record, never inferred.
+        gen, current_run = self._runs.get(turn_id, (0, ""))
+        if self._current.get(turn_id) != gen or not current_run:
+            return SynthesisResult("stale", reason="the turn was cancelled or superseded")
+        if not results or any(r.run_id != current_run for r in results):
+            return SynthesisResult(
+                "stale", reason="these results are not from the current run of this turn"
+            )
+        answers = [r for r in results if r.status == "ok" and r.text.strip()]
+        if not answers:
+            return SynthesisResult("no_input", reason="no engine produced an answer")
+        dest = engine_policy.destination_of(synthesizer.provider, synthesizer.brain)
+        synth_local = synthesizer.kind == "local" and dest.local
+        forwardable = [r for r in answers if synth_local or not r.tainted]
+        withheld = len(answers) - len(forwardable)
+        if not forwardable:
+            return SynthesisResult(
+                "no_input",
+                withheld=withheld,
+                reason="every answer contains local-only material and the synthesizer is remote",
+            )
+        derived = [ContextItem(i.text, i.category, i.local_only) for i in items
+                   if i.category == "task"]
+        derived += [ContextItem(f"[{r.provider}] {r.text}", ANSWER_CATEGORY, r.tainted)
+                    for r in forwardable]
+        instruction = "\n\n".join(
+            part for part in (SYNTHESIS_INSTRUCTION, synthesizer.instruction) if part
+        )
+        branch = dataclasses.replace(synthesizer, branch_id="synthesis", instruction=instruction)
+        out = (await self._fan(turn_id, gen, derived, [branch], False,
+                               frozenset({ANSWER_CATEGORY}), run_id=current_run))[0]
+        return SynthesisResult(
+            out.status, text=out.text, reason=out.reason,
+            sources=tuple(r.branch_id for r in forwardable), withheld=withheld, egress=out.egress,
+        )
 
 
 def _provider(branches: Sequence[Branch], branch_id: str) -> str:
