@@ -32,6 +32,8 @@ def _stub() -> SimpleNamespace:
         default=SimpleNamespace(device=(-1, -1)),
         InputStream=_unavailable,
         OutputStream=_unavailable,
+        stop=lambda *_args, **_kwargs: None,
+        abort=lambda *_args, **_kwargs: None,
     )
 
 
@@ -42,4 +44,9 @@ def _portaudio_stand_in(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in _MODULES:
         module = importlib.import_module(name)
         if getattr(module, "sd", None) is None:
-            monkeypatch.setattr(module, "sd", _stub())
+            stub = _stub()
+            monkeypatch.setattr(module, "sd", stub)
+            # the modules bind ``OSError`` as their PortAudio error type when ``sd`` is None; the
+            # stand-in's error class must be the one they test for
+            if hasattr(module, "_PortAudioError"):
+                monkeypatch.setattr(module, "_PortAudioError", stub.PortAudioError)
