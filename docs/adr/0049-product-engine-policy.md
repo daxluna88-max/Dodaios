@@ -26,14 +26,20 @@ and a local provider's endpoint can point at another host or the team proxy.
    undeclared capability as unsupported (`capability_unknown`), never inferring it from the vendor name.
 7. `guard_stream` drops deltas (text and tool calls) of a superseded generation and closes the source stream.
 
+8. The same product check guards the other model-calling doors: `core.registry.load` refuses cloud `jarvis.stt`,
+   `jarvis.tts` and `jarvis.realtime` plugins under Work (allowed: `faster-whisper`, `nemotron-local`, `piper-local`,
+   `local-voice`); the STT class lookup returns None so the builder falls back to the local recognizer; dictation
+   polish returns on-device families only and ignores a cloud pin; the local voice engine's Ollama client refuses a
+   non-local host (stdlib-only copy of the rule: the engine may not import the app).
+
 Consumer and an unset product are untouched: no restriction and no wrapper.
 
 ## Not decided here (open, see docs/engine-inventory.md)
 
-Consumer concurrent multi-engine orchestration, the privacy/egress gate, aggregate budgets, subscription
-entitlements, live voice through remote providers, and every outbound path that does not go through the brain
-registry (realtime plugins, STT/TTS and embeddings clients, dictation polish, tools). Work is therefore NOT yet
-certified offline or fully local: only brain-registry inference and three direct paths are gated.
+Consumer orchestration is ADR-0050. Still open: live voice routed through a selectable provider adapter,
+`local-realtime` (self-hosted URL, endpoint not checked, so it is refused under Work), tool/update/telemetry egress,
+embeddings and vision paths not reached through these doors, and a network-negative end-to-end offline profile.
+Work is therefore NOT yet certified offline: it is enforced at the doors listed above, and each has a test.
 
 ## Consequences
 

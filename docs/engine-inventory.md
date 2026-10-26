@@ -13,15 +13,18 @@ Read from the code; nothing here was exercised against a real provider.
 | Agent runtime gateway | `agent_runtimes.gateway._new_brain` (direct class) | `check_provider` |
 | Critic runner | `BrainProviderRegistry().get_class` + `cls(...)` | `check_provider` |
 
+Also gated (same product check): `core.registry.load` for `jarvis.stt` / `jarvis.tts` / `jarvis.realtime`
+(cloud plugins refused under Work), the STT class lookup (falls back to the local recognizer), dictation polish
+(on-device families only), and the local voice engine's Ollama client (non-local host refused).
+
 ## NOT gated (open work; Work must not be called fully local until these are)
 
-- Realtime/live voice plugins that talk to a vendor directly: `plugins/realtime/openai_live.py`,
-  `openai_subscription_live.py`, Gemini Live (`core/google_genai.py`, `live/subscription_auth.py`).
-- Cloud STT (`plugins/stt/openai_api.py`) and any cloud TTS/embedding client outside the brain registry.
-- Dictation polish (`dictation/polish_client.py`): it has its own local-only chain; not verified against this policy.
-- Subscription CLIs (`codex`, `claude-cli`, `antigravity`) are classified remote and refused through the registry;
-  `codex_app_server.py` and other direct launchers were not audited.
+- Plugins loaded by a path other than `core.registry.load` / the STT lookup (none found, not exhaustively audited).
+- `local-realtime` (self-hosted URL) is refused under Work until its endpoint is checked.
+- Subscription launchers and CLIs (`codex_app_server.py`, `claude-cli` runners) outside the brain registry were not
+  audited one by one.
 - Tools (browser, GitHub, email), update checks and telemetry: a strict offline profile is a separate item.
+- Embeddings, reranking and vision/document extraction clients outside the brain registry: not audited.
 - `get_class` callers that only probe metadata (`subscription_connected`, signatures) do not run inference.
 
 ## Local live voice
@@ -29,12 +32,12 @@ Read from the code; nothing here was exercised against a real provider.
 `voice_engine/llm.py` streams from a local Ollama server over HTTP directly (`DEFAULT_BASE_URL`
 `http://127.0.0.1:11434`), bypassing `BrainManager`. A chat provider dropdown therefore does NOT drive local live
 voice. Routing live voice through a selectable provider adapter (and checking its base URL against the policy)
-is not done.
+is not done. Under Work the local engine's Ollama host is checked (non-local refused).
 
 ## Reuse points for the next steps
 
 `BrainProviderRegistry` (entry points `jarvis.brain`: claude-api, openai, gemini, vertex, openrouter, nvidia,
 codex, antigravity, claude-cli, grok, ollama, local-openai), `BrainRequest`/`BrainDelta`, `MeteredBrain`
-(usage ledger), `core.config.resolve_provider_endpoint`, protected credential storage. Not built: a normalized
-capability catalog beyond what plugins declare (`engine_policy.capabilities_of`), Consumer parallel
-orchestration, privacy gate, aggregate budget reservation.
+(usage ledger), `core.config.resolve_provider_endpoint`, protected credential storage. Consumer orchestration, privacy gate and aggregate budget: `consumer_orchestrator.py` (ADR-0050), library only.
+Not built: a normalized capability catalog beyond what plugins declare (`engine_policy.capabilities_of`), wiring
+into chat/voice, UI.

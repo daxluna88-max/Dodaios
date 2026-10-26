@@ -1,31 +1,26 @@
-"""Product engine policy: which brain providers a Jarvis product may use (ADR-0049).
+"""Product engine policy: which providers a Jarvis product may use (ADR-0049).
 
 Two independent products share this runtime:
 
-* **work** (PMI / Lavoro): LOCAL inference only. A remote provider is refused at the one door every
-  provider instance comes through (:meth:`BrainProviderRegistry.instantiate`) and again on every
+* work (PMI / Lavoro): LOCAL inference only. A remote provider is refused at the one door every
+  provider instance comes through (``BrainProviderRegistry.instantiate``) and again on every
   ``complete()`` call, so a stale or malicious config cannot route a turn to the cloud. A local
-  engine that
-  is missing or busy means an error (or a queue), never a cloud fallback.
-* **consumer** (or no product set): no restriction from this module. Multi-engine orchestration, the
-privacy
-  gate and aggregate budgets are NOT implemented here.
+  engine that is missing or busy means an error (or a queue), never a cloud fallback. The same
+  door check covers STT/TTS/realtime plugins (``check_service``).
+* consumer (or no product set): no restriction from this module. Multi-engine orchestration lives
+  in ``dodaios.brain.consumer_orchestrator``.
 
 The product comes from ``JARVIS_PRODUCT`` (``work`` | ``consumer``), read at every check. A
-non-empty value
-this module does not know is treated as ``work``: the strictest policy wins when the setting is
-garbled.
+non-empty value this module does not know is treated as ``work``: the strictest policy wins when
+the setting is garbled.
 
 "Local" means the provider is ``ollama`` or ``local-openai`` AND its resolved endpoint is this
-machine
-(loopback literal or ``localhost``, no team proxy), or a host the owner listed in
+machine (loopback literal or ``localhost``, no team proxy), or a host the owner listed in
 ``JARVIS_LOCAL_ALLOWED_HOSTS`` (a LAN GPU box, for example). Host names are never resolved through
-DNS.
-Unknown providers count as remote.
+DNS. Unknown providers count as remote.
 
-This is a policy gate on brain providers. It is NOT a network sandbox: tools, update checks,
-telemetry, STT/TTS
-and embeddings outside the brain registry are separate paths (see docs/engine-inventory.md).
+This is a policy gate, NOT a network sandbox: tools, update checks, telemetry and embeddings
+outside the brain registry are separate paths (see docs/engine-inventory.md).
 """
 
 from __future__ import annotations
@@ -35,10 +30,11 @@ import logging
 import os
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
-from dodaios.core.protocols import BrainDelta, BrainRequest
+if TYPE_CHECKING:  # keep this module stdlib-only at import time: the voice worker imports it too
+    from dodaios.core.protocols import BrainDelta, BrainRequest
 
 log = logging.getLogger(__name__)
 
@@ -86,8 +82,7 @@ def host_is_local(host: str | None, env: dict[str, str] | None = None) -> bool:
 
 
 def endpoint_problem(provider: str) -> str | None:
-    """Why this LOCAL provider's configured endpoint is not local; None when it is (or cannot be
-    told)."""
+    """Why this LOCAL provider's endpoint is not local; None when it is (or cannot be told)."""
     from dodaios.core import config as cfg  # noqa: PLC0415 - heavy, imported on use
 
     default = None
@@ -127,6 +122,36 @@ def check_provider(
                 f"(or a host listed in {ALLOWED_HOSTS_ENV}).",
                 code="remote_endpoint",
             )
+
+
+# -- speech and realtime plugins: the same door for the Work product ----------------------
+
+#: Local-only speech/realtime plugins, by group slot. Anything else in these groups is a
+#: cloud service. ``local-realtime`` (a self-hosted URL the owner types in) is deliberately
+#: not listed: its endpoint is not checked here, so it stays off until that check exists.
+LOCAL_SERVICES: dict[str, frozenset[str]] = {
+    "stt": frozenset({"faster-whisper", "nemotron-local"}),
+    "tts": frozenset({"piper-local"}),
+    "realtime": frozenset({"local-voice"}),
+}
+
+
+def check_service(group: str, name: str, *, product: str | None = None) -> None:
+    """Raise when a speech/realtime plugin is a cloud service and the product is Work.
+
+    ``group`` is the entry-point group under either spelling (``jarvis.stt`` / ``dodaios.stt``).
+    Groups other than stt/tts/realtime are not services and pass.
+    """
+    product = product if product is not None else current_product()
+    slot = group.partition(".")[2]
+    if product != "work" or slot not in LOCAL_SERVICES:
+        return
+    if name not in LOCAL_SERVICES[slot]:
+        raise EnginePolicyError(
+            f"{slot.upper()} plugin {name!r} is a cloud service: the Work product allows only "
+            f"{', '.join(sorted(LOCAL_SERVICES[slot]))}.",
+            code="remote_service_in_local_only",
+        )
 
 
 # -- capabilities: unknown means unknown, never "supported"
@@ -290,7 +315,9 @@ __all__ = [
     "LOCAL_PROVIDERS",
     "PolicyBrain",
     "capabilities_of",
+    "LOCAL_SERVICES",
     "check_provider",
+    "check_service",
     "current_product",
     "endpoint_problem",
     "enforce",

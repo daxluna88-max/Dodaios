@@ -262,3 +262,99 @@ def test_a_broken_capability_probe_means_unknown_not_supported():
         supports_tools = None  # type: ignore[assignment]
 
     assert ep.capabilities_of(Broken()).tools is None
+
+
+# -- speech, realtime and dictation plugins (same product policy)
+# ----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("group", "name"),
+    [
+        ("jarvis.stt", "openai-api"),
+        ("jarvis.stt", "groq-api"),
+        ("dodaios.stt", "deepgram-api"),
+        ("jarvis.tts", "elevenlabs"),
+        ("jarvis.tts", "cartesia"),
+        ("jarvis.realtime", "openai-live"),
+        ("jarvis.realtime", "gemini-live"),
+        ("jarvis.realtime", "local-realtime"),
+    ],
+)
+def test_work_refuses_cloud_speech_and_realtime_plugins_at_the_registry_door(
+    monkeypatch, group, name
+):
+    from dodaios.core import registry
+
+    monkeypatch.setenv("JARVIS_PRODUCT", "work")
+    with pytest.raises(ep.EnginePolicyError) as exc:
+        registry.load(group, name)
+    assert exc.value.code == "remote_service_in_local_only"
+
+
+@pytest.mark.parametrize(
+    ("group", "name"),
+    [
+        ("jarvis.stt", "faster-whisper"),
+        ("jarvis.stt", "nemotron-local"),
+        ("jarvis.tts", "piper-local"),
+        ("jarvis.realtime", "local-voice"),
+        ("jarvis.brain", "openai"),
+        ("jarvis.tool", "anything"),
+    ],
+)
+def test_work_policy_lets_local_services_and_non_service_groups_through(monkeypatch, group, name):
+    monkeypatch.setenv("JARVIS_PRODUCT", "work")
+    ep.check_service(
+        group, name
+    )  # no raise (brain providers are checked by check_provider instead)
+
+
+def test_consumer_is_never_restricted_for_services(monkeypatch):
+    monkeypatch.setenv("JARVIS_PRODUCT", "consumer")
+    ep.check_service("jarvis.stt", "openai-api")
+    ep.check_service("jarvis.realtime", "openai-live")
+
+
+def test_cloud_stt_class_lookup_is_refused_so_the_builder_falls_back_to_local(monkeypatch):
+    from dodaios.plugins import stt
+
+    monkeypatch.setenv("JARVIS_PRODUCT", "work")
+    assert stt._load_provider_class("openai-api") is None
+    assert stt._load_provider_class("groq-api") is None
+
+
+def test_work_dictation_polish_ignores_a_cloud_pin(monkeypatch):
+    from types import SimpleNamespace
+
+    from dodaios.dictation import polish_client
+
+    monkeypatch.setenv("JARVIS_PRODUCT", "work")
+    monkeypatch.setattr(
+        polish_client, "family_has_key", lambda family: True
+    )  # keys exist for everything
+    cloud = next(f for f in polish_client.POLISH_FAMILIES if not f.runs_on_device)
+    chain = polish_client.resolve_polish_chain(SimpleNamespace(polish_provider=cloud.id))
+    assert all(f.runs_on_device for f in chain)
+
+
+def test_local_live_voice_llm_refuses_a_non_local_ollama_host_under_work(monkeypatch):
+    from dodaios.voice_engine.llm import OllamaChat
+
+    monkeypatch.setenv("JARVIS_PRODUCT", "work")
+    OllamaChat("m", base_url="http://127.0.0.1:11434")
+    with pytest.raises(ValueError, match="not this machine"):
+        OllamaChat("m", base_url="http://gpu.example.com:11434")
+    monkeypatch.setenv("JARVIS_PRODUCT", "consumer")
+    OllamaChat("m", base_url="http://gpu.example.com:11434")  # Consumer unrestricted
+
+
+def test_engine_policy_imports_without_the_runtime_core():
+    import subprocess
+    import sys
+
+    code = (
+        "import sys; import dodaios.brain.engine_policy as e;"
+        " sys.exit(1 if 'dodaios.core.protocols' in sys.modules else 0)"
+    )
+    assert subprocess.run([sys.executable, "-c", code], check=False).returncode == 0

@@ -33,7 +33,7 @@
     "allow_sapi5_fallback": false
   },
   "brain": {
-    "primary": "openai",
+    "primary": "openrouter",
     "fallback": "openrouter",
     "deep_brain": "claude-cli",
     "routing_provider": "grok",
