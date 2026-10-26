@@ -402,3 +402,70 @@ def test_repeated_activation_with_a_conflicting_bound_state_is_still_refused(tmp
     state = json.loads(next(ln for ln in out.stdout.splitlines() if ln.startswith("STATE "))[6:])
     assert state == {"same": "work", "service": "refused", "data": "refused",
                      "product": "refused", "flag": "refused"}, out.stderr[-400:]
+
+
+# -- the per-user data directory follows the product (nothing lands in the shared one) ---------
+
+
+def test_user_data_dir_is_the_products_while_one_is_active(tmp_path, monkeypatch):
+    from dodaios.core import paths
+
+    product_dir = tmp_path / "data-work"
+    monkeypatch.setenv("JARVIS_PRODUCT_ACTIVE", "work")
+    monkeypatch.setenv("JARVIS_DATA_DIR", str(product_dir))
+    assert paths.user_data_dir() == product_dir
+    assert paths.user_skills_dir() == product_dir / "skills"
+    assert paths.user_memory_dir() == product_dir / "memory"
+    assert paths.user_logs_dir() == product_dir / "logs"
+
+
+@pytest.mark.parametrize(
+    "active, data_dir", [("work", ""), ("consumer", None), ("enterprise", "/x")]
+)
+def test_an_announced_product_without_a_valid_directory_never_falls_back(
+    monkeypatch, active, data_dir
+):
+    from dodaios.core import paths
+
+    monkeypatch.setenv("JARVIS_PRODUCT_ACTIVE", active)
+    if data_dir is None:
+        monkeypatch.delenv("JARVIS_DATA_DIR", raising=False)
+    else:
+        monkeypatch.setenv("JARVIS_DATA_DIR", data_dir)
+    with pytest.raises(RuntimeError):
+        paths.user_data_dir()
+
+
+def test_without_a_product_the_shared_directory_is_unchanged(tmp_path, monkeypatch):
+    from dodaios.core import paths
+
+    monkeypatch.delenv("JARVIS_PRODUCT_ACTIVE", raising=False)
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    assert paths.user_data_dir().parent == tmp_path
+
+
+@pytest.mark.parametrize("product", ["work", "consumer"])
+def test_a_started_product_writes_its_user_dirs_only_under_its_own_directory(tmp_path, product):
+    code = (
+        "import sys, runpy, json, os\n"
+        "sys.argv = ['dodaios', *sys.argv[1:]]\n"
+        "try:\n"
+        "    held = runpy.run_module('dodaios.__main__', run_name='__main__')\n"
+        "except SystemExit:\n"
+        "    held = None\n"
+        "from dodaios.core import paths\n"
+        "paths.ensure_user_dirs()\n"
+        "print('STATE ' + json.dumps({'dir': str(paths.user_data_dir()),\n"
+        "    'skills': paths.user_skills_dir().is_dir(),\n"
+        "    'memory': paths.user_memory_dir().is_dir(),\n"
+        "    'logs': paths.user_logs_dir().is_dir()}))\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code, "--product", product, "--version"],  # noqa: S603
+                         env=_entry_env(tmp_path), capture_output=True, text=True, timeout=120,
+                         check=False)
+    state = json.loads(next(ln for ln in out.stdout.splitlines() if ln.startswith("STATE "))[6:])
+    assert state["dir"].endswith(f"-{product}"), out.stderr[-400:]
+    assert state["skills"] and state["memory"] and state["logs"]
+    assert not (tmp_path / ".dodaios-data").exists(), "the shared directory was not touched"
