@@ -189,3 +189,116 @@ def test_launcher_rejects_an_unknown_product(tmp_path):
     out = _read(proc)
     proc.communicate("\n", timeout=30)
     assert "unknown product" in out[0]
+
+
+# -- the real public entry point: ``python -m dodaios --product ...`` (clean subprocesses) --------
+
+_ENTRY = (
+    "import sys, runpy, json, os\n"
+    "sys.argv = ['dodaios', *sys.argv[1:]]\n"
+    "code = None\n"
+    "try:\n"
+    "    held = runpy.run_module('dodaios.__main__', run_name='__main__')\n"
+    "except SystemExit as exc:\n"
+    "    code = exc.code\n"
+    "    held = None\n"
+    "cfg = sys.modules.get('dodaios.core.config')\n"
+    "print('STATE ' + json.dumps({\n"
+    "    'code': code, 'argv': sys.argv[1:],\n"
+    "    'service': cfg.KEYRING_SERVICE if cfg else None,\n"
+    "    'legacy': list(cfg.LEGACY_KEYRING_SERVICES) if cfg else None,\n"
+    "    'data': os.environ.get('JARVIS_DATA_DIR'), 'product': os.environ.get('JARVIS_PRODUCT'),\n"
+    "    'active': os.environ.get('JARVIS_PRODUCT_ACTIVE'),\n"
+    "    'env': {k: v for k, v in os.environ.items() if k.startswith('JARVIS_')}}), flush=True)\n"
+    "if os.environ.get('HOLD'):\n"
+    "    sys.stdin.readline()\n"
+)
+
+
+def _entry_env(home: Path, extra: dict[str, str] | None = None) -> dict[str, str]:
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("JARVIS_") and k != "LOCALAPPDATA"}
+    env["HOME"] = str(home)
+    env.update(extra or {})
+    return env
+
+
+def _entry(home: Path, *args: str, extra: dict[str, str] | None = None, hold: bool = False):
+    env = _entry_env(home, ({"HOLD": "1"} if hold else {}) | (extra or {}))
+    proc = subprocess.Popen([sys.executable, "-c", _ENTRY, *args], env=env,  # noqa: S603
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
+    if hold:
+        line = ""
+        while not line.startswith("STATE ") and proc.poll() is None:
+            line = proc.stdout.readline()
+        return proc, json.loads(line[6:]) if line.startswith("STATE ") else None
+    out, err = proc.communicate(timeout=120)
+    states = [ln for ln in out.splitlines() if ln.startswith("STATE ")]
+    return json.loads(states[-1][6:]) if states else None, err
+
+
+@pytest.mark.parametrize("product", ["work", "consumer"])
+def test_public_entry_point_accepts_the_flag_and_scopes_credentials(tmp_path, product):
+    state, err = _entry(tmp_path, "--product", product, "--version")
+    assert state is not None, err[-500:]
+    assert state["code"] == 0 and state["argv"] == ["--version"], "flag consumed, not re-parsed"
+    assert state["service"] == f"dodaios-{product}" and state["legacy"] == []
+    assert state["data"].endswith(f"-{product}") and state["data"].count(f"-{product}") == 1
+    assert state["product"] == product and state["active"] == product
+    assert Path(state["data"], ".product").is_file()
+
+
+def test_public_entry_point_rejects_bad_selections(tmp_path):
+    for args, text in [(("--product", "enterprise", "--version"), "unknown product"),
+                       (("--product", "--version"), "needs a value"),
+                       (("--product", "work", "--product=consumer", "--version"), "twice")]:
+        state, err = _entry(tmp_path, *args)
+        assert state is None or state["code"] == 2
+        assert text in err, (args, err[-300:])
+
+
+def test_entry_point_without_the_flag_is_unscoped_and_unchanged(tmp_path):
+    state, _ = _entry(tmp_path, "--version")
+    assert state["service"] == "dodaios" and state["legacy"] and state["active"] is None
+
+
+def test_second_launch_of_a_product_is_refused_and_the_other_product_runs(tmp_path):
+    first, state = _entry(tmp_path, "--product", "work", "--version", hold=True)
+    try:
+        assert state is not None
+        refused, err = _entry(tmp_path, "--product", "work", "--version")
+        assert refused is None or refused["code"] == 2
+        assert "already running" in err
+        other, _ = _entry(tmp_path, "--product", "consumer", "--version")
+        assert other["code"] == 0
+    finally:
+        first.communicate("\n", timeout=60)
+
+
+def test_a_child_inherits_the_product_without_a_second_suffix_or_lock(tmp_path):
+    parent, state = _entry(tmp_path, "--product", "work", "--version", hold=True)
+    try:
+        inherited = state["env"]
+        # detach / relaunch / headless children re-enter with the parent's environment while it
+        # still holds the launch lock: they must neither compete for it nor re-derive the paths
+        for args in (("--version",), ("--product", "work", "--version")):
+            child, err = _entry_env_run(tmp_path, inherited, *args)
+            assert child is not None and child["code"] == 0, err[-400:]
+            assert child["data"] == state["data"], "the product directory is reused as is"
+            assert child["service"] == "dodaios-work" and child["legacy"] == []
+        clash, err = _entry_env_run(tmp_path, inherited, "--product", "consumer", "--version")
+        assert (clash is None or clash["code"] == 2) and "contradicts" in err
+        broken = {k: v for k, v in inherited.items() if k != "JARVIS_DATA_DIR"}
+        incomplete, err = _entry_env_run(tmp_path, broken, "--version")
+        assert (incomplete is None or incomplete["code"] == 2) and "incomplete" in err
+    finally:
+        parent.communicate("\n", timeout=60)
+
+
+def _entry_env_run(home: Path, inherited: dict[str, str], *args: str):
+    env = _entry_env(home, {k: v for k, v in inherited.items() if k != "HOLD"})
+    out = subprocess.run([sys.executable, "-c", _ENTRY, *args], env=env,  # noqa: S603
+                         capture_output=True, text=True, timeout=120, check=False)
+    states = [ln for ln in out.stdout.splitlines() if ln.startswith("STATE ")]
+    return (json.loads(states[-1][6:]) if states else None), out.stderr

@@ -34,6 +34,9 @@ MARKER_NAME = ".product"
 LAUNCH_LOCK_NAME = ".launch.lock"
 SERVICE_PREFIX = "dodaios-"
 PRODUCT_ENV = "JARVIS_PRODUCT"
+#: Set by the launch that selected the product; children inherit it and so stay in the same
+#: product (own data dir, own vault) without selecting, claiming or locking a second time.
+ACTIVE_ENV = "JARVIS_PRODUCT_ACTIVE"
 DATA_DIR_ENV = "JARVIS_DATA_DIR"
 CONFIG_ENV = "JARVIS_CONFIG"
 KEYRING_SERVICE_ENV = "JARVIS_KEYRING_SERVICE"
@@ -176,6 +179,83 @@ def prepare_launch(product: str, shared_data_dir: Path) -> tuple[ProductPaths, F
     return paths, acquire_launch_lock(paths)
 
 
+def extract_product_flag(argv: list[str]) -> tuple[str | None, list[str]]:
+    """``--product NAME`` / ``--product=NAME`` out of ``argv``: ``(name or None, argv without it)``.
+
+    Raises :class:`ProductError` for a flag with no value or two different values. The value is
+    not validated here (``validate_product`` does that), so a typo is reported, not skipped.
+    """
+    name: str | None = None
+    rest: list[str] = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--product":
+            if i + 1 >= len(argv) or argv[i + 1].startswith("--"):
+                raise ProductError("--product needs a value: work or consumer")
+            value, i = argv[i + 1], i + 2
+        elif arg.startswith("--product="):
+            value, i = arg.split("=", 1)[1], i + 1
+        else:
+            rest.append(arg)
+            i += 1
+            continue
+        if name is not None and name != value:
+            raise ProductError(f"--product given twice with different values: {name}, {value}")
+        name = value
+    return name, rest
+
+
+def activate_from_argv(
+    argv: list[str], environ: dict[str, str] | None = None
+) -> tuple[ProductPaths | None, list[str], FileLock | None]:
+    """Select the product named on the command line BEFORE anything binds paths or credentials.
+
+    Returns ``(paths, argv without --product, launch lock)``; ``paths`` is None when no product
+    is involved (the unscoped app is unchanged). A child of a product process inherits
+    ``JARVIS_PRODUCT_ACTIVE`` and the directory/credential environment: it stays in that product
+    without claiming or locking again (the running app's own single-instance lock lives inside
+    the product's directory). A different ``--product`` inside an active product, a missing
+    value, an unknown name or an incomplete inherited environment are errors.
+    """
+    env = os.environ if environ is None else environ
+    requested, rest = extract_product_flag(argv)
+    active = (env.get(ACTIVE_ENV) or "").strip().lower() or None
+    if requested is None and active is None:
+        return None, rest, None
+    if active is not None:
+        active = validate_product(active)
+    product = validate_product(requested if requested is not None else active)
+    if active is not None and product != active:
+        raise ProductError(f"--product {product} contradicts the running {active} product")
+    service = f"{SERVICE_PREFIX}{product}"
+    if active is not None:  # a child: the environment must already be the product's
+        data_dir, config = env.get(DATA_DIR_ENV), env.get(CONFIG_ENV)
+        if not data_dir or not config or env.get(KEYRING_SERVICE_ENV) != service:
+            raise ProductError(f"the inherited {product} environment is incomplete")
+        _pin_credential_service(service, env)
+        return ProductPaths(product, Path(data_dir), Path(config), service), rest, None
+    _pin_credential_service(service, env)
+    from dodaios.core.paths import user_data_dir  # after the service is pinned (branding)
+
+    paths, lock = prepare_launch(product, user_data_dir())
+    env.update(environment(paths, env))
+    env[ACTIVE_ENV] = product
+    return paths, rest, lock
+
+
+def _pin_credential_service(service: str, env: dict[str, str]) -> None:
+    """The credential service is bound when ``dodaios.core.config`` is first imported."""
+    import sys
+
+    if "dodaios.core.config" in sys.modules:
+        raise ProductError("the product was selected after the credential store was bound")
+    env[KEYRING_SERVICE_ENV] = service
+    from dodaios.core import branding
+
+    branding.pin_product_service(service)
+
+
 def scoped_service(env: Mapping[str, str] | None = None) -> str | None:
     """The product credential service named by the environment, or None (shared service).
 
@@ -187,15 +267,18 @@ def scoped_service(env: Mapping[str, str] | None = None) -> str | None:
 
 
 __all__ = [
+    "ACTIVE_ENV",
     "AlreadyRunning",
     "PRODUCTS",
     "ProductConflict",
     "ProductError",
     "ProductPaths",
     "acquire_launch_lock",
+    "activate_from_argv",
     "check_no_overlap",
     "claim",
     "environment",
+    "extract_product_flag",
     "paths_for",
     "prepare_launch",
     "scoped_service",

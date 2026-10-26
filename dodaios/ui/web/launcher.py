@@ -162,36 +162,16 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def _select_product_early(argv: list[str]) -> tuple[str | None, object | None]:
-    """Pin ``--product`` (own data dir, config, credential service, lock) BEFORE any import
-    that binds them. Returns ``(error sentence, launch lock)``: the error is None on success,
-    and the lock must stay referenced for the life of the process."""
-    name: str | None = None
-    for i, arg in enumerate(argv):
-        if arg == "--product" and i + 1 < len(argv):
-            name = argv[i + 1]
-        elif arg.startswith("--product="):
-            name = arg.split("=", 1)[1]
-    if name is None:
-        return None, None
+    """``--product`` (own data dir, config, credential service, lock) BEFORE any import that
+    binds them. Returns ``(error sentence, launch lock)``; the lock must stay referenced for the
+    life of the process. A launch that came through ``python -m dodaios`` has already selected
+    the product (the environment says so) and this is then a no-op."""
     from dodaios.core import product_profile as pp
 
     try:
-        product = pp.validate_product(name)
-        service = f"{pp.SERVICE_PREFIX}{product}"
-        # ``dodaios.core.config`` binds the credential service on import: after that it can no
-        # longer change, so refuse (rather than silently use the shared vault).
-        if "dodaios.core.config" in sys.modules:
-            return f"--product {product} was selected after the credential store was bound", None
-        from dodaios.core import branding
-
-        branding.pin_product_service(service)
-        os.environ[pp.KEYRING_SERVICE_ENV] = service
-        from dodaios.core.paths import user_data_dir
-
-        paths, lock = pp.prepare_launch(product, user_data_dir())
+        _paths, _rest, lock = pp.activate_from_argv(argv)
     except pp.ProductError as exc:  # reported to the person by the caller, which exits
         return str(exc), None
-    os.environ.update(pp.environment(paths))
     return None, lock
 
 
