@@ -74,13 +74,17 @@ def _start_process_from(fake: Path) -> subprocess.Popen[bytes]:
     bin_dir = fake / ".venv" / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     target = bin_dir / "jarvis-fake"
-    sleep_bin = shutil.which("sleep")
-    assert sleep_bin, "CI runner without a sleep binary"
+    # Not a copied ``sleep``: on newer Ubuntu images it is part of a multi-call coreutils and
+    # exits at once outside its own location (observed on the runner). A copied POSIX shell is
+    # self-contained and ``read`` (a builtin) waits on a pipe nobody writes to.
+    shell = shutil.which("sh")
+    assert shell, "CI runner without a POSIX shell"
     # Keep executable mode without copying the macOS system file's SIP flags.
-    shutil.copy(sleep_bin, target)
+    shutil.copy(shell, target)
     target.chmod(0o755)
-    return subprocess.Popen(  # noqa: S603 — self-copied system binary
-        [str(target), "120"],
+    return subprocess.Popen(  # noqa: S603 - self-copied system binary
+        [str(target), "-c", "read _unused"],
+        stdin=subprocess.PIPE,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

@@ -539,17 +539,41 @@ def _start_fake_install_process(fake_dir: Path) -> subprocess.Popen[bytes]:
             stderr=subprocess.DEVNULL,
             creationflags=flags,
         )
-    source_str = shutil.which("sleep")
-    if source_str is None:
-        pytest.skip("no 'sleep' binary available")
+    # A copied ``sleep`` is not a safe fake: on newer Ubuntu images it is part of a multi-call
+    # coreutils and exits at once when it runs from another place or name (observed on the
+    # runner: status 1 within a second). A copied POSIX shell is self-contained; ``read`` is a
+    # builtin that waits on a pipe nobody writes to, so the process stays alive with no children.
+    shell = shutil.which("sh")
+    if shell is None:
+        pytest.skip("no 'sh' binary available")
     target = bin_dir / "jarvis-fake"
-    shutil.copy2(source_str, target)
+    shutil.copy(shell, target)  # copy(), not copy2(): keep the mode, not macOS SIP flags
     target.chmod(0o755)
-    return subprocess.Popen(  # noqa: S603 — self-copied system binary
-        [str(target), "60"],
+    return subprocess.Popen(  # noqa: S603 - self-copied system binary
+        [str(target), "-c", "read _unused"],
+        stdin=subprocess.PIPE,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+
+
+def _describe_fake_process(proc: subprocess.Popen[bytes], fake_dir: Path) -> str:
+    """What the scan can see about the process, for the assertion message (CI has no debugger)."""
+    import psutil  # noqa: PLC0415 - the uninstall scan needs it too
+
+    facts: dict[str, object] = {"pid": proc.pid, "poll": proc.poll()}
+    try:
+        live = psutil.Process(proc.pid)
+        facts.update(exe=live.exe(), cmdline=live.cmdline(), status=live.status())
+    except psutil.Error as exc:
+        facts["psutil"] = f"{type(exc).__name__}: {exc}"
+    which = shutil.which("sleep")
+    if which:
+        real = Path(which).resolve()
+        with real.open("rb") as handle:
+            facts.update(sleep=which, sleep_real=str(real), sleep_head=handle.read(4))
+    facts["scan_names"] = [p.name() for p in uninstall._find_running_instances(fake_dir)]
+    return repr(facts)
 
 
 def test_stop_running_instances_ends_process_from_install_dir(tmp_path: Path) -> None:
@@ -560,10 +584,11 @@ def test_stop_running_instances_ends_process_from_install_dir(tmp_path: Path) ->
         pytest.skip(f"cannot start sandbox process: {exc}")
     try:
         assert proc.poll() is None, "sandbox process must be running before the stop"
+        facts = _describe_fake_process(proc, fake_dir)
 
         stopped = uninstall._stop_running_instances(fake_dir)
 
-        assert stopped >= 1
+        assert stopped >= 1, f"the scan found no process inside the install dir: {facts}"
         proc.wait(timeout=10)
         assert proc.poll() is not None
         # The point of the whole fix: with nothing running from the tree, the
