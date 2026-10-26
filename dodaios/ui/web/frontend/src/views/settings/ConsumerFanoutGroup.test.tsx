@@ -32,6 +32,13 @@ function serve(status: FanoutStatus, answer?: object) {
 
 afterEach(() => cleanup());
 
+/** Opens the branded picker and chooses an engine by its visible name. */
+async function pickSynth(name: string) {
+  fireEvent.click(screen.getByTestId("fanout-synth"));
+  await screen.findByTestId("fanout-synth-panel");
+  fireEvent.click(screen.getByRole("option", { name }));
+}
+
 describe("ConsumerFanoutGroup", () => {
   it("renders nothing when fan-out is not available (Work product)", async () => {
     serve({ available: false, reason: "work_local_only", providers: [] });
@@ -125,7 +132,7 @@ describe("ConsumerFanoutGroup", () => {
     render(<ConsumerFanoutGroup />);
     fireEvent.change(await screen.findByTestId("fanout-task"), { target: { value: "q" } });
     fireEvent.click(screen.getByTestId("fanout-engine-ollama"));
-    fireEvent.change(screen.getByTestId("fanout-synth"), { target: { value: "claude-api" } });
+    await pickSynth("claude-api");
     fireEvent.change(screen.getByTestId("fanout-synth-cost"), { target: { value: "0.2" } });
     fireEvent.click(screen.getByTestId("fanout-run"));
     await screen.findByTestId("fanout-final");
@@ -139,12 +146,15 @@ describe("ConsumerFanoutGroup", () => {
     render(<ConsumerFanoutGroup />);
     fireEvent.change(await screen.findByTestId("fanout-task"), { target: { value: "q" } });
     fireEvent.click(screen.getByTestId("fanout-engine-ollama"));
-    const options = Array.from((screen.getByTestId("fanout-synth") as HTMLSelectElement).options).map((o) => o.value);
-    expect(options).toEqual(["", "ollama", "claude-api"]); // "openai" is not connected
+    fireEvent.click(screen.getByTestId("fanout-synth"));
+    await screen.findByTestId("fanout-synth-panel");
+    const options = screen.getAllByRole("option").map((o) => o.textContent);
+    expect(options).toEqual(["settings_view.fanout.synth_none", "ollama", "claude-api"]); // "openai" is not connected
+    fireEvent.keyDown(screen.getByTestId("fanout-synth-panel"), { key: "Escape" });
     fireEvent.click(screen.getByTestId("fanout-run"));
     await screen.findByTestId("fanout-results");
     expect(posts[0]).not.toHaveProperty("synthesizer");
-    fireEvent.change(screen.getByTestId("fanout-synth"), { target: { value: "ollama" } });
+    await pickSynth("ollama");
     expect(screen.queryByTestId("fanout-synth-cost")).toBeNull();
     fireEvent.click(screen.getByTestId("fanout-run"));
     await waitFor(() => expect(posts).toHaveLength(2));
@@ -161,7 +171,7 @@ describe("ConsumerFanoutGroup", () => {
     render(<ConsumerFanoutGroup />);
     fireEvent.change(await screen.findByTestId("fanout-task"), { target: { value: "q" } });
     fireEvent.click(screen.getByTestId("fanout-engine-ollama"));
-    fireEvent.change(screen.getByTestId("fanout-synth"), { target: { value: "claude-api" } });
+    await pickSynth("claude-api");
     fireEvent.click(screen.getByTestId("fanout-run"));
     expect((await screen.findByTestId("fanout-final-status")).textContent).toBe("settings_view.fanout.status_no_input");
     expect(screen.queryByTestId("fanout-final-text")).toBeNull();

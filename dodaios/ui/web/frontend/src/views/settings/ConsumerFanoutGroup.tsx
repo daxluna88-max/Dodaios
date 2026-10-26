@@ -8,6 +8,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { BrandedSelect } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { fill, useT } from "@/i18n";
 import {
@@ -24,6 +25,9 @@ import {
   SettingsRow,
   SettingsSection,
 } from "@/views/settings/SettingsLayout";
+
+/** Stands for "no final answer" in the picker: an empty value cannot be a listbox option. */
+const NO_SYNTH = "__none__";
 
 const FIELD =
   "w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground " +
@@ -156,23 +160,20 @@ export function ConsumerFanoutGroup() {
           <div className="flex flex-wrap items-center gap-3 text-sm">
             <label className="flex items-center gap-2">
               <span className="text-muted-foreground">{t("settings_view.fanout.synth_label")}</span>
-              <select
-                className={`${FIELD} w-44`}
-                value={synthEngine ? synth : ""}
+              <BrandedSelect
+                className="w-44"
+                value={synthEngine ? synth : NO_SYNTH}
                 disabled={busy}
-                onChange={(event) => setSynth(event.target.value)}
-                aria-label={t("settings_view.fanout.synth_label")}
-                data-testid="fanout-synth"
-              >
-                <option value="">{t("settings_view.fanout.synth_none")}</option>
-                {status.providers
-                  .filter((engine) => engine.authenticated)
-                  .map((engine) => (
-                    <option key={engine.id} value={engine.id}>
-                      {engine.id}
-                    </option>
-                  ))}
-              </select>
+                onValueChange={(next) => setSynth(next === NO_SYNTH ? "" : next)}
+                ariaLabel={t("settings_view.fanout.synth_label")}
+                testId="fanout-synth"
+                options={[
+                  { value: NO_SYNTH, label: t("settings_view.fanout.synth_none") },
+                  ...status.providers
+                    .filter((engine) => engine.authenticated)
+                    .map((engine) => ({ value: engine.id, label: engine.id })),
+                ]}
+              />
             </label>
             {synthEngine && synthEngine.kind !== "local" && (
               <input
