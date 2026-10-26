@@ -34,3 +34,13 @@ playback ownership (no overlapping spoken answers) for voice.
 ## Consequences
 
 Safe to build the Consumer flow on top; nothing user-visible changes until a caller uses it.
+
+## Route
+
+`POST /api/consumer/fanout` (`ui/web/consumer_fanout_routes.py`) is the first caller: the request names the branches,
+one ceiling for the whole fan-out and, per item of context, `local_only` and a category. Branch kinds come from the
+provider (`ollama` / `local-openai` local; `codex` / `claude-cli` / `antigravity` subscription; the rest API), and
+"authenticated" is read without contacting the provider (stored key, or the plan-login probe). A provider that is not
+installed, not buildable, not authenticated, over budget or without a known price is reported per branch as `refused`;
+nothing is charged for it. It returns each branch's answer, the measured report and the egress metadata, never a final
+synthesized answer. Under the Work product it answers HTTP 403. No UI calls it yet.
