@@ -539,18 +539,19 @@ def _start_fake_install_process(fake_dir: Path) -> subprocess.Popen[bytes]:
             stderr=subprocess.DEVNULL,
             creationflags=flags,
         )
-    source_str = shutil.which("sleep")
-    if source_str is None:
-        pytest.skip("no 'sleep' binary available")
+    # A copied ``sleep`` is not a safe fake: on newer Ubuntu images it is part of a multi-call
+    # coreutils and exits at once when it runs from another place or name (observed on the
+    # runner: status 1 within a second). A copied POSIX shell is self-contained; ``read`` is a
+    # builtin that waits on a pipe nobody writes to, so the process stays alive with no children.
+    shell = shutil.which("sh")
+    if shell is None:
+        pytest.skip("no 'sh' binary available")
     target = bin_dir / "jarvis-fake"
-    shutil.copy2(source_str, target)
+    shutil.copy(shell, target)  # copy(), not copy2(): keep the mode, not macOS SIP flags
     target.chmod(0o755)
-    # argv[0] stays "sleep": a multi-call coreutils (the default on newer Ubuntu images) picks
-    # its applet from argv[0] and would exit at once as "jarvis-fake"; the running executable,
-    # which is what the uninstall scan matches, is still the copy inside fake_dir.
-    return subprocess.Popen(  # noqa: S603 — self-copied system binary
-        ["sleep", "60"],
-        executable=str(target),
+    return subprocess.Popen(  # noqa: S603 - self-copied system binary
+        [str(target), "-c", "read _unused"],
+        stdin=subprocess.PIPE,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
