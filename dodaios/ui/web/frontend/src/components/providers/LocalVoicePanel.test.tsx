@@ -37,6 +37,14 @@ const NOT_INSTALLED: LocalVoiceStatus = {
   llm_choices: ["llama3.2:3b"],
   voice: "pocket",
   voices: ["pocket", "piper"],
+  answer_source: "ollama",
+  answer_provider: "",
+  answer_provider_model: "",
+  answer_providers: [
+    { id: "ollama", local: true },
+    { id: "claude-api", local: false },
+  ],
+  product: null,
   machine_class: "apple",
   expected_latency: { low_s: 1.2, high_s: 1.8, basis: "estimate" },
   platform: "macos",
@@ -150,5 +158,49 @@ describe("LocalVoicePanel", () => {
     expect(screen.getByTestId("local-voice-selftest-stale")).toBeTruthy();
     expect(screen.queryByTestId("local-voice-unverified")).toBeNull();
     expect(screen.queryByTestId("local-voice-setup")).toBeNull();
+  });
+
+  it("shows the answer source and keeps the Ollama model row only while Ollama answers", async () => {
+    serve(() => ({ ...NOT_INSTALLED, installed: true, os_verified: true, llm_installed: true }));
+    render(<LocalVoicePanel onChanged={() => {}} />);
+
+    expect(await screen.findByTestId("local-voice-answer")).toBeTruthy();
+    expect(screen.getByTestId("local-voice-llm")).toBeTruthy();
+    expect(screen.queryByTestId("local-voice-answer-remote-note")).toBeNull();
+  });
+
+  it("hides the Ollama model and warns when a remote provider answers", async () => {
+    serve(() => ({
+      ...NOT_INSTALLED,
+      installed: true,
+      os_verified: true,
+      llm_installed: true,
+      answer_source: "brain",
+      answer_provider: "claude-api",
+    }));
+    render(<LocalVoicePanel onChanged={() => {}} />);
+
+    expect(await screen.findByTestId("local-voice-answer-remote-note")).toBeTruthy();
+    expect(screen.getByTestId("local-voice-answer-remote-note").textContent).toBe(
+      "apikeys_view.local_voice_answer_remote_note",
+    );
+    expect(screen.queryByTestId("local-voice-llm")).toBeNull();
+    expect(screen.queryByTestId("local-voice-llm-missing")).toBeNull();
+  });
+
+  it("gives no remote warning when the answering provider is local", async () => {
+    serve(() => ({
+      ...NOT_INSTALLED,
+      installed: true,
+      os_verified: true,
+      answer_source: "brain",
+      answer_provider: "ollama",
+      product: "work",
+      answer_providers: [{ id: "ollama", local: true }],
+    }));
+    render(<LocalVoicePanel onChanged={() => {}} />);
+
+    expect(await screen.findByTestId("local-voice-answer")).toBeTruthy();
+    expect(screen.queryByTestId("local-voice-answer-remote-note")).toBeNull();
   });
 });

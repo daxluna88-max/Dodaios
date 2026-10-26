@@ -1,5 +1,7 @@
 {
   "providers_page": {
+    "local_voice_section_title": "在本机运行（实验性）",
+    "local_voice_section_desc": "在本机运行的语音通话。选择由谁回答：本地模型，或应用可访问的任一服务商。",
     "subtitle": "实时通话默认运行在 OpenAI GPT-Live 上，也可以切换到 Pipeline。智能体会使用你在这里开启的所有订阅或密钥。",
     "checking": "正在检查…",
     "checked_now": "刚刚检查过",

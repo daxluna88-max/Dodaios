@@ -51,12 +51,17 @@ class BrainProviderRegistry:
                 f"Failed: {list(self._failed.keys())}"
             )
         cls = self._classes[name]
+        from dodaios.brain import engine_policy
         from dodaios.brain.usage_meter import meter_brain
+
+        # Product policy (ADR-0049): Work is local-only. Checked BEFORE the class is built, so a
+        # refused remote provider never reads a credential or opens a connection.
+        engine_policy.check_provider(name)
 
         # Every instance leaves here metered: whatever asks it for tokens —
         # a voice turn, the wiki curator, a dictation polish — is written to
         # the usage ledger without the caller having to know (BUG-178).
-        return meter_brain(cls(**kwargs), name)
+        return engine_policy.enforce(meter_brain(cls(**kwargs), name), name)
 
     def get_class(self, name: str) -> type:
         self._load()

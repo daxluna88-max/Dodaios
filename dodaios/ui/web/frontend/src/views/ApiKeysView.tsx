@@ -6,7 +6,12 @@ import { Button } from "@/components/ui/button";
 import { AgentsTab } from "@/views/apikeys/AgentsTab";
 import { KeyField } from "@/views/apikeys/KeyField";
 import { SettingsGroup } from "@/views/apikeys/settingsUi";
-import { PipelinePane, useVoiceEngineView, VoiceEngineSwitch } from "@/views/apikeys/VoiceEngine";
+import {
+  LocalVoiceSection,
+  PipelinePane,
+  useVoiceEngineView,
+  VoiceEngineSwitch,
+} from "@/views/apikeys/VoiceEngine";
 import { useProviders, useSectionHealth } from "@/hooks/useProviders";
 import { APIKEYS_TAB_EVENT, takeRequestedApiKeysTab } from "@/lib/apiKeysTab";
 import { useProviderFamilies } from "@/lib/providerFamilies";
@@ -214,6 +219,7 @@ function VoiceTab({
           />
         </SettingsGroup>
       )}
+      <LocalVoiceSection />
     </div>
   );
 }

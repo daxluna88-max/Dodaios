@@ -592,6 +592,16 @@ def main(argv: list[str] | None = None) -> int:
 
     ensure_cli_paths()
 
+    # Strict offline profile (ADR-0053): installed before anything can open a connection.
+    from dodaios.core.config import DEFAULT_CONFIG_FILE
+    from dodaios.core.egress_guard import install_from_settings
+
+    try:
+        install_from_settings(DEFAULT_CONFIG_FILE)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
     raw = list(sys.argv[1:] if argv is None else argv)
     if raw[:1] == ["update"]:
         from dodaios.cli.app_update import main as update_main
