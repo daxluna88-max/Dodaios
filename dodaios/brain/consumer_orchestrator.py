@@ -34,6 +34,7 @@ import dataclasses
 import logging
 import math
 import re
+import secrets
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -211,7 +212,7 @@ class Branch:
     instruction: str = ""
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class BranchResult:
     branch_id: str
     provider: str
@@ -229,6 +230,9 @@ class BranchResult:
     #: The branch ran locally on material a remote destination may not see (``local_only`` or a
     #: category the gate withholds): its answer inherits that restriction (provenance).
     tainted: bool = False
+    #: Identity of the run that produced this result (``turn/generation/nonce``). Synthesis accepts
+    #: only results of the run that is still current for its turn; empty means "not from a run".
+    run_id: str = ""
 
 
 @dataclass(slots=True)
@@ -267,7 +271,7 @@ class Orchestrator:
         self.gate, self.budget = gate, budget
         self.max_concurrent, self.allow_unknown_cost = max_concurrent, allow_unknown_cost
         self._current: dict[str, int] = {}  # turn_id -> generation
-        self._run_gen: dict[str, int] = {}  # turn_id -> generation of its last fan-out
+        self._runs: dict[str, tuple[int, str]] = {}  # turn_id -> (generation, run id) of last run
 
     # a turn's results are valid only while its generation is the current one
     def begin_turn(self, turn_id: str) -> int:
@@ -312,8 +316,9 @@ class Orchestrator:
         if len(set(ids)) != len(ids):  # results and tasks are keyed by id: a duplicate hides one
             raise ValueError("branch ids must be unique within one fan-out")
         gen = self.begin_turn(turn_id)
-        self._run_gen[turn_id] = gen
-        return await self._fan(turn_id, gen, items, branches, first_success)
+        run_id = f"{turn_id}/{gen}/{secrets.token_hex(8)}"
+        self._runs[turn_id] = (gen, run_id)
+        return await self._fan(turn_id, gen, items, branches, first_success, run_id=run_id)
 
     async def _fan(
         self,
@@ -323,6 +328,8 @@ class Orchestrator:
         branches: Sequence[Branch],
         first_success: bool,
         extra_allowed: frozenset[str] = frozenset(),
+        *,
+        run_id: str = "",
     ) -> list[BranchResult]:
         sem = asyncio.Semaphore(self.max_concurrent)
         results: dict[str, BranchResult] = {}
@@ -331,7 +338,9 @@ class Orchestrator:
         async def one(b: Branch) -> BranchResult:
             refusal = self._refusal(b)  # a None here means the budget slot is reserved
             if refusal:
-                return BranchResult(b.branch_id, b.provider, "refused", reason=refusal)
+                return BranchResult(
+                    b.branch_id, b.provider, "refused", reason=refusal, run_id=run_id
+                )
             state = {"began": False}
             try:
                 return await serve(b, state)
@@ -369,7 +378,7 @@ class Orchestrator:
                     b.branch_id, b.provider, status, egress=record,
                     first_token_s=timing.get("first"),
                     total_s=None if began is None else time.perf_counter() - began,
-                    cost_basis=basis, tainted=tainted, **fields,
+                    cost_basis=basis, tainted=tainted, run_id=run_id, **fields,
                 )
 
             async with sem:
@@ -433,7 +442,7 @@ class Orchestrator:
                         for bid, t in tasks.items():
                             if bid not in results and t in pending:
                                 results[bid] = BranchResult(
-                                    bid, _provider(branches, bid), "cancelled"
+                                    bid, _provider(branches, bid), "cancelled", run_id=run_id
                                 )
                         await asyncio.gather(*pending, return_exceptions=True)
                         pending = set()
@@ -460,8 +469,16 @@ class Orchestrator:
         synthesizer never receives it (it is counted in ``withheld``). With nothing forwardable
         the synthesizer is not called at all. The synthesizer has no tools.
         """
-        if self._current.get(turn_id) != self._run_gen.get(turn_id):
+        # The inputs must all come from the ONE run that is still current for this turn: not a
+        # superseded or cancelled run, not another turn or orchestrator, not hand-built results,
+        # not a mix. The identity is checked against the orchestrator's record, never inferred.
+        gen, current_run = self._runs.get(turn_id, (0, ""))
+        if self._current.get(turn_id) != gen or not current_run:
             return SynthesisResult("stale", reason="the turn was cancelled or superseded")
+        if not results or any(r.run_id != current_run for r in results):
+            return SynthesisResult(
+                "stale", reason="these results are not from the current run of this turn"
+            )
         answers = [r for r in results if r.status == "ok" and r.text.strip()]
         if not answers:
             return SynthesisResult("no_input", reason="no engine produced an answer")
@@ -483,8 +500,8 @@ class Orchestrator:
             part for part in (SYNTHESIS_INSTRUCTION, synthesizer.instruction) if part
         )
         branch = dataclasses.replace(synthesizer, branch_id="synthesis", instruction=instruction)
-        out = (await self._fan(turn_id, self._run_gen[turn_id], derived, [branch], False,
-                               frozenset({ANSWER_CATEGORY})))[0]
+        out = (await self._fan(turn_id, gen, derived, [branch], False,
+                               frozenset({ANSWER_CATEGORY}), run_id=current_run))[0]
         return SynthesisResult(
             out.status, text=out.text, reason=out.reason,
             sources=tuple(r.branch_id for r in forwardable), withheld=withheld, egress=out.egress,
