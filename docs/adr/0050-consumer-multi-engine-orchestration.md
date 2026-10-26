@@ -43,4 +43,7 @@ provider (`ollama` / `local-openai` local; `codex` / `claude-cli` / `antigravity
 "authenticated" is read without contacting the provider (stored key, or the plan-login probe). A provider that is not
 installed, not buildable, not authenticated, over budget or without a known price is reported per branch as `refused`;
 nothing is charged for it. It returns each branch's answer, the measured report and the egress metadata, never a final
-synthesized answer. Under the Work product it answers HTTP 403. No UI calls it yet.
+synthesized answer. Under the Work product it answers HTTP 403. `GET /api/consumer/status` lists the engines with kind and authentication
+(no provider is contacted). Settings > General > "Ask several engines" is the first screen over both: the owner types a
+question, ticks connected engines, optionally estimates each cost and sets one ceiling; an engine without an estimate
+is skipped unless the owner allows it; only the typed question leaves this computer. Hidden under Work.
