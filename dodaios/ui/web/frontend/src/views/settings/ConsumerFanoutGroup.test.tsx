@@ -39,6 +39,13 @@ describe("ConsumerFanoutGroup", () => {
     await waitFor(() => expect(container.innerHTML).toBe(""));
   });
 
+  it("says so when no engine is installed or connected", async () => {
+    serve({ available: true, reason: "", providers: [] });
+    render(<ConsumerFanoutGroup />);
+    expect(await screen.findByTestId("fanout-no-engines")).toBeTruthy();
+    expect((screen.getByTestId("fanout-run") as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("cannot tick a disconnected engine and needs a question plus an engine before Ask works", async () => {
     serve(STATUS);
     render(<ConsumerFanoutGroup />);

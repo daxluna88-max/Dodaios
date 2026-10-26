@@ -108,6 +108,9 @@ export function ConsumerFanoutGroup() {
             <legend className="mb-1 text-sm text-muted-foreground">
               {t("settings_view.fanout.engines_label")}
             </legend>
+            {status.providers.length === 0 && (
+              <SettingsNote testId="fanout-no-engines">{t("settings_view.fanout.no_engines")}</SettingsNote>
+            )}
             {status.providers.map((engine: FanoutEngine) => (
               <div key={engine.id} className="flex flex-wrap items-center gap-3 text-sm">
                 <label className="flex min-w-40 items-center gap-2">
