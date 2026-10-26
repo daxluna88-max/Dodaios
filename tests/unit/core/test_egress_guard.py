@@ -242,7 +242,9 @@ def test_install_from_settings_env_wins_over_the_file(tmp_path):
 def test_install_from_settings_with_no_file_and_no_env_installs_nothing(tmp_path):
     eg.uninstall()
     assert eg.install_from_settings(tmp_path / "missing.toml", {}) == "none"
-    assert eg.status() == {"active": False, "source": "none", "blocked": 0, "recent": []}
+    status = eg.status()
+    assert {k: v for k, v in status.items() if k != "not_covered"} == {
+        "active": False, "source": "none", "blocked": 0, "recent": []}
 
 
 def test_the_app_entry_point_reads_the_policy_from_the_config_file(tmp_path, monkeypatch, capsys):
@@ -267,3 +269,31 @@ def test_the_app_entry_point_reads_the_policy_from_the_config_file(tmp_path, mon
     f.write_text('[network]\npolicy = "mostly"\n', encoding="utf-8")
     assert entry.main(["--version"]) == 2  # a typo in the file ends startup, network untouched
     assert "only supported policy" in capsys.readouterr().err
+
+
+def test_python_child_with_the_env_policy_blocks_an_outside_host():
+    """Negative-network evidence for a child: it inherits the policy through the environment and
+    installs the guard itself; nothing is sent (the address is a reserved documentation range)."""
+    import os
+    import subprocess
+    import sys
+
+    code = (
+        "from dodaios.core import egress_guard as g; g.install_from_env(); import socket\n"
+        "try:\n"
+        "    socket.create_connection(('203.0.113.7', 80), timeout=1)\n"
+        "except g.EgressBlocked:\n"
+        "    print('BLOCKED')\n"
+    )
+    out = subprocess.run(  # noqa: S603 - fixed interpreter and inline code
+        [sys.executable, "-c", code],
+        env={**os.environ, "JARVIS_NETWORK_POLICY": "local-only"},
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert "BLOCKED" in out.stdout, out.stderr[-400:]
+
+
+def test_status_names_what_is_not_covered():
+    from dodaios.core import egress_guard
+
+    assert egress_guard.status()["not_covered"]
