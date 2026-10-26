@@ -496,9 +496,11 @@ class ConversationSession:
         def on_clause(clause: str, _at: float) -> None:
             self._loop.call_soon_threadsafe(speech.put_nowait, clause)
 
+        wants_session = getattr(self._models.llm, "needs_session", False)
+        extra = {"session": self.session_id} if wants_session else {}
         result = self._models.llm.chat(
             messages, tools=self._tools or None, chunker=ClauseChunker(), on_clause=on_clause,
-            stop=response.cancel,
+            stop=response.cancel, **extra,
         )
         first = getattr(result, "t_first_clause", None)
         if first is not None and "llm_first_clause_ms" not in self._turn_metrics:

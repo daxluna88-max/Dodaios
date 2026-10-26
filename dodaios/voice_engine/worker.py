@@ -185,6 +185,12 @@ class Worker:
             if self._loading is None or self._loading.done():
                 self._loading = asyncio.get_running_loop().create_task(self._configure(message))
             return True
+        if kind == p.LLM_DELTA:
+            llm = getattr(self._models, "llm", None)
+            deliver = getattr(llm, "deliver", None)
+            if deliver is not None:
+                deliver(message)  # a frame nobody waits for any more is counted and dropped
+            return True
         if kind == p.SELFTEST:
             await self._selftest()
             return True
@@ -249,6 +255,9 @@ class Worker:
             log.exception("loading the voice engine failed")
             self._state("failed", reason=f"The local voice could not load: {exc}")
             return
+        attach = getattr(getattr(models, "llm", None), "attach", None)
+        if attach is not None:
+            attach(self._emit)  # the app-side LLM bridge answers through the same frames
         self._models = models
         self._runtime = config
         self._state("ready", detail=described)
