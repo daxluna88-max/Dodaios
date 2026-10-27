@@ -43,3 +43,63 @@ processes. An unknown product name is an error, not a default.
   vault and directory; use the flag.
 - Nothing migrates existing shared data or keys into a product; that is a separate, explicit
   step.
+
+<!-- BEGIN block 5: mirror and uninstall -->
+## Block 5: mirror and uninstall
+
+Written statically: **nothing was run** (no pytest, no test, no build, no uninstall, no app). Only
+`py_compile`, `bash -n` and `ruff check`.
+
+### Ownership
+
+The install folder (`cfg.PROJECT_ROOT`, its venv, the OS app registration, the login autostart
+entry, the terminal commands, the earlier-name links) is **shared** by both products. Each product
+owns only its data directory `<shared>-<product>` (marker `.product`), its credential service
+`dodaios-<product>`, and its Desktop output mirror.
+
+### What changed
+
+- **Desktop mirror** (`dodaios/core/paths.py`). A product launch uses its own root,
+  `~/Desktop/Dodaios-Output-<product>`; the unscoped app keeps `Dodaios-Output`. On Windows
+  `ensure_session_output_dir` no longer uses whatever is at the mirror path: it is used only if it
+  is a directory link that resolves to this product's own canonical folder (`mirror_is_safe`). A
+  link elsewhere (for instance the other product's output), a real folder, or a mirror root that
+  is itself a link is left untouched, never followed or deleted, and the canonical path is
+  returned. The mirror is also returned only if `mklink` really produced a safe link.
+- **Per-product uninstall** (`dodaios/setup/uninstall.py`). Run as
+  `python -m dodaios --product <work|consumer> --uninstall`: removes only that product's data
+  directory (it must be a real directory named `*-<product>`, not a link, carrying that product's
+  marker, outside the install folder) and the keys of its own credential service. It never removes
+  the install folder, registration, autostart, terminal commands or processes found by install
+  folder. `--keep-folder` keeps the data directory, `--keep-keys` the keys. Any doubt (no marker,
+  foreign marker, wrong credential service, link, overlap, contradicting `--product`) exits 3,
+  nothing changed.
+- **Full uninstall guard.** Unscoped, `run_uninstall` exits 3 while a Work/Consumer data directory
+  exists (current or earlier shared name) or the scan cannot tell, also on `--dry-run`. Remove
+  each product first, then the shared install.
+- **Bootstraps** (`install/uninstall.sh`, `install/uninstall.ps1`). Exit code 3 from the Python
+  step is reported as a refusal, with no "delete it by hand" advice. With `--product` they never
+  delete the install folder. Without a working venv they refuse (exit 3) if `--product` was given
+  or if a product data directory exists next to the shared one.
+
+### NOT done / NOT verified
+
+- Nothing was executed. The new tests (`tests/unit/core/test_desktop_mirror_products.py`,
+  `tests/unit/setup/test_uninstall_products.py`, `tests/unit/install/test_uninstall_bootstrap_products.py`)
+  are written, not run.
+- Real Windows junction behaviour, Windows locks on the running product's data directory during
+  its own removal (the product's launch lock file is open while it is deleted), macOS Keychain
+  and Windows Credential Manager removal under `dodaios-<product>`: not verified.
+- The shell/PowerShell product data paths in the no-venv fallback assume the default locations
+  (`~/.dodaios-data-<product>`, `%LOCALAPPDATA%\Dodaios-<product>`); a custom data location is not
+  seen there.
+- Identity is still shared and NOT separated: macOS `Dodaios.app` and bundle id
+  `com.personal-jarvis.desktop`, the autostart label/entry, the Windows Start menu shortcut,
+  Installed Apps key, AppUserModelID, the Linux `.desktop` entry and the terminal commands. The
+  full uninstall removes them only when no product data is left; a per-product install with its
+  own folder, shortcut, bundle id and autostart entry is not implemented.
+- Shared-install protection is by refusal only: a full uninstall does not offer a "remove
+  everything including products" mode; no product-selecting flag exists in the bootstraps
+  beyond passing `--product` through.
+- Old Desktop output under `Dodaios-Output` made before this change is not moved or re-linked.
+<!-- END block 5: mirror and uninstall -->
