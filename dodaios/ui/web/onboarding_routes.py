@@ -191,7 +191,7 @@ def _first_run_payload() -> dict:
     key = fr.product_key(product)
     choices = fr.load_choices(_path())
     try:
-        summary = fr.summary(product, choices, cfg_mod.load_config())
+        summary = fr.summary(product, choices, cfg_mod.load_config(), state_path=_path())
     except Exception:  # noqa: BLE001 - the screen still opens; the summary says it is unavailable
         log.warning("first run: the summary could not be built", exc_info=True)
         summary = None
@@ -214,7 +214,15 @@ def get_first_run(response: Response) -> dict:
 @router.put("/first-run")
 def put_first_run(body: fr.FirstRunChoices) -> dict:
     """Save the choices made so far (progress only: nothing is written to the configuration)."""
-    fr.save_choices(body, _path())
+    from dodaios.brain import engine_policy
+
+    try:
+        fr.save_choices(body, _path(), engine_policy.current_product())
+    except fr.FirstRunError as exc:  # not on disk, or not this product folder: say so
+        raise HTTPException(
+            status_code=500 if exc.step == "save" else 409,
+            detail={"error": "first_run_not_saved", "step": exc.step},
+        ) from exc
     return _first_run_payload()
 
 
@@ -234,18 +242,42 @@ def post_first_run_apply(request: Request) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except fr.FirstRunError as exc:
         raise HTTPException(
-            status_code=500,
+            status_code=409 if exc.step == "isolation" else 500,
             detail={"error": "first_run_not_applied", "step": exc.step, "written": exc.done},
         ) from exc
     return _first_run_payload()
 
 
+class ResetBody(BaseModel):
+    #: Extra things to take away, only when the owner ticked them (``fr.RESET_OPTIONS``).
+    include: list[str] = []
+
+
+@router.get("/first-run/reset-plan")
+def get_first_run_reset_plan(include: str = "") -> dict:
+    """What a reset would remove and what it keeps; reads only."""
+    try:
+        return fr.reset_plan(_path(), tuple(i for i in include.split(",") if i))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/first-run/reset")
-def post_first_run_reset(request: Request) -> dict:
-    """Forget the saved choices (explicit). The configuration already written is not reverted."""
+def post_first_run_reset(request: Request, body: ResetBody | None = None) -> dict:
+    """Forget THIS product's saved first-run state (explicit). The configuration already written
+    is kept unless the owner ticked an option; credentials, memory and the other product never."""
+    from dodaios.brain import engine_policy
+
     _require_ui_click(request)
-    fr.reset_choices(_path())
-    return _first_run_payload()
+    try:
+        plan = fr.reset_choices(_path(), product=engine_policy.current_product(),
+                                include=tuple(body.include) if body else ())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except fr.FirstRunError as exc:
+        raise HTTPException(status_code=409, detail={"error": "first_run_not_reset",
+                                                     "step": exc.step}) from exc
+    return {**_first_run_payload(), "reset": plan}
 
 
 __all__ = ["router"]

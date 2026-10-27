@@ -125,7 +125,8 @@ export type LocaleChunk =
   | "memory"
   | "memory_control"
   | "ship"
-  | "self_build";
+  | "self_build"
+  | "first_run_hardening";
 
 const SHIP_LOCALES = import.meta.glob("./locales/ship/*.json");
 
@@ -239,6 +240,14 @@ const CHUNK_LOADERS: Record<LocaleChunk, Record<UiLanguage, () => Promise<unknow
     es: () => import("./locales/self_build/es.json"),
     zh: () => import("./locales/self_build/zh.json"),
     pt: () => import("./locales/self_build/pt.json"),
+  },
+  // First-run hardening (block 11): permissions, engine levels, resume and reset on the summary.
+  first_run_hardening: {
+    en: () => import("./locales/first_run_hardening/en.json"),
+    de: () => import("./locales/first_run_hardening/de.json"),
+    es: () => import("./locales/first_run_hardening/es.json"),
+    zh: () => import("./locales/first_run_hardening/zh.json"),
+    pt: () => import("./locales/first_run_hardening/pt.json"),
   },
 };
 
