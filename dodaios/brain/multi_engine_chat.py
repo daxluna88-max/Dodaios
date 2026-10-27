@@ -24,7 +24,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from dodaios.brain import engine_policy
+from dodaios.brain import engine_policy, provenance
 from dodaios.brain.consumer_orchestrator import (
     Branch,
     Budget,
@@ -92,6 +92,8 @@ class MultiEngineOutcome:
     #: Why there is no answer (per engine), already readable. Empty when ``status == "ok"``.
     reason: str = ""
     sources: tuple[str, ...] = ()
+    #: The text derives from material a remote destination may not see (provenance).
+    tainted: bool = False
     report: dict[str, Any] = field(default_factory=dict)
 
 
@@ -226,7 +228,11 @@ async def ask(
         reason = synth.reason or synth.status
         return MultiEngineOutcome("synthesis_failed", reason=reason, sources=synth.sources,
                                   report=report)
-    return MultiEngineOutcome("ok", text=synth.text.strip(), sources=synth.sources, report=report)
+    text = synth.text.strip()
+    if synth.tainted:  # the label must outlive this module: a cloud TTS or the curator check it
+        provenance.mark_restricted(text)
+    return MultiEngineOutcome("ok", text=text, sources=synth.sources, tainted=synth.tainted,
+                              report=report)
 
 
 __all__ = [

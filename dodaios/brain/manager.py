@@ -222,6 +222,16 @@ class _TurnFlags:
 _TURN_FLAGS: ContextVar[_TurnFlags | None] = ContextVar("jarvis_brain_turn_flags", default=None)
 
 
+def _chain_has_remote(chain: Any) -> bool:
+    """True when any engine in the fallback chain is not provably on this machine (fails closed)."""
+    from dodaios.brain import engine_policy  # noqa: PLC0415
+
+    try:
+        return any(not engine_policy.destination_of(str(entry[0])).local for entry in chain)
+    except Exception:  # noqa: BLE001 - unreadable means unknown means remote
+        return True
+
+
 def _turn_is_stale() -> bool:
     turn = _STOP_TURN.get()
     return turn is not None and turn.stale()
@@ -9659,7 +9669,9 @@ class BrainManager:
             text=response_text,
         )
 
-        if self._curator is not None and not (
+        from dodaios.brain import provenance  # noqa: PLC0415
+
+        if self._curator is not None and not provenance.is_restricted(response_text) and not (
             (profile_override := _TURN_OVERRIDE.get()) is not None
             and profile_override.tool_context.get("tool_origin") == "society"
         ):
@@ -11656,7 +11668,9 @@ class BrainManager:
         ):
             from dodaios.brain.turn_memory import recall_block
 
-            memory_block = await recall_block(user_text)
+            # Any remote engine in the chain (a fallback may be used) means local-only notes
+            # must not be recalled into the shared turn context (ADR-0050, block 7).
+            memory_block = await recall_block(user_text, remote=_chain_has_remote(chain))
             if memory_block:
                 self._wiki_context_suffix = (
                     f"{self._wiki_context_suffix}\n\n{memory_block}"
