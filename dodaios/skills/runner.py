@@ -393,7 +393,13 @@ class SkillRunner:
             )
             step_start = time.monotonic()
             try:
-                result = await tool_obj.execute(tool_args, ctx)
+                from dodaios.core import egress_guard
+
+                offline = egress_guard.tool_refusal(tool_name)
+                if offline is not None:
+                    result = ToolResult(success=False, output=None, error=offline)
+                else:
+                    result = await tool_obj.execute(tool_args, ctx)
                 if not isinstance(result, ToolResult):
                     result = ToolResult(success=bool(result), output=result)
                 step = {

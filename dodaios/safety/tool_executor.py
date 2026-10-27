@@ -356,6 +356,13 @@ class ToolExecutor:
                 ))
                 return ToolResult(False, None, "Plan mode permits reads only")
 
+        from dodaios.core import egress_guard
+
+        offline = egress_guard.tool_refusal(tool.name)
+        if offline is not None:
+            await self._bus.publish(ActionDenied(trace_id=tid, tool_name=tool.name, reason=offline))
+            return ToolResult(False, None, offline)
+
         if cancel_token is not None and cancel_token.is_cancelled():
             return ToolResult(
                 success=False,
