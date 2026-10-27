@@ -11,7 +11,7 @@
  *   <span>{t("nav.skills")}</span>
  *
  *   import { useUiLanguage, setUiLanguage } from "@/i18n";
- *   const lang = useUiLanguage();      // "en" | "de" | "es" | "zh" | "pt"
+ *   const lang = useUiLanguage();      // "en" | "de" | "es" | "zh" | "pt" | "it"
  *   setUiLanguage("de");               // updates reactively when loaded
  *
  * STT recognition language (what Whisper transcribes the spoken voice INTO) is
@@ -23,7 +23,7 @@ import { create } from "zustand";
 import enJson from "./locales/en.json";
 import { useEventStore } from "@/store/events";
 
-export type UiLanguage = "en" | "de" | "es" | "zh" | "pt";
+export type UiLanguage = "en" | "de" | "es" | "zh" | "pt" | "it";
 // "auto" mirrors the user's input language; the rest hard-pin the reply language.
 // Mirrors jarvis/brain/manager.py::SUPPORTED_REPLY_LANGUAGES (single source of truth).
 export type ReplyLanguage = "auto" | "en" | "de" | "es" | "pt";
@@ -46,7 +46,7 @@ const STT_LANGUAGE_ENDPOINT = "/api/settings/stt-language";
 const REPLY_VALUES: readonly ReplyLanguage[] = ["auto", "en", "de", "es", "pt"];
 
 export function isUiLanguage(v: unknown): v is UiLanguage {
-  return v === "en" || v === "de" || v === "es" || v === "zh" || v === "pt";
+  return v === "en" || v === "de" || v === "es" || v === "zh" || v === "pt" || v === "it";
 }
 
 function isReplyLanguage(v: unknown): v is ReplyLanguage {
@@ -67,6 +67,7 @@ const RESOURCES: Record<UiLanguage, Record<string, unknown>> = {
   es: enJson as Record<string, unknown>,
   zh: enJson as Record<string, unknown>,
   pt: enJson as Record<string, unknown>,
+  it: enJson as Record<string, unknown>,
 };
 
 type LazyUiLanguage = Exclude<UiLanguage, "en">;
@@ -76,6 +77,8 @@ const UI_LOCALE_LOADERS: Record<LazyUiLanguage, () => Promise<unknown>> = {
   es: () => import("./locales/es.json"),
   zh: () => import("./locales/zh.json"),
   pt: () => import("./locales/pt.json"),
+  // Italian: UNREVIEWED DRAFT, partial (see ADR-0063). Keys it lacks fall back to English per key.
+  it: () => import("./locales/it.json"),
 };
 const UI_LOCALE_PROMISES: Partial<Record<LazyUiLanguage, Promise<void>>> = {};
 
@@ -105,8 +108,8 @@ export function loadUiLocale(lang: UiLanguage): Promise<void> {
 /**
  * Locale chunks that load on demand.
  *
- * English rides in the startup bundle; German, Spanish, Chinese and Portuguese
- * load on demand.
+ * English rides in the startup bundle; German, Spanish, Chinese, Portuguese and
+ * Italian load on demand.
  * A section nobody opens on start — the marketplace's publish studio, say —
  * keeps its strings in
  * `locales/<chunk>/<lang>.json` and asks for them with `useLocaleChunk` when
@@ -154,7 +157,17 @@ function shipLocale(lang: UiLanguage): () => Promise<unknown> {
   ).then((mods) => mods.reduce<Record<string, unknown>>((all, mod) => mergeDeep(all, unwrapModule(mod)), {}));
 }
 
-const CHUNK_LOADERS: Record<LocaleChunk, Record<UiLanguage, () => Promise<unknown>>> = {
+type ChunkLoader = () => Promise<unknown>;
+
+/**
+ * Italian is optional per chunk: a chunk with no `it` entry has no Italian
+ * dictionary yet, loads nothing for it, and `resolve()` falls through to the
+ * English chunk text key by key (explicit, intended behaviour; ADR-0063).
+ * Every other language must be present.
+ */
+type ChunkLoaders = Record<Exclude<UiLanguage, "it">, ChunkLoader> & { it?: ChunkLoader };
+
+const CHUNK_LOADERS: Record<LocaleChunk, ChunkLoaders> = {
   marketplace: {
     en: () => import("./locales/marketplace/en.json"),
     de: () => import("./locales/marketplace/de.json"),
@@ -190,6 +203,7 @@ const CHUNK_LOADERS: Record<LocaleChunk, Record<UiLanguage, () => Promise<unknow
     es: () => import("./locales/onboarding/es.json"),
     zh: () => import("./locales/onboarding/zh.json"),
     pt: () => import("./locales/onboarding/pt.json"),
+    it: () => import("./locales/onboarding/it.json"), // UNREVIEWED DRAFT
   },
   // The appshot editor: opened from a capture, never on start.
   appshot_editor: {
@@ -233,6 +247,7 @@ const CHUNK_LOADERS: Record<LocaleChunk, Record<UiLanguage, () => Promise<unknow
     es: () => import("./locales/memory_control/es.json"),
     zh: () => import("./locales/memory_control/zh.json"),
     pt: () => import("./locales/memory_control/pt.json"),
+    it: () => import("./locales/memory_control/it.json"), // UNREVIEWED DRAFT
   },
   // Settings > Assistant > Personality: limits of adaptation vs the owner's explicit request.
   personality_limits: {
@@ -241,6 +256,7 @@ const CHUNK_LOADERS: Record<LocaleChunk, Record<UiLanguage, () => Promise<unknow
     es: () => import("./locales/personality_limits/es.json"),
     zh: () => import("./locales/personality_limits/zh.json"),
     pt: () => import("./locales/personality_limits/pt.json"),
+    it: () => import("./locales/personality_limits/it.json"), // UNREVIEWED DRAFT
   },
   // "Built for you": what the self-building loop made, opened from its nav row.
   self_build: {
@@ -257,10 +273,11 @@ const CHUNK_LOADERS: Record<LocaleChunk, Record<UiLanguage, () => Promise<unknow
     es: () => import("./locales/first_run_hardening/es.json"),
     zh: () => import("./locales/first_run_hardening/zh.json"),
     pt: () => import("./locales/first_run_hardening/pt.json"),
+    it: () => import("./locales/first_run_hardening/it.json"), // UNREVIEWED DRAFT
   },
 };
 
-const EXTRA: Record<UiLanguage, Record<string, unknown>[]> = { en: [], de: [], es: [], zh: [], pt: [] };
+const EXTRA: Record<UiLanguage, Record<string, unknown>[]> = { en: [], de: [], es: [], zh: [], pt: [], it: [] };
 const CHUNK_PROMISES: Partial<Record<LocaleChunk, Promise<void>>> = {};
 
 function unwrapModule(mod: unknown): Record<string, unknown> {
@@ -275,7 +292,10 @@ export function loadLocaleChunk(chunk: LocaleChunk): Promise<void> {
   const loaders = CHUNK_LOADERS[chunk];
   const promise = Promise.all(
     (Object.keys(loaders) as UiLanguage[]).map(async (lang) => {
-      EXTRA[lang].push(unwrapModule(await loaders[lang]()));
+      const load = loaders[lang];
+      // No loader (Italian on a chunk without a draft): nothing to add, English answers.
+      if (!load) return;
+      EXTRA[lang].push(unwrapModule(await load()));
     }),
   ).then(() => {
     LOADED_CHUNKS.add(chunk);

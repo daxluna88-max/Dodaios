@@ -8,7 +8,7 @@
  * window blocks: every step past the name can be left for later.
  */
 import { ArrowRight, Check, Loader2 } from "lucide-react";
-import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -39,7 +39,7 @@ import {
 import { WIZARD_STEP_IDS, type WizardStepId } from "./setupSteps";
 import { BackAction, StepFooter, StepHead } from "./wizardParts";
 
-const LANGS: UiLanguage[] = ["en", "de", "es", "zh", "pt"];
+const LANGS: UiLanguage[] = ["en", "de", "es", "zh", "pt", "it"];
 // Each language names itself, so a reader finds theirs before they can read
 // the rest of the window. Latin-script codes read fine as letters; Chinese
 // readers look for the characters.
@@ -49,6 +49,7 @@ const LANG_SWITCH_LABEL: Record<UiLanguage, string> = {
   es: "ES",
   zh: "中文",
   pt: "PT",
+  it: "IT",
 };
 
 export function SetupWizard({
@@ -70,6 +71,11 @@ export function SetupWizard({
 }) {
   const t = useT();
   const titleId = useId();
+  // A modal dialog takes keyboard focus when it opens (2.4.3); a full focus trap is still open (ADR-0063).
+  const cardRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    cardRef.current?.focus({ preventScroll: true });
+  }, []);
   const index = WIZARD_STEP_IDS.indexOf(step);
   const next = WIZARD_STEP_IDS[index + 1];
   const prev = index > 0 ? WIZARD_STEP_IDS[index - 1] : null;
@@ -84,12 +90,14 @@ export function SetupWizard({
       data-testid="setup-window-backdrop"
     >
       <div
+        ref={cardRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         data-testid="setup-card"
         data-step={step}
-        className="flex max-h-[calc(100vh-32px)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border bg-popover text-popover-foreground shadow-float"
+        className="flex max-h-[calc(100vh-32px)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl outline-none border border-border bg-popover text-popover-foreground shadow-float"
       >
         <header className="shrink-0 space-y-4 px-6 pb-4 pt-5">
           <div className="flex items-center gap-2.5">
@@ -212,7 +220,7 @@ function LanguageSwitch({ className }: { className?: string }) {
           onClick={() => setUiLanguage(code)}
           data-testid={`onboarding-lang-${code}`}
           className={cn(
-            "rounded-full px-2.5 py-0.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            "min-h-6 min-w-6 rounded-full px-2.5 py-0.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             lang === code ? "bg-secondary font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
           )}
         >
@@ -282,7 +290,7 @@ function NameStep({ run, onContinue }: { run: FirstRun; onContinue: () => void }
       <OwnerFields run={run} />
       <StepFooter>
         <Button type="submit" disabled={!name || saving} data-testid="onboarding-primary">
-          {saving && <Loader2 aria-hidden className="animate-spin" />}
+          {saving && <Loader2 aria-hidden className="motion-safe:animate-spin" />}
           {t("first_run.continue")}
           <ArrowRight aria-hidden />
         </Button>
@@ -462,7 +470,7 @@ function CallShortcutRow() {
           ) : (
             <span className="text-xs text-muted-foreground">{t("first_run.voice.call_press")}</span>
           )}
-          {saving && <Loader2 aria-hidden className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+          {saving && <Loader2 aria-hidden className="h-3.5 w-3.5 motion-safe:animate-spin text-muted-foreground" />}
         </button>
       }
     />

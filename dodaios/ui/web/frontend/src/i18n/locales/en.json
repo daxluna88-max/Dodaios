@@ -4104,6 +4104,10 @@
       "pt": {
         "label": "Português (Portugal)",
         "description": "Use European Portuguese for every label and button."
+      },
+      "it": {
+        "label": "Italiano (Italian)",
+        "description": "Use Italian for every label and button. Draft translation, not yet reviewed by a native speaker; untranslated parts stay in English."
       }
     },
     "reply_options": {

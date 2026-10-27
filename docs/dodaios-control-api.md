@@ -76,7 +76,7 @@ Settings panel can bootstrap the key before the user has it.
 Dodaios has **two** language settings, both now backend-backed and in the
 allowlist:
 
-- **`ui.language`** (en/de/es) — the INTERFACE the user sees: every label,
+- **`ui.language`** (en/de/es/pt/zh/it) — the INTERFACE the user sees: every label,
   button and message. Formerly frontend-only localStorage; now a config key so
   voice/the Control API can change it. SAFE. When it changes, a
   `UiLanguageChanged` event (and the `ConfigReloaded` from the writer) is

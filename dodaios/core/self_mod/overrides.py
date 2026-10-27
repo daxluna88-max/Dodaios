@@ -49,7 +49,7 @@ OVERRIDES: dict[str, SpecOverride] = {
     "ui.language": SpecOverride(
         risk_tier="safe", needs_restart=False,
         description=(
-            "Interface / display language of the whole app (en/de/es/pt/zh) — what "
+            "Interface / display language of the whole app (en/de/es/pt/zh/it) — what "
             "the user SEES. Applies live, no restart."
         ),
     ),

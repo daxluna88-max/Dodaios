@@ -19,7 +19,8 @@ from dodaios.agent_chat.team.store import (
 
 _SRC = Path(__file__).resolve().parents[3] / "dodaios" / "ui" / "web" / "frontend" / "src"
 _API = _SRC / "lib" / "teamThreadsApi.ts"
-_LOCALES = sorted((_SRC / "i18n" / "locales").glob("*.json"))
+# "it" is a partial draft with per-key English fallback (ADR-0063).
+_LOCALES = sorted(p for p in (_SRC / "i18n" / "locales").glob("*.json") if p.stem != "it")
 
 
 def _ts_list(name: str) -> tuple[str, ...]:

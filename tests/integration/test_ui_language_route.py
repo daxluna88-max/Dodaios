@@ -42,7 +42,7 @@ def test_get_returns_current_ui_language(ctx) -> None:
     tc, _, _ = ctx
     body = tc.get("/api/settings/ui-language").json()
     assert body["language"] == "en"
-    assert set(body["options"]) == {"en", "de", "es", "pt", "zh"}
+    assert set(body["options"]) == {"en", "de", "es", "pt", "zh", "it"}
 
 
 def test_put_persists_and_broadcasts(ctx) -> None:

@@ -304,7 +304,7 @@ function ProviderRow({
             <span className="px-2 text-xs text-muted-foreground">{t("first_run.connect.checking")}</span>
           ) : sub.phase === "waiting" ? (
             <span className="inline-flex items-center gap-1.5 px-2 text-xs text-muted-foreground">
-              <Loader2 aria-hidden className="h-3.5 w-3.5 animate-spin" />
+              <Loader2 aria-hidden className="h-3.5 w-3.5 motion-safe:animate-spin" />
               {t("first_run.connect.waiting")}
             </span>
           ) : (
@@ -315,7 +315,7 @@ function ProviderRow({
               disabled={sub.phase === "starting"}
               data-testid={`setup-sub-${spec.id}-connect`}
             >
-              {sub.phase === "starting" && <Loader2 aria-hidden className="animate-spin" />}
+              {sub.phase === "starting" && <Loader2 aria-hidden className="motion-safe:animate-spin" />}
               {t("first_run.connect.sign_in")}
             </Button>
           )}

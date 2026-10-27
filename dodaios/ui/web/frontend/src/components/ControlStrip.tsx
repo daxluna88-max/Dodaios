@@ -47,6 +47,16 @@ const STATE_TONE: Record<StripSummary, "default" | "accent" | "success" | "warni
   unknown: "warning",
 };
 
+/**
+ * The state words ride on the page ink, not the status hue: the soft-wash badge pairs measure
+ * 4.15 to 4.31:1 (below 4.5:1) in light (accent, success, warning) and dark (destructive). The
+ * wash and rim keep the hue; the word carries the meaning (ADR-0063).
+ */
+const BADGE_INK = "text-foreground";
+
+/** Dark theme: white on the shared destructive red is 4.38:1; this red is 4.89:1 (ADR-0063). */
+const STOP_RED_DARK = "dark:bg-[hsl(0_72%_50%)] dark:hover:bg-[hsl(0_72%_46%)]";
+
 /** Errors and decisions interrupt a screen reader; everything else waits its turn. */
 const ASSERTIVE: ReadonlySet<StripSummary> = new Set(["error", "waiting"]);
 
@@ -115,6 +125,7 @@ export function ControlStrip() {
           type="button"
           variant="destructive"
           size="sm"
+          className={STOP_RED_DARK}
           onClick={onStop}
           disabled={stop.isPending}
           title={t("control_strip.stop_hint")}
@@ -149,7 +160,7 @@ export function ControlStrip() {
         >
           {data ? (
             <>
-              <Badge variant={STATE_TONE[data.state]} data-testid="control-strip-state">
+              <Badge variant={STATE_TONE[data.state]} className={BADGE_INK} data-testid="control-strip-state">
                 {t(`control_strip.state_${data.state}`)}
               </Badge>
               {data.not_confirmed.length > 0 && (data.state === "partly_stopped" || data.state === "stopping") && (
@@ -163,7 +174,7 @@ export function ControlStrip() {
             </>
           ) : (
             <>
-              <Badge variant="warning" data-testid="control-strip-state">
+              <Badge variant="warning" className={BADGE_INK} data-testid="control-strip-state">
                 {t("control_strip.state_unknown")}
               </Badge>
               {historical ? (
@@ -226,7 +237,7 @@ export function ControlStrip() {
               variant="ghost"
               size="sm"
               aria-expanded={open}
-              aria-controls="control-strip-details"
+              aria-controls={open ? "control-strip-details" : undefined}
               onClick={() => setOpen(!open)}
             >
               {t(open ? "control_strip.details_hide" : "control_strip.details_show")}
@@ -281,7 +292,7 @@ function Approvals({
               {d.risk_tier ? ` · ${d.risk_tier}` : ""}
             </span>
             {d.args_preview && <span className="break-all text-muted-foreground">{d.args_preview}</span>}
-            <span className="flex gap-2">
+            <span className="flex flex-wrap gap-2">
               <Button
                 type="button"
                 size="sm"
