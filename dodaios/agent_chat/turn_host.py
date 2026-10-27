@@ -616,6 +616,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--token-file", default=None, help="Read the token from this file.")
     args = parser.parse_args(argv)
 
+    # A helper of the running app: it must be in the product its parent runs as (ADR-0054).
+    from dodaios.core import product_profile
+
+    try:
+        product_profile.validate_entry([])
+    except product_profile.ProductError as exc:
+        print(f"Turn host: {exc}", file=sys.stderr)
+        return 2
+
     token = os.environ.pop(TOKEN_ENV, "")
     if not token and args.token_file:
         token_path = Path(args.token_file)

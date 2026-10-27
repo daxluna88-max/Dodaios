@@ -39,28 +39,61 @@ if len(sys.argv) == 3 and sys.argv[1] == "--audio-device-probe":
 
     raise SystemExit(_audio_device_probe_main(sys.argv[2]))
 
+# Which product (ADR-0054) an early entry runs as. These entries dispatch BEFORE the product is
+# selected below, so each one first checks identity itself: ``--product`` is found in ANY position
+# and in both spellings (``--product work`` / ``--product=work``), and an inherited product
+# environment is validated whole (read-only: nothing is claimed, locked or imported) before the
+# entry can read or write a data directory or a vault. A bad identity ends the process here.
+from dodaios.core import product_profile as _product_profile  # noqa: E402
+
+
+def _early_entry(allow_flag: bool = True) -> list[str]:
+    try:
+        return _product_profile.validate_entry(sys.argv[1:], allow_flag=allow_flag)
+    except _product_profile.ProductError as _early_error:
+        print(f"error: {_early_error}", file=sys.stderr)
+        raise SystemExit(2) from None
+
+
+def _early_command() -> list[str]:
+    """argv without ``--product``, for finding the entry flag whatever its position."""
+    try:
+        return _product_profile.extract_product_flag(sys.argv[1:])[1]
+    except _product_profile.ProductError as _early_error:
+        print(f"error: {_early_error}", file=sys.stderr)
+        raise SystemExit(2) from None
+
+
+_EARLY = _early_command()
+
 # The restart helper of a frozen build. ``python -m dodaios.ui.relauncher`` is
 # what a source install spawns; a frozen executable has no ``-m``, so it is
 # re-entered with this private flag instead (see relauncher.RELAUNCHER_FLAG).
-if len(sys.argv) >= 2 and sys.argv[1] == "--relauncher":
+# The product travels in the environment (the restarted app inherits it, so the
+# new instance keeps the same data directory, no second suffix); no flag here.
+if _EARLY[:1] == ["--relauncher"]:
     from dodaios.ui.relauncher import main as _relauncher_main
 
-    raise SystemExit(_relauncher_main(sys.argv[2:]))
+    _early_entry(allow_flag=False)
+    raise SystemExit(_relauncher_main(_EARLY[1:]))
 
 # The background agent service of a frozen build, same reason: no ``-m`` to
 # start ``dodaios.ui.web.launcher --background-service`` with
-# (see dodaios/core/background_service.py).
-if len(sys.argv) >= 2 and sys.argv[1] in {"--background-service", "--persistent-server", "--connect"}:
+# (see dodaios/core/background_service.py). The launcher selects (or inherits and
+# validates) the product from the whole argv, so it gets the argv unchanged.
+if _EARLY[:1] and _EARLY[0] in {"--background-service", "--persistent-server", "--connect"}:
     from dodaios.ui.web.launcher import main as _launcher_main
 
     raise SystemExit(_launcher_main(sys.argv[1:]))
 
 # The thread turn host of a frozen build, same reason: no ``-m`` to start
-# ``dodaios.agent_chat.turn_host`` with (see turn_host.FROZEN_FLAG).
-if len(sys.argv) >= 2 and sys.argv[1] == "--turn-host":
+# ``dodaios.agent_chat.turn_host`` with (see turn_host.FROZEN_FLAG). A helper of the
+# running app: the product comes from the inherited environment only.
+if _EARLY[:1] == ["--turn-host"]:
     from dodaios.agent_chat.turn_host import main as _turn_host_main
 
-    raise SystemExit(_turn_host_main(sys.argv[2:]))
+    _early_entry(allow_flag=False)
+    raise SystemExit(_turn_host_main(_EARLY[1:]))
 
 # Windows Terminal defaults to cp1252 — which breaks Unicode (box-drawing,
 # emojis, ✓/✗). Force utf-8 before printing anything.
@@ -75,16 +108,16 @@ if sys.platform == "win32":
 # a native module a live process has loaded. Dispatch before the config and
 # hardware imports below pull pydantic & co. into this process; the update
 # module keeps every heavy step in short-lived child processes.
-if len(sys.argv) >= 2 and sys.argv[1] == "update":
+if _EARLY[:1] == ["update"]:
+    # Install-wide: it replaces the shared checkout and touches no product data, so it never
+    # claims or locks a product. Identity is still checked (any ``--product`` position).
     from dodaios.cli.app_update import main as _update_main
 
-    raise SystemExit(_update_main(sys.argv[2:]))
+    raise SystemExit(_update_main(_early_entry()[1:]))
 
 # ``--product work|consumer`` (ADR-0054) has to be decided before ``dodaios.core.config`` is
 # imported below: that module binds the credential service and the data paths on import. The
 # flag is consumed here, so the argument parsers further down never see it.
-from dodaios.core import product_profile as _product_profile
-
 try:
     _PRODUCT_PATHS, _rest_argv, _PRODUCT_LOCK = _product_profile.activate_from_argv(sys.argv[1:])
 except _product_profile.ProductError as _product_error:

@@ -404,6 +404,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    # Install-wide, but it reads the running app's session: an inconsistent inherited product
+    # environment is refused first (ADR-0054).
+    from dodaios.core import product_profile
+
+    try:
+        product_profile.validate_entry([])
+    except product_profile.ProductError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     try:
         return run_update(check_only=args.check)
     except KeyboardInterrupt:

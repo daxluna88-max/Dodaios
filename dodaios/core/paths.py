@@ -56,7 +56,23 @@ def user_data_dir() -> Path:
                 f"the {active or 'announced'} product has no data directory "
                 "(JARVIS_DATA_DIR): refusing to fall back to the shared one"
             )
-        return Path(scoped)
+        # The inherited path is trusted only when it is plainly this product's directory:
+        # absolute, named ``<root>-<product>`` and, once claimed, owned by this product.
+        # Read-only (the launch that selected the product claims it); a mismatch raises.
+        from dodaios.core import product_profile as _pp
+
+        scoped_dir = Path(scoped)
+        suffix = f"-{active}"
+        if (
+            not scoped_dir.is_absolute()
+            or not scoped_dir.name.endswith(suffix)
+            or len(scoped_dir.name) == len(suffix)
+        ):
+            raise RuntimeError(f"{scoped_dir} is not the {active} product directory: refusing it")
+        owner = _pp._read_owner(scoped_dir / _pp.MARKER_NAME)  # noqa: SLF001 - same package
+        if owner is not None and owner != active:
+            raise RuntimeError(f"{scoped_dir} belongs to the {owner} product, not {active}")
+        return scoped_dir
     return resolve_pair(user_data_dir_pair())
 
 
