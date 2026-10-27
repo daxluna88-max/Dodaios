@@ -199,11 +199,28 @@ class StopController:
         self._inflight = asyncio.ensure_future(self._run(pending, kept, repeated))
         return await asyncio.shield(self._inflight)
 
+    async def _recheck(self, part: Subsystem, before: SubsystemResult) -> SubsystemResult:
+        """A part confirmed by an earlier STOP is asked once more by a repeated one: work that
+        slipped past the door since (a path that does not use it) must not stay forgotten. Still
+        confirmed -> kept as is; anything else -> the part is asked to stop again."""
+        if part.probe is not None:
+            try:
+                if await asyncio.wait_for(part.probe(), self._probe_timeout_s) == "confirmed":
+                    return before
+            except Exception:  # noqa: BLE001 - an unreadable probe is "not confirmed any more"
+                log.warning("stop: re-probe of %s failed", part.name, exc_info=True)
+        return await self._stop_one(part)
+
     async def _run(
         self, pending: list[Subsystem], kept: tuple[SubsystemResult, ...], repeated: bool
     ) -> StopReport:
         generation = self._generation
-        fresh = await asyncio.gather(*(self._stop_one(s) for s in pending))
+        by_part = {s.name: s for s in self._subsystems}
+        again = [self._recheck(by_part[r.name], r) for r in kept if r.name in by_part]
+        fresh_all = await asyncio.gather(
+            *(self._stop_one(s) for s in pending), *again)
+        kept = tuple(r for r in kept if r.name not in by_part)
+        fresh = list(fresh_all)
         by_name = {r.name: r for r in (*kept, *fresh)}
         order = [s.name for s in self._subsystems]
         results = tuple(by_name[n] for n in order if n in by_name)
