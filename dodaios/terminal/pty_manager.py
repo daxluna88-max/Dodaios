@@ -169,6 +169,11 @@ def _interactive_child_env(env: Mapping[str, str] | None) -> Mapping[str, str] |
     inheritance/identity behaviour exactly.  A meaningful caller-selected
     terminal type (for example ``screen-256color``) remains authoritative.
     """
+    if env is not None:
+        # F4: a replacement env must not name another product/policy than this process.
+        from dodaios.core.child_identity import forward_identity  # noqa: PLC0415
+
+        env = forward_identity(dict(env))
     source = os.environ if env is None else env
     term = source.get("TERM", "").strip()
     term_is_stale = not term or term.lower() == "dumb"

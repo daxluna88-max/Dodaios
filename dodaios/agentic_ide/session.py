@@ -743,6 +743,11 @@ def _without_parent_agent_session(env: dict[str, str] | None) -> dict[str, str] 
     """
     global _parent_session_reported
 
+    if env is not None:
+        # F4: a pane env that names another product/policy than this process is refused.
+        from dodaios.core.child_identity import forward_identity  # noqa: PLC0415
+
+        env = forward_identity(env)
     source = os.environ if env is None else env
     present = sorted(name for name in PARENT_AGENT_SESSION_VARS if name in source)
     if not present:

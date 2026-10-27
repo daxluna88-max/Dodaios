@@ -44,6 +44,9 @@ def worker_env(*, package_root: Path | None = None, home: Path | None = None,
     if home is not None:
         env["JARVIS_VOICE_ENGINE_HOME"] = str(home)
     env.update(extra or {})
+    from dodaios.core.child_identity import enforce_identity  # noqa: PLC0415
+
+    enforce_identity(env)  # F4: an overlay cannot move the worker to another product/policy
     return env
 
 

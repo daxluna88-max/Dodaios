@@ -29,9 +29,10 @@ def test_uncoverable_tools_refused_when_active(name):
     assert "strict offline profile" in (eg.tool_refusal(name) or "")
 
 
-def test_unclassified_in_process_tool_not_refused():
+def test_name_only_allowlisted_tool_gets_no_credit():
+    # block 9 (F2): a name alone never opens a tool
     eg.install()
-    assert eg.tool_refusal("wiki-list") is None
+    assert eg.tool_refusal("wiki-list") is not None
 
 
 def test_child_refused_unless_proven_covered(monkeypatch):

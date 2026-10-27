@@ -68,3 +68,49 @@ dropped product identity and policy. Written, not run: no test, build or service
 
 Not claimed: this is NOT full offline. A forwarded `JARVIS_NETWORK_POLICY` only helps a child that installs the guard
 (`GUARDED_CHILD_MODULES` is still empty); there is still no OS enforcement (ADR-0060 is design only).
+
+## Block 9: GPT round 2 (F1, F2, F4)
+
+F1 is in ADR-0050. Written, NOT run: no test, build, CI or service was executed.
+
+**F2 (R7, allowlist by name is impersonable): fixed in code; partial for callers.**
+Files: `dodaios/core/egress_guard.py` (`OFFLINE_SAFE_IMPLEMENTATIONS`, `_first_party_identity`, `tool_capability`,
+`declare_tool_coverage`).
+
+* The allowlist is now a table `tool name -> {"module:qualname"}` of first-party classes (`dodaios.plugins.tool.*`,
+  `dodaios.agent_screen.tools`). `OFFLINE_SAFE_TOOLS` remains as the name list for documentation and grants nothing.
+* `tool_capability(name, tool)` gives `none` only if `tool` is a verified first-party class: its module starts with
+  `dodaios.`, the class object IS the object found at that qualname in `sys.modules[module]`, and that module's file lies
+  inside the package directory (a plugin that sets `__module__ = "dodaios.x"` fails the identity check), and the identity
+  is in the table for that name. A homonymous third-party object (`whoami`, `wiki-list`, `click`) is `unknown` (refused).
+* A caller that passes only a name gets NO allowlist credit (unavailable). `declare_tool_coverage(name, "none", tool)` is
+  bound to the vetted class identity; without `tool` a `none` declaration is stored as unknown; a different class under the
+  same name is refused. Refusal classes by name still win.
+* Consequence: `safety/preflight.py` and any other name-only call site now refuse allowlisted tools until they pass the
+  tool object (other agents own those files; not touched). This is fail closed, as requested.
+* Residual: the table is hand-maintained and the "no network/process" judgement is by reading source, not by running; the
+  registry-vetted path for third parties still trusts the registry; a first-party class that later gains network use stays
+  allowed until the table is revisited.
+
+**F4 (child identity kept any pre-set value): fixed in code; enforcement is limited.**
+Files: `dodaios/core/child_identity.py` (`forward_identity`, `enforce_identity`, `ChildIdentityConflict`) and the launchers
+`dodaios/agent_runtimes/base.py`, `dodaios/mcp/env_isolation.py`, `dodaios/terminal/pty_manager.py`
+(`_interactive_child_env`), `dodaios/voice_engine/client.py` (`worker_env`), `dodaios/agentic_ide/session.py`
+(`_without_parent_agent_session`), `dodaios/agent_chat/runner_cli.py` (CLI turn plan, before spawn).
+
+* A value already in the child env is kept only if equal to the parent's (paths normalised, product/policy
+  case-insensitive); otherwise `ChildIdentityConflict` is raised (fail closed). Absent -> set from the parent. Parent
+  absent and child set is also a conflict, except a stricter `JARVIS_NETWORK_POLICY`.
+* Order fixed: the check runs AFTER the caller's overlay (`child_env(extra)`, MCP `overrides`, voice `extra`), otherwise the
+  overlay could still override.
+* Launchers: agent_chat CLI runner, voice_engine worker, PTY (replacement env), agentic_ide pane env: applied. Documented as
+  NOT applied: `agent_chat/turn_host.py` (receives an env frame in a separate host process; relies on the caller's check),
+  the resumed-turn plan built from `{"CODEX_HOME"}`, `pty_host_client` host start (copies `os.environ`, same identity),
+  `missions/isolation/env.py` and `codex_auth` (allowlist fill only; no overlay after it), and git helper envs.
+* Transferring a variable is not enforcement. A child honours `JARVIS_NETWORK_POLICY` only if it reads it and installs the
+  guard (`GUARDED_CHILD_MODULES` is still empty); a CLI vendor binary ignores all of it. There is no OS enforcement
+  (ADR-0060). A raised conflict can stop a launch: that is intended.
+
+Controls prepared, NOT RUN (`tests/test_block9_gpt_round2.py`): homonymous plugin objects named `whoami`/`wiki-list`/`click`
+refused, name-only refused, real first-party class accepted, spoofed `__module__` refused; env override conflicts raise
+for product, data dir and network policy while equal values and absent values pass.

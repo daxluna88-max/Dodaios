@@ -41,12 +41,12 @@ def test_label_survives_transformation_because_it_is_not_in_the_text():
 
 
 def test_unavailable_fails_closed_and_unrestricted_passes():
-    assert pv.remote_speech_blocked("hello there") is False
-    assert pv.remote_speech_blocked(pv.label("hello there", pv.Provenance.UNAVAILABLE)) is True
-    pv.set_turn_provenance(pv.Provenance.UNAVAILABLE)
+    # block 9: a plain str has no label -> refused; only a positively UNRESTRICTED chunk passes
     assert pv.remote_speech_blocked("hello there") is True
-    pv.begin_turn()
-    assert pv.remote_speech_blocked("hello there") is False
+    assert pv.remote_speech_blocked(pv.label("hello there", pv.Provenance.UNAVAILABLE)) is True
+    assert pv.remote_speech_blocked(pv.label("hello there", pv.Provenance.UNRESTRICTED)) is False
+    pv.set_turn_provenance(pv.Provenance.UNAVAILABLE)
+    assert pv.remote_speech_blocked(pv.label("hello there", pv.Provenance.UNRESTRICTED)) is True
 
 
 def test_turn_label_only_gets_more_restrictive():
@@ -126,21 +126,31 @@ def test_unclassified_tool_is_refused_under_the_profile():
 def test_positively_classified_tool_passes_and_profile_off_refuses_nothing():
     assert eg.tool_refusal("some_new_plugin_tool") is None
     eg.install()
-    assert eg.tool_refusal("click") is None
+    from dodaios.plugins.tool.click import ClickTool
+
+    assert eg.tool_refusal("click", ClickTool()) is None
+    assert eg.tool_refusal("click") is not None  # name only: no credit (block 9)
 
 
 def test_registry_declaration_opens_only_a_none_capability_and_never_a_refusal_class():
     eg.install()
-    eg.declare_tool_coverage("my_local_tool", eg.CAPABILITY_NONE)
+    class _Vetted:
+        pass
+
+    vetted = _Vetted()
+    eg.declare_tool_coverage("my_local_tool", eg.CAPABILITY_NONE, vetted)
     eg.declare_tool_coverage("run_shell", eg.CAPABILITY_NONE)
     eg.declare_tool_coverage("typo_tool", "nonsense")
     try:
-        assert eg.tool_refusal("my_local_tool") is None
+        assert eg.tool_refusal("my_local_tool", vetted) is None
+        assert eg.tool_refusal("my_local_tool") is not None  # name only
+        assert eg.tool_refusal("my_local_tool", type("Other", (), {})()) is not None
         assert eg.tool_refusal("run_shell") is not None
         assert eg.tool_refusal("typo_tool") is not None
     finally:
         for n in ("my_local_tool", "run_shell", "typo_tool"):
             eg._DECLARED.pop(n, None)
+            eg._DECLARED_IMPL.pop(n, None)
 
 
 def test_third_party_object_attribute_is_not_trusted():

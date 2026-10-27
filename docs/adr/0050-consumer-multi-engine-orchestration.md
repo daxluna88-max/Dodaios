@@ -122,3 +122,45 @@ Remaining gaps (NOT closed):
 * `turn_memory.py` is unchanged: `MemoryNote.local_only` still decides, and a provider without `recall_notes` still
   contributes nothing to a remote chain; notes are not yet typed `Provenance`.
 * The label is in process memory: it is lost on restart and not stored with history on disk.
+
+## Block 9: GPT round 2 (F1, F2, F4)
+
+Static review fix, F1 only here (F2/F4 are in ADR-0053). Written, NOT run: no test, build, CI or service was executed.
+
+**F1 (R6, fail-open for unlabelled text): fixed in code, with residual limits (partial for coverage).**
+Files: `dodaios/brain/provenance.py`, `dodaios/brain/manager.py` (`_generate_untagged`, `_run_multi_engine_turn`,
+`_record_response_side_effects`), `dodaios/speech/usage_meter.py` (unchanged call, new semantics).
+
+* **Absence of provenance = UNAVAILABLE.** `remote_speech_blocked(text)` now refuses every plain `str`; only a
+  `LabelledText` that positively carries `UNRESTRICTED` can go to a remote synthesizer, and then only if the turn is not
+  restricted/unavailable and the text registry does not match. `label_of(plain)` is `None` and is refused.
+* **Per turn, not process-global.** The turn state is a `contextvars.ContextVar` holding a `_TurnState` (declared /
+  unavailable / restricted flags). `begin_turn(turn_id)` starts it UNAVAILABLE (not unrestricted). A concurrent turn runs
+  in its own context and cannot reset or relax this one. No turn state at all (speech from memory, wiki, tool output,
+  screen, an alternative voice, a task that does not inherit the context) reads as UNAVAILABLE. RESTRICTED and
+  UNAVAILABLE are sticky inside a turn; `UNRESTRICTED` is only a positive declaration (`attach_unrestricted()`) and can
+  never lift either.
+* **Per chunk.** The label rides on the text object (`LabelledText`). A transformation (normalisation, splitting,
+  translation) yields a plain `str` and is therefore blocked unless the path re-attaches the label with
+  `provenance.label_like(new_text, source)`. Fail-closed on purpose.
+* **Multi-engine.** `_run_multi_engine_turn` no longer calls `begin_turn()` mid-turn (that reset the channel) and no longer
+  pre-sets UNAVAILABLE (the default already is). It merges the outcome's label and returns a `LabelledText`.
+* **Storage is a separate question.** `withheld_from_remote_store()` keeps the block-8 meaning (blocked only on a positive
+  restricted/unavailable signal) for the curator and remote history replay, so ordinary chat history is not silently
+  disabled. Residual: an unlabelled answer of an unmarked path is still stored/replayed.
+
+Paths that positively attach UNRESTRICTED today: only the multi-engine outcomes that are known to be clean
+(`work`, `off`, `no_engines` status results and an untainted synthesis), returned as `LabelledText`. The API
+`attach_unrestricted()` / `label(text, UNRESTRICTED)` exists for a pure local-origin typed user prompt answered by a fully
+local engine, but NO such path in `manager.py` calls it yet: ordinary chat is therefore BLOCKED for remote TTS by default.
+This is the intended default and a visible functional consequence (a remote voice stays silent on normal replies until a
+path proves the turn clean). Blocked on purpose: memory/wiki/tool output/screen context/pointer context, alternative
+voice, ack/phrase TTS, any text that lost its label.
+
+Residual limits: the pipeline must not strip the label between the manager and `MeteredTTS` (if it does, speech is
+blocked, not leaked); native/realtime voice that speaks by itself and other speech that bypasses `MeteredTTS` are still
+not gated; the label lives in process memory; the text registry is still a floor, not a proof.
+
+Controls prepared, NOT RUN (`tests/test_block9_gpt_round2.py`, updated `tests/test_block8_review_r6_r7.py`): plain and
+short text ("42", "ok") is refused for a remote TTS; a transformed plain string is refused; a labelled UNRESTRICTED chunk
+passes; two turns in two asyncio tasks do not reset each other; an UNAVAILABLE merge cannot be lifted by UNRESTRICTED.
