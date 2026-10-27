@@ -208,6 +208,18 @@ def background_providers(candidates: Iterable[str]) -> BackgroundProviders:
     a subscription the candidates pass through unchanged.
     """
     ordered = list(dict.fromkeys(name for name in candidates if name))
+    # Product policy (ADR-0049): under Work a remote candidate never enters the background chain,
+    # before any login probe or credential read. Jobs wait or fail; they never go to the cloud.
+    from dodaios.brain import engine_policy
+
+    if engine_policy.work_active():
+        ordered = [
+            name
+            for name in ordered
+            if engine_policy.provider_blocked_reason("brain", name) is None
+        ]
+        if not ordered:
+            return BackgroundProviders(False, (), "Work product: no local engine configured")
     if not subscription_mode(ordered):
         return BackgroundProviders(False, tuple(ordered), "no subscription connected")
     allowed: list[str] = []

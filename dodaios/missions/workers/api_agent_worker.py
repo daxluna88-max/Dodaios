@@ -231,6 +231,10 @@ def supports_api_agent_worker(provider: str | None) -> bool:
 
 
 def _build_brain(provider: str, model: str) -> Any:
+    from dodaios.brain import engine_policy
+
+    # Product policy (ADR-0049): this path builds the class directly, not via the registry.
+    engine_policy.check_provider(provider)
     mod_name, cls_name = _BRAIN_BY_PROVIDER[provider]
     mod = __import__(mod_name, fromlist=[cls_name])
     return getattr(mod, cls_name)(model=model)
@@ -396,11 +400,14 @@ class ApiAgentWorker:
         try:
             if self.provider not in _BRAIN_BY_PROVIDER:
                 raise RuntimeError(f"no API-agent worker for provider {self.provider!r}")
+            from dodaios.brain import engine_policy
             from dodaios.core.config import (
                 get_jarvis_agent_secret,
                 override_provider_secrets,
             )
 
+            # Product policy (ADR-0049): checked BEFORE the worker credential is read.
+            engine_policy.check_provider(self.provider)
             worker_key = get_jarvis_agent_secret(self.provider)
             with override_provider_secrets({self.provider: worker_key}):
                 brain = _build_brain(self.provider, resolved_model)

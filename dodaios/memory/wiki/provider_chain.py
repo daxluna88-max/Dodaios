@@ -204,6 +204,7 @@ def credential_ready_wiki_providers(
     WITH a key mapping is also admitted when its CLI login is connected, so a
     keyless Codex-subscription user keeps the wiki working.
     """
+    from dodaios.brain.engine_policy import provider_blocked_reason
     from dodaios.brain.provider_registry import BrainProviderRegistry
     from dodaios.core.config import (
         PROVIDER_SECRET_CANDIDATES,
@@ -213,6 +214,8 @@ def credential_ready_wiki_providers(
     ready: set[str] = set()
     registry = BrainProviderRegistry()
     for provider in available:
+        if provider_blocked_reason("brain", provider) is not None:
+            continue  # product policy (ADR-0049): no login probe, no key read for a remote engine
         cli_ready = subscription_login_ready(provider, registry=registry)
         if provider not in PROVIDER_SECRET_CANDIDATES:
             if cli_ready is False:

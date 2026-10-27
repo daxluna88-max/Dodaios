@@ -36,6 +36,10 @@ class OllamaFlashAck:
         persona_prompt: str,
     ) -> str | None:
         try:
+            from dodaios.brain.engine_policy import check_endpoint_url
+
+            # Product policy (ADR-0049): re-checked per call, so a changed endpoint cannot reroute.
+            check_endpoint_url(self._config.resolved_endpoint(), "Flash-Brain Ollama")
             import httpx
 
             timeout = httpx.Timeout(connect=2.0, read=5.0, write=2.0, pool=2.0)

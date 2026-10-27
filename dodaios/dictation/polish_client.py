@@ -842,6 +842,12 @@ class OpenAIChatPolishClient:
         import httpx
 
         url = f"{self._family.effective_base_url.rstrip('/')}/chat/completions"
+        from dodaios.brain.engine_policy import EnginePolicyError, check_endpoint_url
+
+        try:  # product policy (ADR-0049): under Work the polish endpoint must be this machine
+            check_endpoint_url(url, f"{self._family.label} polish")
+        except EnginePolicyError as exc:
+            raise PolishProviderError(str(exc)) from exc
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"

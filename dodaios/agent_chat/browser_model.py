@@ -55,6 +55,9 @@ class GrokBrowserModel:
     supports_vision = False
 
     def __init__(self, model: str = "") -> None:
+        from dodaios.brain.engine_policy import require_local_inference
+
+        require_local_inference("The Grok CLI browser model")  # Work (ADR-0049): cloud only
         self._model = model
 
     def command(self, directory: Path, prompt: Path, effort: str = "") -> list[str]:

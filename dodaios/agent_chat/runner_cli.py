@@ -3209,6 +3209,10 @@ async def run_cli_turn(
     CLI reaches over MCP asks the person on the chat's card (and a tool the
     CLI already asked about on its own channel is not asked about twice).
     """
+    from dodaios.brain.engine_policy import require_local_inference
+
+    # Product policy (ADR-0049): every vendor CLI is a cloud engine. Refused before anything starts.
+    require_local_inference(f"The {runner!r} CLI runner")
     t0 = time.perf_counter()
     session = handle.session
     resume = session.vendor_session

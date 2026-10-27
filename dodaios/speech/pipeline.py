@@ -2187,6 +2187,14 @@ def _default_tts_for_pipeline(config: Any) -> Any:
             return build_tts_from_config(config.tts)
         except Exception as exc:  # noqa: BLE001 — a TTS build must never break voice boot
             log.warning("TTS factory failed (%s); using the default Gemini voice.", exc)
+    from dodaios.brain.engine_policy import work_active
+
+    if work_active():
+        # Product policy (ADR-0049): never fall back to the hosted Gemini voice under Work. The
+        # on-device Piper voice (or an error) is the only answer.
+        from dodaios.plugins.tts.piper_local import PiperLocalTTS
+
+        return PiperLocalTTS()
     return GeminiFlashTTS()
 
 

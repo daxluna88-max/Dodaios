@@ -1833,7 +1833,12 @@ def _build_flash_provider(jcfg: Any, ack_cfg: Any) -> Any:
         # onto that key; the keyed fallback below picks another family first.
         from dodaios.brain.voice_key import bills_voice_key
 
-        if primary and primary in REGISTRY and not bills_voice_key(jcfg, primary):
+        if (
+            primary
+            and primary in REGISTRY
+            and _ack_provider_allowed(primary, getattr(ack_cfg.providers, primary, None))
+            and not bills_voice_key(jcfg, primary)
+        ):
             log.info(
                 "Flash-Brain: follow_brain -> %s (from brain.primary).",
                 primary,
@@ -1865,7 +1870,31 @@ def _build_flash_provider(jcfg: Any, ack_cfg: Any) -> Any:
         )
         return None
     provider_cfg = getattr(ack_cfg.providers, provider_name)
+    if not _ack_provider_allowed(provider_name, provider_cfg):
+        log.warning(
+            "Flash-Brain: provider %r is not allowed by the product policy; disabled.",
+            provider_name,
+        )
+        return None
     return provider_cls(provider_cfg)
+
+
+def _ack_provider_allowed(name: str, provider_cfg: Any) -> bool:
+    """Product policy (ADR-0049): under Work only the Ollama flash adapter on a local endpoint.
+
+    Decided from the name and the configured endpoint alone, before any credential is read.
+    """
+    from dodaios.brain import engine_policy
+
+    if not engine_policy.work_active():
+        return True
+    if name != "ollama" or provider_cfg is None:
+        return False
+    try:
+        engine_policy.check_endpoint_url(provider_cfg.resolved_endpoint(), "Flash-Brain")
+    except engine_policy.EnginePolicyError:
+        return False
+    return True
 
 
 def _pick_keyed_flash_fallback(ack_cfg: Any, jcfg: Any = None) -> str | None:
@@ -1889,7 +1918,7 @@ def _pick_keyed_flash_fallback(ack_cfg: Any, jcfg: Any = None) -> str | None:
     deferred: str | None = None
     for name in REGISTRY:
         provider_cfg = getattr(ack_cfg.providers, name, None)
-        if provider_cfg is None:
+        if provider_cfg is None or not _ack_provider_allowed(name, provider_cfg):
             continue
         secret_name = getattr(provider_cfg, "api_key_secret", None)
         if secret_name is None:
@@ -1938,7 +1967,15 @@ def _build_ack_fallback(ack_cfg: Any, preferences_provider: Any = None) -> Any:
                 sorted(REGISTRY.keys()),
             )
             return None
-        fb_provider = provider_cls(getattr(ack_cfg.providers, fb_name))
+        fb_cfg_provider = getattr(ack_cfg.providers, fb_name)
+        if not _ack_provider_allowed(fb_name, fb_cfg_provider):
+            log.warning(
+                "Flash-Brain: fallback_provider %r is not allowed by the product policy — "
+                "no failover wired.",
+                fb_name,
+            )
+            return None
+        fb_provider = provider_cls(fb_cfg_provider)
         # Own breaker + a config whose provider label is the fallback (and whose
         # own fallback is cleared, so the fallback generator never recurses).
         fb_cfg = ack_cfg.model_copy(
@@ -1992,7 +2029,10 @@ def _build_spawn_fallback(ack_cfg: Any) -> tuple[Any, Any]:
                 sorted(REGISTRY.keys()),
             )
             return None, None
-        fb_provider = provider_cls(getattr(ack_cfg.providers, fb_name))
+        fb_cfg_provider = getattr(ack_cfg.providers, fb_name)
+        if not _ack_provider_allowed(fb_name, fb_cfg_provider):
+            return None, None  # product policy (ADR-0049): no remote failover under Work
+        fb_provider = provider_cls(fb_cfg_provider)
         fb_breaker = CircuitBreaker(
             threshold=ack_cfg.circuit_breaker_threshold,
             cooldown_s=ack_cfg.circuit_breaker_cooldown_s,

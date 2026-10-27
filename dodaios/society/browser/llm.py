@@ -69,6 +69,16 @@ def llm_spec_for(
             FailureReason.BLOCKED_BY_POLICY, f"no browser model for provider {provider!r}"
         )
     cls, default_model, default_base, needs_key = entry
+    # Product policy (ADR-0049): decided before any key lookup. Under Work only a local provider
+    # on a local endpoint may drive the browser agent.
+    from dodaios.brain import engine_policy
+
+    try:
+        engine_policy.check_provider(pid)
+        if engine_policy.work_active() and (base_url or "").strip():
+            engine_policy.check_endpoint_url(base_url, f"Browser model {pid}")
+    except engine_policy.EnginePolicyError as exc:
+        raise LLMUnavailable(FailureReason.BLOCKED_BY_POLICY, str(exc)) from exc
     key: str | None = None
     if needs_key:
         lookup = secret

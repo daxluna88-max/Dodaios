@@ -1568,6 +1568,31 @@ class AgentChatService:
             )
 
             async def run_attempt(active_handle: TurnHandle, run_prompt: str) -> None:
+                from dodaios.brain import engine_policy
+
+                if engine_policy.work_active() and (
+                    control_runner is not None or supports_cli_runner(runner)
+                ):
+                    # Product policy (ADR-0049): a vendor CLI / external runtime / vendor control
+                    # runner is a cloud engine. Under Work only the "brain" and "api" runners
+                    # (both registry- or check_provider-gated) may answer; nothing is launched.
+                    await self._emit(
+                        session_id,
+                        make_event(
+                            "turn_finished",
+                            {
+                                "turn_id": turn_id,
+                                "status": "error",
+                                "duration_ms": 0,
+                                "usage": {},
+                                "error": (
+                                    f"The {runner!r} runner is a cloud engine and is unavailable "
+                                    "under the Work product (local models only)."
+                                ),
+                            },
+                        ),
+                    )
+                    return
                 if control_runner is not None:
                     vendor = await control_runner(active_handle, text)
                     if vendor:

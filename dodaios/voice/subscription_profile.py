@@ -112,7 +112,14 @@ def configured_voice_profile(config: object) -> str:
 
 
 def subscription_voice_selected(config: object) -> bool:
-    """Whether the stable ChatGPT-subscription voice composition is selected."""
+    """Whether the stable ChatGPT-subscription voice composition is selected.
+
+    Never under the Work product (ADR-0049): a subscription transport is a cloud function.
+    """
+    from dodaios.brain.engine_policy import work_active
+
+    if work_active():
+        return False
     return configured_voice_profile(config) == CODEX_SUBSCRIPTION_VOICE_PROFILE
 
 
@@ -134,6 +141,9 @@ class CodexSubscriptionVoiceBrain:
     """
 
     def __init__(self, delegate: Any, config: object) -> None:
+        from dodaios.brain.engine_policy import require_local_inference
+
+        require_local_inference("The ChatGPT-subscription voice")  # before the transport exists
         self._delegate = delegate
         self._config = config
         self._subscription = CodexBrain(

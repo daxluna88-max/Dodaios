@@ -793,6 +793,17 @@ def _project_for(route: KeyRoute) -> VertexProject | None:
     return settings
 
 
+def _refuse_under_work() -> None:
+    """Every Gemini client is a hosted-model client: refused under the Work product (ADR-0049).
+
+    Runs BEFORE any key probe or client construction, so no credential is used and no connection
+    is opened.
+    """
+    from dodaios.brain.engine_policy import require_local_inference
+
+    require_local_inference("The Gemini / Vertex client")
+
+
 def build_vertex_client(
     api_key: str = "", *, http_options: Any | None = None, realtime: bool = False
 ) -> Any:
@@ -817,6 +828,7 @@ def build_vertex_client(
     is filled here only off the event loop; on the loop the SDK's own threaded
     lazy load stays in charge (see :func:`_adc_for_sync_build`).
     """
+    _refuse_under_work()
     from google import genai
 
     settings = _project_for("vertex")
@@ -861,6 +873,7 @@ async def build_vertex_client_async(
     already carries the shared credentials and the handshake that follows pays
     for the socket alone.
     """
+    _refuse_under_work()
     await _ensure_shared_tls_off_loop()
     if not api_key and cached_vertex_credentials() is None:
         # _project_for, not vertex_project_settings: it exports a configured
@@ -894,6 +907,7 @@ def build_genai_client(
     Cloud project path where ADC signs — the speed-up for that resolution
     lives there on purpose.
     """
+    _refuse_under_work()
     from google import genai
 
     resolved = route or resolve_google_key_route(api_key)
@@ -914,6 +928,7 @@ async def build_genai_client_async(
     with the async probe keeps a first-ever ``AQ.`` key from blocking the
     loop for the probe round-trip.
     """
+    _refuse_under_work()
     from google import genai
 
     resolved = route or await resolve_google_key_route_async(api_key)

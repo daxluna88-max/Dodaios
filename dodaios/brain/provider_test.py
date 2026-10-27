@@ -552,6 +552,15 @@ async def run_provider_test(
     """
     provider = spec.id
 
+    # Product policy (ADR-0049): under Work a cloud card is never contacted, and no credential is
+    # read for it. (Dictation cards are decided by their own family in the dictation layer.)
+    if spec.tier != "dictation":
+        from dodaios.brain import engine_policy
+
+        blocked = engine_policy.provider_blocked_reason(spec.tier, provider)
+        if blocked:
+            return ProviderTestResult(provider, NOT_CONFIGURED, blocked)
+
     # Codex is OAuth-or-key: a connected ChatGPT login IS a working subagent.
     if spec.auth_mode == "codex":
         status_fn = codex_status or _default_codex_status

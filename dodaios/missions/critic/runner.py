@@ -1498,6 +1498,24 @@ class CriticRunner:
         codex_prompt_for_subprocess = codex_prompt
 
         primary_provider, primary_model = _resolve_critic_provider_model()
+        from dodaios.brain import engine_policy
+
+        if engine_policy.work_active():
+            # Product policy (ADR-0049): under Work the critic grades in-process on a LOCAL
+            # engine only. The claude/codex CLI critics, the subscription walk and the cloud
+            # cross-family order below are never reached; no local engine is an error.
+            local = primary_provider if primary_provider in engine_policy.LOCAL_PROVIDERS else None
+            if local is None:
+                local = "ollama"
+            engine_policy.check_provider(local)
+            return await self._invoke_via_api_critic(
+                prompt=prompt_for_subprocess,
+                model=primary_model if local == primary_provider else _provider_picked_model(local),
+                provider=local,
+                iteration=iteration,
+                adversarial_reframe=adversarial_reframe,
+                paid_gate=None,
+            )
         # Capacity policy (dodaios/missions/capacity.py): on a subscription
         # install the critic grades on a subscription (the configured one, else
         # another connected one — free), and on a per-token key only through a
