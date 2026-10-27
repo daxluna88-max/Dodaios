@@ -252,6 +252,37 @@ hiddenimports: list[str] = []
 hiddenimports += collect_submodules("dodaios.plugins")
 hiddenimports += collect_submodules("dodaios.channels")
 
+# Modules of the product/safety/control blocks (ADR-0054..0061) that are reached only
+# through function-level or try/except imports (server routes, STOP, effects,
+# provenance, controllable memory, first run). Static analysis normally finds them;
+# naming them means a refactor of one importer cannot silently drop a safety module from
+# the frozen app (docs/adr/0064-desktop-packaging-readiness.md; tests/unit/packaging/
+# test_bundle_manifest_consistency.py keeps this tuple equal to the files on disk).
+BLOCK_MODULES = (
+    "dodaios.safety.decision",
+    "dodaios.safety.effects",
+    "dodaios.safety.preflight",
+    "dodaios.brain.provenance",
+    "dodaios.core.child_identity",
+    "dodaios.core.egress_guard",
+    "dodaios.core.product_profile",
+    "dodaios.core.product_backup",
+    "dodaios.control.stop",
+    "dodaios.control.strip_state",
+    "dodaios.control.turn_record",
+    "dodaios.speech.stop_gate",
+    "dodaios.speech.stop_parts",
+    "dodaios.setup.first_run",
+    "dodaios.missions.isolation.worker_registry",
+    "dodaios.ui.web.consumer_fanout_routes",
+    "dodaios.ui.web.control_strip_routes",
+    "dodaios.ui.web.memory_control_routes",
+    "dodaios.ui.web.network_policy_routes",
+    "dodaios.ui.web.personality_routes",
+)
+hiddenimports += list(BLOCK_MODULES)
+hiddenimports += collect_submodules("dodaios.memory.control")
+
 # Uvicorn standard installs version-specific backends through dynamic imports.
 for pkg in (
     "uvicorn.lifespan.on",

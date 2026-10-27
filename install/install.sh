@@ -20,6 +20,19 @@
 
 set -euo pipefail
 
+# --product is refused before anything is touched: Work and Consumer share ONE install folder,
+# registration, autostart entry and set of terminal commands (ADR-0054, ADR-0064). A per-product
+# install does not exist yet, so accepting the flag would promise one.
+for _product_arg in "$@"; do
+    case "$_product_arg" in
+        --product|--product=*)
+            printf '%s\n' "--product is not supported by the installer: Work and Consumer share one install." >&2
+            printf '%s\n' "Install once, then start a product with: dodaios --product <work|consumer>. Nothing was changed." >&2
+            exit 3
+            ;;
+    esac
+done
+
 # --- install-option-names begin
 # Every JARVIS_ option this script reads also answers to its DODAIOS_
 # spelling. When both are set to different values the DODAIOS_ one wins, and

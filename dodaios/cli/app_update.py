@@ -389,6 +389,32 @@ def run_update(
     return EXIT_FAILED
 
 
+def _other_product_refusal() -> str | None:
+    """Why this install-wide update must not start now, or ``None``.
+
+    The install folder is shared by Work and Consumer (ADR-0054). Replacing it under a
+    running product would pull the files out from under it, and ``update`` from a shell
+    sees no product session. Refuses while another product holds its launch lock, or when
+    that cannot be told (fail closed). A ``--check`` never gets here.
+    """
+    from dodaios.core import product_profile
+
+    try:
+        running, unknown = product_profile.running_products(
+            exclude=product_profile.active_product()
+        )
+    except product_profile.ProductError as exc:
+        return f"error: {exc}"
+    if not (running or unknown):
+        return None
+    names = ", ".join(running + unknown)
+    return (
+        f"Refusing to update: the {names} product may be running from this install, and the "
+        "install folder is shared by both products. Quit it, then run the update again. "
+        "Nothing was changed."
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=f"{main_command()} update",
@@ -413,6 +439,10 @@ def main(argv: list[str] | None = None) -> int:
     except product_profile.ProductError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    refusal = None if args.check else _other_product_refusal()
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return EXIT_APP_RUNNING
     try:
         return run_update(check_only=args.check)
     except KeyboardInterrupt:

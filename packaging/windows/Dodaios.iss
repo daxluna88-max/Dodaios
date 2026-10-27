@@ -150,7 +150,9 @@ Filename: "{app}\{#GuiExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; W
 ; The in-app updater's relaunch. A silent upgrade skips the entry above, so
 ; without this one the app would quit for the update and never come back.
 ; runasoriginaluser: an all-users install runs elevated, the app must not.
-Filename: "{app}\{#GuiExeName}"; WorkingDir: "{app}"; Flags: nowait runasoriginaluser; Check: RelaunchRequested
+; Parameters: the product (work / consumer) the updating app ran as, so the relaunch
+; does not fall back to the unscoped app on the shared data directory (ADR-0064).
+Filename: "{app}\{#GuiExeName}"; Parameters: "{code:ProductParam}"; WorkingDir: "{app}"; Flags: nowait runasoriginaluser; Check: RelaunchRequested
 
 [Messages]
 ConfirmUninstall=Do you really want to remove %1?%n%nYour settings, memory, skills and logs are NOT deleted - they stay in {#UserDataDirDisplay}.
@@ -362,6 +364,19 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usPostUninstall then
     RemoveDirFromUserPath(ExpandConstant('{app}'));
+end;
+
+{ "--product work" / "--product consumer" from /PRODUCT=..., else nothing. Any other value
+  is dropped, never passed on: an unknown product must not reach the command line. }
+function ProductParam(Param: String): String;
+var
+  Value: String;
+begin
+  Value := ExpandConstant('{param:PRODUCT|}');
+  if (Value = 'work') or (Value = 'consumer') then
+    Result := '--product ' + Value
+  else
+    Result := '';
 end;
 
 { True when the in-app updater asked for the app to come back (see the [Run]

@@ -1039,7 +1039,21 @@ def main(argv: list[str] | None = None) -> int:
                              "the local voice extras")
     parser.add_argument("--dry-run", action="store_true",
                         help="print what would be done; don't run pip/wizard/launch")
+    parser.add_argument("--product", metavar="NAME",
+                        help="not supported: the install is shared by Work and Consumer")
     args = parser.parse_args(argv)
+
+    if args.product is not None:
+        # One install folder, one app registration, one autostart entry and one set of
+        # terminal commands serve both products (ADR-0054, ADR-0064). Picking a product
+        # here would suggest a separate install that does not exist. Refused before any step.
+        console.print(
+            f"--product {args.product} is refused: Work and Consumer share one install. "
+            "Install once, then start a product with `dodaios --product <work|consumer>`. "
+            "Nothing was changed.",
+            markup=False, highlight=False, soft_wrap=True,
+        )
+        return 3
 
     if args.with_voice_local:
         note("--with-voice-local is deprecated: the full profile already "
