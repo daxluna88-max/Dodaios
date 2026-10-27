@@ -15,6 +15,7 @@ person.
 
 from __future__ import annotations
 
+import dataclasses
 import time
 from collections.abc import Callable
 
@@ -80,6 +81,16 @@ class StyleRuntime:
         self._clock = clock
         self._profile: personality.EffectiveProfile | None = None
         self._reducer: mood_mod.MoodReducer | None = None
+        # «less irony» and the like: this conversation only, never written to the profile.
+        self._nudges: dict[str, int] = {}
+
+    def nudge(self, dimension: str, delta: int) -> None:
+        """Move one dial for this session (clamped to the 0..4 scale when applied)."""
+        if dimension in ("formality", "warmth", "humor", "concision"):
+            self._nudges[dimension] = max(-4, min(4, self._nudges.get(dimension, 0) + delta))
+
+    def reset_nudges(self) -> None:
+        self._nudges.clear()
 
     def sync(
         self, cfg: PersonalityConfig, product: str | None
@@ -92,7 +103,16 @@ class StyleRuntime:
         elif profile != self._profile:
             self._reducer.set_profile(profile, now)
         self._profile = profile
-        return profile, self._reducer.state(now)
+        return self._nudged(profile), self._reducer.state(now)
+
+    def _nudged(self, profile: personality.EffectiveProfile) -> personality.EffectiveProfile:
+        if not self._nudges:
+            return profile
+        moved = {
+            dim: max(0, min(4, getattr(profile, dim) + delta))
+            for dim, delta in self._nudges.items()
+        }
+        return dataclasses.replace(profile, **moved)
 
     @property
     def adaptation_on(self) -> bool:

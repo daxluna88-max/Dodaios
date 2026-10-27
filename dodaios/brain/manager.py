@@ -3856,6 +3856,27 @@ class BrainManager:
         """The owner saved a profile: the next turn and the screen follow it at once."""
         self._config.brain.personality = cfg
 
+    def _style_command_reply(self, user_text: str) -> str | None:
+        """A short style command («more serious», «stay like this»): this session only, no model."""
+        from dodaios.brain import style_commands  # noqa: PLC0415
+
+        cmd = style_commands.parse(user_text)
+        brain_cfg = getattr(self._config, "brain", None)
+        if cmd is None or getattr(brain_cfg, "personality", None) is None:
+            return None
+        self.personality_snapshot()  # a profile must be loaded before the session changes
+        runtime = self._style_runtime()
+        if cmd.kind == "nudge":
+            runtime.nudge(*cmd.argument)
+        elif cmd.kind == "reset_style":
+            runtime.reset_nudges()
+        elif cmd.kind != "clarify":
+            applied = runtime.apply(cmd.event())
+            if applied is not None and not applied.accepted:
+                return style_commands.reply(
+                    cmd, refused=style_commands.refusal_text(applied.refused, cmd.language))
+        return style_commands.reply(cmd)
+
     def _style_instruction(self, *, compact: bool = False) -> str:
         """The personality + mood text for this turn; empty when no profile is configured."""
         from dodaios.brain import engine_policy, style  # noqa: PLC0415
@@ -10621,6 +10642,16 @@ class BrainManager:
                 trace_id=turn_trace_id,
             )
             return confirmation
+
+        # «More serious», «stay like this», «turn adaptation off» (issue 17): deterministic, this
+        # conversation only, never saved, no model call.
+        style_reply = self._style_command_reply(user_text)
+        if style_reply is not None:
+            await self._record_response_side_effects(
+                user_text=user_text, response_text=style_reply,
+                use_history=use_history, trace_id=turn_trace_id,
+            )
+            return style_reply
 
         # "Ask several engines: ..." (ADR-0055). One final answer, published once through the
         # normal response path, so the voice speaks it once; branch answers never leave the module.
