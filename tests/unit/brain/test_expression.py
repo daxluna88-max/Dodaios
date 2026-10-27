@@ -63,26 +63,35 @@ def test_the_version_follows_the_profile_and_mood_and_holds_no_values():
 
 def test_the_gate_accepts_only_the_current_turn_and_generation():
     gate = ex.PlanGate()
-    assert gate.begin("s1", "t1", 1)
+    assert gate.begin("consumer", "s1", "t1", 1)
     assert gate.accepts(plan())
-    assert gate.begin("s1", "t2", 2)
+    assert gate.begin("consumer", "s1", "t2", 2)
     assert not gate.accepts(plan())  # t1 / generation 1 is old now
 
 
 def test_stop_invalidates_the_plan_and_an_older_begin_cannot_reopen_it():
     gate = ex.PlanGate()
-    gate.begin("s1", "t1", 1)
+    gate.begin("consumer", "s1", "t1", 1)
     gate.cancel(1)
     assert not gate.accepts(plan())
-    assert not gate.begin("s1", "t1", 1)  # a delayed start of the cancelled turn
-    assert gate.begin("s1", "t3", 2)
+    assert not gate.begin("consumer", "s1", "t1", 1)  # a delayed start of the cancelled turn
+    assert gate.begin("consumer", "s1", "t3", 2)
 
 
 def test_another_session_or_product_turn_is_not_accepted():
     gate = ex.PlanGate()
-    gate.begin("s1", "t1", 1)
+    gate.begin("consumer", "s1", "t1", 1)
     assert not gate.accepts(ex.build_plan(
         PROFILE, m.NEUTRAL_STATE, ident(session="other"), tts_provider="x",
+        avatar_expressions=None))
+
+
+def test_a_plan_made_for_another_product_is_not_accepted():
+    gate = ex.PlanGate()
+    gate.begin("work", "s1", "t1", 1)
+    assert not gate.accepts(plan())  # same session, turn and generation, but a Consumer plan
+    assert gate.accepts(ex.build_plan(
+        PROFILE, m.NEUTRAL_STATE, ex.TurnIdentity("work", "s1", "t1", 1), tts_provider="x",
         avatar_expressions=None))
 
 

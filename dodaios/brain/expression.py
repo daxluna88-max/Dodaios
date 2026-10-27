@@ -106,17 +106,20 @@ def build_plan(
 
 
 class PlanGate:
-    """Accepts a plan only for the current turn and generation; the newest wins, an older one never
-    comes back. ``begin`` is called when a turn starts, ``cancel`` on STOP or supersede."""
+    """Accepts a plan only for the current product, session, turn and generation.
+
+    The newest wins, an older one never comes back. ``begin`` is called when a turn starts,
+    ``cancel`` on STOP or supersede.
+    """
 
     def __init__(self) -> None:
-        self._current: tuple[str, str] | None = None  # (session_id, turn_id)
+        self._current: tuple[str, str, str] | None = None  # (product, session_id, turn_id)
         self._generation = -1
 
-    def begin(self, session_id: str, turn_id: str, generation: int) -> bool:
+    def begin(self, product: str, session_id: str, turn_id: str, generation: int) -> bool:
         if generation <= self._generation:
             return False
-        self._current, self._generation = (session_id, turn_id), generation
+        self._current, self._generation = (product, session_id, turn_id), generation
         return True
 
     def cancel(self, generation: int) -> None:
@@ -127,7 +130,7 @@ class PlanGate:
     def accepts(self, plan: ExpressionPlan) -> bool:
         ident = plan.identity
         return (
-            self._current == (ident.session_id, ident.turn_id)
+            self._current == (ident.product, ident.session_id, ident.turn_id)
             and ident.generation == self._generation
         )
 

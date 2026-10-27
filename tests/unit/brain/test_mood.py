@@ -166,3 +166,59 @@ def test_set_profile_applies_limits_at_once():
     r.apply(m.OwnerMood("cheerful", 2), 0.0)
     r.set_profile(profile(moods_allowed=["calm"]), 1.0)
     assert r.state(1.0) == m.NEUTRAL_STATE
+
+
+def test_reading_and_acting_after_expiry_does_not_fade_faster():
+    r = reducer(expressive_range=2)
+    r.apply(m.OwnerMood("calm", 3, ttl_s=100), now=0.0)
+    expected = r.state(100.0 + m.DECAY_S).intensity  # 1
+    # Repeated events after expiry persist the faded state; the level must not drop twice.
+    r.apply(m.Activity("gaming"), now=100.0)
+    r.apply(m.Activity("gaming"), now=100.0 + m.DECAY_S / 2)
+    assert r.state(100.0 + m.DECAY_S).intensity == expected
+    assert r.state(100.0 + 2 * m.DECAY_S) == m.NEUTRAL_STATE
+
+
+def test_a_faded_state_read_twice_is_the_same():
+    r = reducer()
+    r.apply(m.OwnerMood("calm", 3, ttl_s=10), now=0.0)
+    now = 10.0 + m.DECAY_S + 1
+    assert r.state(now) == r.state(now)
+    r.apply(m.Activity("gaming"), now=now)
+    assert r.state(now).intensity == 1
+
+
+def test_a_newly_pinned_mood_replaces_an_active_session_mood():
+    r = reducer(moods_allowed=["calm", "serious"])
+    r.apply(m.OwnerMood("serious", 2), 0.0)
+    r.set_profile(profile(moods_allowed=["calm", "serious"], locked_mood="calm"), 1.0)
+    assert r.state(1.0).mood == "calm" and r.state(1.0).origin == "profile"
+
+
+def test_unpinning_returns_to_neutral_and_a_new_pin_replaces_a_session_request():
+    r = reducer(locked_mood="calm")
+    r.set_profile(profile(), 1.0)
+    assert r.state(1.0) == m.NEUTRAL_STATE
+    r.apply(m.OwnerMood("serious", 2), 2.0)
+    r.set_profile(profile(locked_mood="calm"), 3.0)
+    assert r.state(3.0).mood == "calm"
+
+
+def test_a_lower_expressive_range_caps_or_drops_a_rule_made_state():
+    r = reducer(expressive_range=2)
+    r.apply(m.Activity("sensitive"), 0.0)  # serious, intensity 2
+    assert r.state(0.0).intensity == 2
+    r.set_profile(profile(expressive_range=1), 1.0)
+    assert r.state(1.0).intensity == 1
+    r.set_profile(profile(expressive_range=0), 2.0)
+    assert r.state(2.0) == m.NEUTRAL_STATE
+
+
+def test_manual_mode_drops_a_rule_made_state_but_not_an_owner_request():
+    r = reducer(expressive_range=2)
+    r.apply(m.Activity("sensitive"), 0.0)
+    r.set_profile(profile(mode="manual", expressive_range=2), 1.0)
+    assert r.state(1.0) == m.NEUTRAL_STATE
+    r.apply(m.OwnerMood("calm", 2), 2.0)
+    r.set_profile(profile(mode="manual", expressive_range=0), 3.0)
+    assert r.state(3.0).mood == "calm" and r.state(3.0).intensity == 2

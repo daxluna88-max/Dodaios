@@ -154,12 +154,29 @@ class MoodReducer:
     # -- profile ---------------------------------------------------------------------------
 
     def set_profile(self, profile: EffectiveProfile, now: float) -> None:
-        """The owner changed the profile: limits apply at once, a session request survives."""
+        """The owner changed the profile: limits apply at once, a session request survives.
+
+        A newly pinned (or unpinned) mood replaces the baseline; a state a rule or an activity made
+        cannot outlive the mode or the expressive range that allowed it.
+        """
+        old_pin = self._profile.locked_mood
         self._profile = profile
-        if self._state.origin in ("none", "profile"):
+        current = self.state(now)
+        baseline = current.origin in ("none", "profile")
+        if profile.locked_mood != old_pin and (profile.locked_mood is not None or baseline):
             self._state = self._pinned(now)
-        elif self._state.mood not in profile.moods_allowed:
+        elif baseline or current.mood not in profile.moods_allowed:
             self._state = self._pinned(now)
+        elif current.origin in ("rule", "activity"):
+            cap = 0 if profile.mode == "manual" else profile.expressive_range
+            if cap <= 0:
+                self._state = self._pinned(now)
+            elif current.intensity > cap:
+                self._state = replace(current, intensity=cap)
+            else:
+                self._state = current
+        else:
+            self._state = current
 
     def _pinned(self, now: float) -> MoodState:
         pin = self._profile.locked_mood
@@ -174,10 +191,15 @@ class MoodReducer:
         s = self._state
         if s.expires_at is None or now < s.expires_at or s.intensity == 0:
             return s
-        faded = s.intensity - 1 - int((now - s.expires_at) // DECAY_S)
+        steps = int((now - s.expires_at) // DECAY_S)
+        faded = s.intensity - 1 - steps
         if faded <= 0:
             return self._pinned(now) if self._profile.locked_mood else NEUTRAL_STATE
-        return replace(s, intensity=faded, reason="fading")
+        # Re-anchored at the next drop, so reading it again (or persisting it) gives the same level.
+        return replace(
+            s, intensity=faded, reason="fading",
+            expires_at=s.expires_at + (steps + 1) * DECAY_S,
+        )
 
     # -- changing --------------------------------------------------------------------------
 
