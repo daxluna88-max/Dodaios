@@ -10393,6 +10393,11 @@
     "part_voice_playback": "Voice playback",
     "part_realtime_session": "Realtime session",
     "error_stop": "Stop could not be completed: {reason}",
-    "error_load": "The state could not be read."
+    "error_load": "The state could not be read.",
+    "stale_note": "Connection lost. Nothing here is current; last reading at {time}.",
+    "engine_provisional": "Chosen at the start of the turn; not yet confirmed to have answered.",
+    "engine_failed": "No engine answered this turn.",
+    "engine_fell_back": "A fallback answered instead of {requested}.",
+    "engine_no_model": "No model was used for this turn."
   }
 }

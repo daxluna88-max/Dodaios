@@ -10393,6 +10393,11 @@
     "part_voice_playback": "Sprachwiedergabe",
     "part_realtime_session": "Echtzeit-Sitzung",
     "error_stop": "Der Stopp konnte nicht abgeschlossen werden: {reason}",
-    "error_load": "Der Zustand konnte nicht gelesen werden."
+    "error_load": "Der Zustand konnte nicht gelesen werden.",
+    "stale_note": "Verbindung verloren. Nichts hier ist aktuell; letzte Messung um {time}.",
+    "engine_provisional": "Zu Beginn des Zugs gewählt; noch nicht als Antwortender bestätigt.",
+    "engine_failed": "In diesem Zug hat keine Engine geantwortet.",
+    "engine_fell_back": "Ein Ersatz hat statt {requested} geantwortet.",
+    "engine_no_model": "Für diesen Zug wurde kein Modell verwendet."
   }
 }

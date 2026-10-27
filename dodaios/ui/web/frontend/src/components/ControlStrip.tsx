@@ -8,13 +8,14 @@
  * approve in bulk or "always allow". STOP is one click, no confirmation, first in the focus order.
  * Resuming is a separate, deliberate button.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Square } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n";
 import {
+  isStale,
   useControlStrip,
   useDecide,
   useResume,
@@ -47,9 +48,24 @@ function flows(list: Flow[], none: string): string {
   return Array.from(new Set(list.map((f) => `${f.category} → ${f.destination}`))).join(", ");
 }
 
+/** Re-render every second so a reading that stops arriving is noticed without any new data. */
+function useNow(intervalMs: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), intervalMs);
+    return () => window.clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
+
 export function ControlStrip() {
   const t = useT();
-  const { data, isError } = useControlStrip();
+  const { data: fetched, isError, dataUpdatedAt } = useControlStrip();
+  const now = useNow(1000);
+  const stale = isStale({ hasData: !!fetched, failed: isError, updatedAt: dataUpdatedAt, now });
+  // After a lost connection the last reading is kept for the "last seen" note only: it is never
+  // shown as the current state, and it cannot be acted on (no Approve / Deny / Resume from it).
+  const data = stale ? undefined : fetched;
   const stop = useStop();
   const resume = useResume();
   const decide = useDecide();
@@ -108,7 +124,7 @@ export function ControlStrip() {
         <div
           role="status"
           aria-live={data && ASSERTIVE.has(data.state) ? "assertive" : "polite"}
-          className="flex items-center gap-2"
+          className="flex flex-wrap items-center gap-2"
         >
           {data ? (
             <>
@@ -125,9 +141,19 @@ export function ControlStrip() {
               )}
             </>
           ) : (
-            <Badge variant="warning" data-testid="control-strip-state">
-              {t(isError ? "control_strip.error_load" : "control_strip.state_unknown")}
-            </Badge>
+            <>
+              <Badge variant="warning" data-testid="control-strip-state">
+                {t("control_strip.state_unknown")}
+              </Badge>
+              {fetched && (
+                <span className="text-sm text-muted-foreground" data-testid="control-strip-stale">
+                  {t("control_strip.stale_note").replace("{time}", new Date(dataUpdatedAt).toLocaleTimeString())}
+                </span>
+              )}
+              {!fetched && isError && (
+                <span className="text-sm text-muted-foreground">{t("control_strip.error_load")}</span>
+              )}
+            </>
           )}
         </div>
 
@@ -189,8 +215,13 @@ function Details({
     <div id="control-strip-details" className="grid gap-4 text-sm md:grid-cols-3" data-testid="control-strip-details">
       <div className="flex flex-col gap-1">
         <h3 className="font-medium">{t("control_strip.engine_title")}</h3>
+        {e.state === "running" && <p className="text-muted-foreground">{t("control_strip.engine_provisional")}</p>}
+        {e.state === "failed" && <p className="text-warning">{t("control_strip.engine_failed")}</p>}
+        {e.fell_back && e.requested && (
+          <p className="text-warning">{t("control_strip.engine_fell_back").replace("{requested}", e.requested)}</p>
+        )}
         {e.engines.length === 0 ? (
-          <p className="text-muted-foreground">{t("control_strip.engine_none")}</p>
+          <p className="text-muted-foreground">{t(e.turn_id ? "control_strip.engine_no_model" : "control_strip.engine_none")}</p>
         ) : (
           <ul>
             {e.engines.map((u, i) => (

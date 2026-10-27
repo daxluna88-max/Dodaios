@@ -14,7 +14,7 @@ vi.mock("@/i18n", async (importOriginal) => ({
 }));
 
 import { ControlStrip } from "@/components/ControlStrip";
-import type { ControlStrip as Strip } from "@/lib/controlStrip";
+import { isStale, STALE_AFTER_MS, type ControlStrip as Strip } from "@/lib/controlStrip";
 
 const BASE: Strip = {
   state: "idle",
@@ -31,6 +31,9 @@ const BASE: Strip = {
     attempted: [],
     observability: "declared",
     refused: [],
+    state: "answered",
+    requested: "ollama",
+    fell_back: false,
   },
   jobs: { missions: [], computer_use_runs: 0, background_agents: 0 },
   approvals: [],
@@ -135,5 +138,58 @@ describe("ControlStrip", () => {
     mount();
     await screen.findByText("control_strip.state_unknown");
     expect(screen.getAllByText("control_strip.level_unknown").length).toBe(3);
+  });
+
+  it("a lost connection never leaves the old state on screen as current", async () => {
+    // First read works, the next ones fail: the screen must fall back to "unknown".
+    let calls = 0;
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) return { ok: true, status: 200, json: async () => BASE } as Response;
+      throw new Error("offline");
+    }) as unknown as typeof fetch;
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <ControlStrip />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("control_strip.state_idle");
+    await client.refetchQueries({ queryKey: ["control-strip"] });
+    await waitFor(() => expect(screen.getByTestId("control-strip-state").textContent).toBe("control_strip.state_unknown"));
+    expect(screen.getByTestId("control-strip-stale")).toBeTruthy();
+    expect(screen.queryByText("control_strip.state_idle")).toBeNull();
+    // STOP stays available even when the state cannot be read.
+    expect(screen.getByTestId("control-strip-stop")).toBeTruthy();
+  });
+
+  it("shows when a fallback answered instead of the engine that was chosen", async () => {
+    const withFallback: Strip = {
+      ...BASE,
+      engine: {
+        ...BASE.engine,
+        engines: [{ provider: "ollama", role: "main", locality: "local" }],
+        requested: "openai",
+        fell_back: true,
+      },
+    };
+    serve(withFallback);
+    mount();
+    await screen.findByText("control_strip.state_idle");
+    fireEvent.click(screen.getByText("control_strip.details_show"));
+    expect(screen.getByText("control_strip.engine_fell_back")).toBeTruthy();
+  });
+});
+
+describe("isStale", () => {
+  const base = { hasData: true, failed: false, updatedAt: 1000, now: 1000 };
+  it("is fresh right after a read and stale after the window", () => {
+    expect(isStale(base)).toBe(false);
+    expect(isStale({ ...base, now: 1000 + STALE_AFTER_MS })).toBe(false);
+    expect(isStale({ ...base, now: 1000 + STALE_AFTER_MS + 1 })).toBe(true);
+  });
+  it("is stale with no reading or after a failed read, however recent the old one is", () => {
+    expect(isStale({ ...base, hasData: false })).toBe(true);
+    expect(isStale({ ...base, failed: true })).toBe(true);
   });
 });

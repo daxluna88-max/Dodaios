@@ -58,6 +58,10 @@ export interface ControlStrip {
     attempted: Flow[];
     observability: "declared" | "none";
     refused: string[];
+    /** `running`: the engine listed is the one chosen at the start, not yet confirmed to answer. */
+    state: "running" | "answered" | "failed";
+    requested: string | null;
+    fell_back: boolean;
   };
   jobs: {
     missions: { id: string; state: string }[];
@@ -69,6 +73,18 @@ export interface ControlStrip {
 }
 
 export const CONTROL_STRIP_QUERY_KEY = ["control-strip"] as const;
+/** A reading older than this is not trusted: two missed polls and a margin. */
+export const STALE_AFTER_MS = 9000;
+
+/**
+ * Whether what is on screen may still be called current. A failed read, no reading at all, or one
+ * older than {@link STALE_AFTER_MS} (a lost connection, a hidden window whose polling paused) is
+ * NOT current: the screen then shows "unknown", never the last value as if it were true.
+ */
+export function isStale(input: { hasData: boolean; failed: boolean; updatedAt: number; now: number }): boolean {
+  if (!input.hasData || input.failed) return true;
+  return input.now - input.updatedAt > STALE_AFTER_MS;
+}
 /** Slow enough to be cheap, fast enough that "Stopped" never lingers after a change. */
 const POLL_MS = 3000;
 
