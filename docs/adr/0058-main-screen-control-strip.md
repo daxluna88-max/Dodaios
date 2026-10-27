@@ -188,3 +188,52 @@ in the 5 interface languages (no raw keys), reduced-motion respected. Italian is
   the last attempt: a fallback is flagged (`fell_back`, `requested`), a turn where nothing answered is `failed`, and a
   turn answered by a fast path shows no engine. It is per turn (carried in the turn state), but the engine identity is
   still read from the manager's per-instance attribute set during the attempt.
+
+### Tickets at creation, re-verified before every side effect (2026-10-27, local, blocks 2 and 3)
+
+Rule: a unit of work takes the STOP generation (`ticket()`) when it is **created** (queued, scheduled,
+dispatched), and re-checks it (`admit(ticket)`) at start and right before each side effect. After STOP, and after
+STOP and a resume, an old ticket is refused. Where a ticket cannot travel in a signature (fakes, many layers), the
+creator sets the context variable `control.stop.work_ticket` (the only new shared primitive, backwards compatible) and
+the code below re-verifies it.
+
+- **STOP / repeated STOP.** A repeated STOP re-probes the parts the previous STOP had confirmed and asks again any
+  that no longer confirm (work that slipped past the door is not forgotten). Unconfirmed parts are asked again by
+  every later STOP, also across stop, resume, stop (new generation). Tests: `tests/unit/control/test_stop_races.py`.
+- **Tool approvals.** `ApprovalWorkflow.arm()` takes the ticket; `wait()` / `peek()` turn an approval into a denial
+  (`stopped_by_owner`) if STOP, or STOP and a resume, came after the request was armed. One choke point for the UI,
+  the coordinator and both auto-approvers.
+- **Brain.** `ToolUseLoop` re-verifies before every model round and every tool call (the tools a stale turn had
+  already asked for no longer run). `_last_turn_all_failed` is per turn (context variable); the value of the last
+  finished turn stays readable for callers that read it after `generate()`. `run_task` takes `stop_ticket` / reads
+  `work_ticket`, does not start on a stale one and drops a reply that finished after STOP.
+- **Chat.** `AgentChatService.send` takes the ticket on entry and passes it to the brain turn; a message queued in
+  `send_queue` carries its ticket and is dropped (failed notice) if STOP came after it was queued, not sent after a
+  resume. Parked background results (`parked_work`) and the fleet-briefing task are re-verified the same way.
+- **Missions.** `run_mission` / `resume_mission` take or are given a ticket, refuse a stale one (mission CANCELLED) and
+  re-check before every worker spawn; the dispatch / rerun routes re-check when the background start begins;
+  `resume_waiting_missions` does nothing while the door is closed. `spawn_worker` (voice) takes its ticket when the
+  background dispatch is created; a mission persisted just before STOP is cancelled, not run.
+- **Scheduled tasks.** The scheduler takes the ticket when it creates the run (also manual run and hook delivery);
+  the runner's existing cancel points re-verify it. A hook delivery overtaken by STOP is `interrupted` (never
+  replayed, never "done"); a recurring routine overtaken mid-run goes back to `scheduled`.
+
+Tests (written first, failing before the fix): `tests/unit/control/test_stop_races.py`,
+`tests/unit/safety/test_approval_stop_ticket.py`, `tests/unit/brain/test_tool_use_loop_stop.py`,
+`test_turn_all_failed_per_turn.py`, `test_run_task_stop.py`, `tests/unit/agent_chat/test_chat_stop_ticket.py`,
+`test_background_stop_ticket.py`, `tests/missions/test_mission_stop_ticket.py`,
+`tests/missions/api/test_missions_routes_stop.py`, `tests/unit/plugins/tool/test_spawn_worker_stop.py`,
+`tests/unit/tasks/test_tasks_stop_ticket.py`.
+
+Still NOT verified or NOT done (all tests use fakes; nothing ran against a real provider, real worker process, the
+real app or Windows):
+- real worker processes after STOP (the OS-level confirmation is unchanged and only simulated here); no real
+  mission, computer-use run or coding CLI was stopped end to end;
+- `_last_turn_all_failed` is still read after `generate()` by the voice pipeline and the realtime session (not
+  touched, block 4): two voice turns that finish at the same moment can still see each other's value there;
+  `_last_turn_suppressed` and `_last_turn_executed_action_tool` are still shared per manager;
+- turns of coding CLIs / ACP runners in the agent chat have no ticket check inside the runner (only the brain
+  runner passes it); the voice pipeline, realtime, TTS, avatar and streamed output were not touched;
+- paths that start work without going through these doors (other `asyncio.create_task` background jobs not listed
+  above, phone companion STOP/approval) are not covered; the re-probe in a repeated STOP is what catches them;
+- a spoken "stop" still does not close the door.
