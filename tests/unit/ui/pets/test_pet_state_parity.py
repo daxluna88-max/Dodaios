@@ -44,7 +44,8 @@ def _ts() -> str:
 
 
 def _locale_names() -> list[str]:
-    return sorted(path.stem for path in _LOCALES.glob("*.json"))
+    # "it" is a partial draft with per-key English fallback (ADR-0063).
+    return sorted(path.stem for path in _LOCALES.glob("*.json") if path.stem != "it")
 
 
 def test_typescript_states_match_python_in_order() -> None:

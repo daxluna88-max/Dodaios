@@ -294,7 +294,7 @@ export function PrivacyStep({
       )}
       <StepFooter left={<BackAction onClick={onBack} />}>
         <Button onClick={() => void next()} disabled={run.busy} data-testid="onboarding-primary">
-          {run.busy && <Loader2 aria-hidden className="animate-spin" />}
+          {run.busy && <Loader2 aria-hidden className="motion-safe:animate-spin" />}
           {t("first_run.continue")}
           <ArrowRight aria-hidden />
         </Button>

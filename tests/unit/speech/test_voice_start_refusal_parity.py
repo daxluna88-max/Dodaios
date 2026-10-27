@@ -23,7 +23,8 @@ from dodaios.speech.start_refusal import VOICE_START_REFUSALS
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FRONTEND_SRC = REPO_ROOT / "dodaios/ui/web/frontend/src"
 REFUSAL_TS = FRONTEND_SRC / "lib/voiceStartRefusal.ts"
-LOCALES = sorted((FRONTEND_SRC / "i18n/locales").glob("*.json"))
+# "it" is a partial draft with per-key English fallback (ADR-0063).
+LOCALES = sorted(p for p in (FRONTEND_SRC / "i18n/locales").glob("*.json") if p.stem != "it")
 
 
 def test_the_frontend_lists_the_same_codes() -> None:

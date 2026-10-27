@@ -1,0 +1,28 @@
+{
+  "personality_limits": {
+    "title": "Limiti dell'adattamento",
+    "auto_title": "Adattamento automatico (intervallo)",
+    "auto_body": "Da solo, l'assistente può cambiare il suo modo di parlare al massimo fino a questa intensità, e solo verso gli stati d'animo che consenti. Questo è l'intervallo dell'adattamento automatico.",
+    "auto_value": "Automatico: fino a {n} su {max}",
+    "auto_off": "L'adattamento automatico è disattivato: modalità manuale o intervallo 0.",
+    "owner_title": "La tua richiesta esplicita",
+    "owner_body": "Quando chiedi tu stesso uno stato d'animo («più serio», o un pulsante qui sotto), può superare quell'intervallo, fino a {max}. Resta comunque limitato agli stati d'animo che consenti, mai oltre {max}, e dura solo per questa sessione.",
+    "owner_value": "La tua richiesta: fino a {max} su {max}",
+    "moods_title": "Stati d'animo consentiti",
+    "moods_body": "Entrambi i limiti valgono solo per questi stati d'animo. Uno stato non consentito viene rifiutato, chiunque lo chieda.",
+    "pinned": "Stato d'animo fissato: {mood}",
+    "never_title": "Cosa non cambia mai nello stile",
+    "never_body": "Fatti, accuratezza, privacy, approvazioni, strumenti, budget e arresto. Lo stato d'animo è simulato: un modo di parlare, non un sentimento.",
+    "channels_title": "Dove arriva lo stile",
+    "ch_text": "Chat scritta: lo stile fa parte delle istruzioni che l'assistente riceve.",
+    "ch_realtime": "Conversazioni vocali (realtime): lo stile viene inviato come istruzioni sulla formulazione. Cambia come l'assistente formula le frasi, non il suono della voce.",
+    "ch_voice": "Voce: nessun fornitore vocale può cambiare il tono a ogni turno, quindi la voce stessa non viene modulata.",
+    "ch_avatar": "Avatar: non ancora collegato all'app; non c'è sincronizzazione labiale.",
+    "delivery_title": "Quando un motore vocale recepisce una modifica",
+    "delivery_every_turn": "a ogni turno",
+    "delivery_connect_only": "solo all'inizio di una chiamata (una modifica vale per la chiamata successiva)",
+    "delivery_unknown": "non noto",
+    "stop_note": "Dopo STOP nulla del turno precedente viene applicato; lo stile viene riletto per il successivo.",
+    "_status": "UNREVIEWED DRAFT: translated without a native review; do not ship before one"
+  }
+}

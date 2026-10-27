@@ -93,18 +93,19 @@ export function MemoryControlPanel({ onChanged }: { onChanged?: () => void }) {
       )}
       <ul className="mt-2 flex flex-col gap-2">
         {proposals.map((p) => (
-          <li key={p.id} className="rounded-lg border border-border bg-background p-3" data-testid="memory-proposal">
+          <li key={p.id} className="rounded-lg border border-border bg-background p-3" data-testid="memory-proposal" aria-labelledby={`mem-proposal-${p.id}`}>
             {editing?.id === p.id ? (
               <textarea
                 value={editing.text}
                 onChange={(event) => setEditing({ id: p.id, text: event.target.value })}
                 aria-label={t("memory_control.edit_label")}
                 data-escape-local=""
+                autoFocus
                 rows={3}
                 className="w-full rounded-md border border-border bg-background p-2 text-sm"
               />
             ) : (
-              <p className="text-sm text-foreground">
+              <p id={`mem-proposal-${p.id}`} className="text-sm text-foreground">
                 {p.operation === "remove" ? `${t("memory_control.op_remove")}: ${p.before}` : p.text}
               </p>
             )}
@@ -117,16 +118,17 @@ export function MemoryControlPanel({ onChanged }: { onChanged?: () => void }) {
               <Button
                 size="sm"
                 disabled={busy}
+                aria-describedby={`mem-proposal-${p.id}`}
                 onClick={() => run(() => approveProposal(p.id, editing?.id === p.id ? editing.text : undefined))}
               >
                 {editing?.id === p.id ? t("memory_control.approve_edited") : t("memory_control.approve")}
               </Button>
               {p.operation !== "remove" && editing?.id !== p.id && (
-                <Button size="sm" variant="secondary" disabled={busy} onClick={() => setEditing({ id: p.id, text: p.text })}>
+                <Button size="sm" variant="secondary" disabled={busy} aria-describedby={`mem-proposal-${p.id}`} onClick={() => setEditing({ id: p.id, text: p.text })}>
                   {t("memory_control.edit")}
                 </Button>
               )}
-              <Button size="sm" variant="secondary" disabled={busy} onClick={() => run(() => rejectProposal(p.id))}>
+              <Button size="sm" variant="secondary" disabled={busy} aria-describedby={`mem-proposal-${p.id}`} onClick={() => run(() => rejectProposal(p.id))}>
                 {t("memory_control.reject")}
               </Button>
             </div>
@@ -140,14 +142,14 @@ export function MemoryControlPanel({ onChanged }: { onChanged?: () => void }) {
           <p className="text-xs text-muted-foreground">{t("memory_control.trash_hint")}</p>
           <ul className="mt-2 flex flex-col gap-1">
             {trash.map((item) => (
-              <li key={item.id} className="flex items-center gap-2 text-sm">
-                <span className="min-w-0 flex-1 truncate">
+              <li key={item.id} className="flex flex-wrap items-center gap-2 text-sm">
+                <span id={`mem-trash-${item.id}`} className="min-w-0 flex-1 break-words">
                   {item.path} · {fill(t("memory_control.restore_until"), { date: day(item.restore_until) })}
                 </span>
-                <Button size="sm" variant="secondary" disabled={busy} onClick={() => run(() => restoreTrash(item.id))}>
+                <Button size="sm" variant="secondary" disabled={busy} aria-describedby={`mem-trash-${item.id}`} onClick={() => run(() => restoreTrash(item.id))}>
                   {t("memory_control.restore")}
                 </Button>
-                <Button size="sm" variant="secondary" disabled={busy} onClick={() => run(() => deleteTrashForever(item.id))}>
+                <Button size="sm" variant="secondary" disabled={busy} aria-describedby={`mem-trash-${item.id}`} onClick={() => run(() => deleteTrashForever(item.id))}>
                   {t("memory_control.delete_forever")}
                 </Button>
               </li>
@@ -235,6 +237,7 @@ export function DeletePageDialog({
           {report === null ? (
             <>
               <fieldset className="mt-4 flex flex-col gap-2">
+                <legend className="sr-only">{fill(t("memory_control.delete_title"), { title })}</legend>
                 <label className="flex items-start gap-2 text-sm">
                   <input type="radio" name="del-mode" checked={mode === "logical"} onChange={() => setMode("logical")} />
                   <span>{t("memory_control.mode_logical")}</span>
