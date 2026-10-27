@@ -7730,19 +7730,14 @@ class SpeechPipeline:
         the parts are then stopped in the background. The current turn becomes exempt so the
         brain's own acknowledgement of the stop is still heard. Returns whether it was a stop.
         """
-        from dodaios.brain.voice_command_gate import match_voice_command  # noqa: PLC0415
-        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
-        from dodaios.control.wiring import voice_matches_kill_intent  # noqa: PLC0415
-        from dodaios.speech.stop_parts import voice_subsystems  # noqa: PLC0415
+        from dodaios.speech.spoken_stop import (  # noqa: PLC0415
+            close_door_on_stop_phrase,
+            last_stop_task,
+        )
 
-        match = match_voice_command(text)
-        if not (voice_matches_kill_intent(text) or (match is not None and match.kind == "cancel")):
+        if not await close_door_on_stop_phrase(text, lambda: self):
             return False
-        controller = get_stop_controller()
-        for part in voice_subsystems(lambda: self):
-            controller.add(part)
-        self._stop_phrase_task = asyncio.ensure_future(controller.stop())
-        await asyncio.sleep(0)  # lets stop() run its synchronous door-closing lines
+        self._stop_phrase_task = last_stop_task()
         if (turn := stop_gate.current_turn()) is not None:
             turn.exempt = True
         return True
@@ -9923,11 +9918,14 @@ class SpeechPipeline:
 
         session_id = getattr(self, "_current_voice_session_id", None) or str(uuid4())
         # The session's STOP ticket: provider audio after STOP / resume is dropped (ADR-0058).
-        playback = DesktopRealtimePlayback(
-            self._player, stale=stop_gate.new_ticket().stale
-        )
+        session_ticket = stop_gate.session_ticket()
+        if session_ticket.stale():
+            # The door is closed (or closed and reopened mid-start): no duplex call is opened.
+            log.info("Realtime desktop session not opened: STOP door is closed.")
+            return None
+        playback = DesktopRealtimePlayback(self._player, stale=session_ticket.stale)
         barge_detector = DesktopRealtimeBargeInDetector(
-            output_active=level_tap.playback_active
+            output_active=level_tap.playback_active, stale=session_ticket.stale
         )
         # Per-frame Silero inference runs OFF the voice event loop — the same
         # BUG-062/BUG-084 class the classic barge monitor already fixed with
@@ -9959,7 +9957,7 @@ class SpeechPipeline:
         # none to collect. Detection strictness is unchanged (0.97 / 12 frames
         # ~= 0.4 s of speech), so a cough or a door does not take the floor.
         thinking_detector = DesktopRealtimeBargeInDetector(
-            grace_s=0.05, output_active=None
+            grace_s=0.05, output_active=None, stale=session_ticket.stale
         )
         # The microphone must fall quiet ONCE before the thinking barge arms,
         # or the user's own trailing words would arm it against themselves.

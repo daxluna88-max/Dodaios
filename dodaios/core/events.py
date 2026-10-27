@@ -888,6 +888,24 @@ class SystemStateChanged(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class AvatarSignal(Event):
+    """What the avatar may show, derived ONLY from a real event (ADR-0058 block 13, ADR-0056).
+
+    ``kind``: turn_start | thinking | listening | speaking_start | speaking_stop | error | stop |
+    idle | expression_plan. ``reason`` is a fixed code naming the real event that caused it.
+    ``generation`` is the STOP generation it was made under: a consumer drops a signal whose
+    generation is older than the newest one it has seen (stale after STOP). ``seq`` grows per
+    bridge. There is no viseme / phoneme field: this is speech ACTIVITY, not lip sync.
+    """
+    kind: str = "idle"
+    turn_id: str = ""
+    generation: int = 0
+    seq: int = 0
+    expression: str = ""
+    reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class NavigateSidebar(Event):
     """Ask the desktop UI to switch the active sidebar section.
 

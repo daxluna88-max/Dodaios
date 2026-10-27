@@ -176,6 +176,10 @@ class StopController:
         self._listeners.append((on_close, on_open))
         self._call(on_open if self._open else on_close)
 
+    def remove_door_listener(self, on_close: Callable[[], None]) -> None:
+        """Unregister a listener added with ``add_door_listener`` (matched by its ``on_close``)."""
+        self._listeners = [pair for pair in self._listeners if pair[0] is not on_close]
+
     def _call(self, callback: Callable[[], None]) -> None:
         try:
             callback()

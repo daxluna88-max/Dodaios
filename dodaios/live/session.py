@@ -288,6 +288,12 @@ class LiveVoiceSession:
         self._report_response_id = ""
         self._report_timeout: asyncio.TimerHandle | None = None
         self._end_reported = False
+        # STOP ticket of the call (ADR-0058), taken at creation: provider audio, captions and
+        # speech timing are dropped, and no call is started, once it is stale.
+        from dodaios.speech import stop_gate
+
+        self._stop_ticket = stop_gate.session_ticket()
+        self._stop_end_task: asyncio.Task | None = None
         self._language = resolve_output_language(
             getattr(config.brain, "reply_language", "auto"),
             "auto",
@@ -589,6 +595,17 @@ class LiveVoiceSession:
         task.add_done_callback(self._jobs.discard)
         task.add_done_callback(lambda _task: self._notify_pause())
 
+    def _stopped(self) -> bool:
+        """True after STOP (or STOP and resume): drop output and end this call, once.
+
+        The call is normally ended by the ``realtime_session`` part (voice hangup); this is the
+        backstop for a call that the part could not see (no pipeline handle)."""
+        if not self._stop_ticket.stale():
+            return False
+        if self._stop_end_task is None and not self._ended:
+            self._stop_end_task = asyncio.ensure_future(self.end(reason="stopped"))
+        return True
+
     async def _emit_indicator(self, message: dict) -> None:
         """Send a speaking/thinking indicator without breaking the session.
 
@@ -794,6 +811,8 @@ class LiveVoiceSession:
                 await self._playback_changed(message["active"])
             return
         if kind == "audio_start" and self._connection is None:
+            if self._stopped():
+                return
             await self._start(message)
         elif kind == "audio_stop":
             await self.end(reason="client_stop")
@@ -1358,6 +1377,10 @@ class LiveVoiceSession:
         assert self._ledger is not None and self._tools is not None
         kind = event.get("type", "")
         self._note_startup_event(event)
+        if kind in {"session.output_transcript.delta", "session.output_audio.delta"} and (
+            self._stopped()
+        ):
+            return
         if kind in {"session.input_transcript.delta", "session.output_transcript.delta"}:
             role: Literal["user", "assistant"] = (
                 "user" if kind == "session.input_transcript.delta" else "assistant"
@@ -1776,6 +1799,8 @@ class LiveVoiceSession:
             self._recovering = False
 
     async def _ask_voice_hangup(self, question: str) -> None:
+        if self._stopped():
+            return
         await self._send_json({
             "type": "error_spoken", "text": question,
             "language": self._language, "spoken_kind": "clarify",

@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import asyncio
 import re
+import weakref
 from typing import TYPE_CHECKING
 
-from dodaios.core.events import KillRequested, TranscriptFinal
+from dodaios.core.events import KillRequested, TranscriptFinal, TranscriptionUpdate
 
 if TYPE_CHECKING:
     from dodaios.core.bus import EventBus
@@ -49,17 +50,69 @@ def voice_matches_kill_intent(text: str) -> bool:
     return bool(_KILL_PHRASES.search(text or ""))
 
 
+_VOICE_WIRED: weakref.WeakSet = weakref.WeakSet()
+_STOP_DOOR_WIRED: weakref.WeakSet = weakref.WeakSet()
+
+
 def wire_voice_kill_switch(bus: EventBus) -> None:
-    """Subscribe to `TranscriptFinal` and publish `KillRequested`
+    """Subscribe to the final user transcripts and publish `KillRequested`
     whenever a kill phrase is detected.
+
+    Two sources: `TranscriptFinal` (classic speech pipeline) and a FINAL
+    `TranscriptionUpdate` (realtime session; it does not publish
+    `TranscriptFinal`). Idempotent per bus.
     """
+    try:
+        if bus in _VOICE_WIRED:
+            return
+        _VOICE_WIRED.add(bus)
+    except TypeError:  # a bus that cannot be weakly referenced: wire it, no memo
+        pass
+
     async def on_transcript(ev: TranscriptFinal) -> None:
         if ev.transcript is None:
             return
         if voice_matches_kill_intent(ev.transcript.text):
             await bus.publish(KillRequested(source="voice",
                                              trace_id=ev.trace_id))
+
+    async def on_update(ev: TranscriptionUpdate) -> None:
+        if ev.is_final and voice_matches_kill_intent(ev.text):
+            await bus.publish(KillRequested(source="voice",
+                                             trace_id=ev.trace_id))
+
     bus.subscribe(TranscriptFinal, on_transcript)
+    bus.subscribe(TranscriptionUpdate, on_update)
+
+
+def wire_voice_stop_door(bus: EventBus) -> None:
+    """A voice `KillRequested` closes the ADR-0058 STOP door like the button does.
+
+    `KillSwitch` only cancels tokens; the door (generation, playback, realtime session) is the
+    `StopController`. Only `source="voice"` is bridged here: tray and hotkey keep their
+    behaviour (they are not changed by this block). The voice parts are registered first, so
+    this works even if the control strip was never opened. Idempotent per bus.
+    """
+    try:
+        if bus in _STOP_DOOR_WIRED:
+            return
+        _STOP_DOOR_WIRED.add(bus)
+    except TypeError:
+        pass
+
+    async def on_kill(ev: KillRequested) -> None:
+        if ev.source != "voice":
+            return
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+        from dodaios.core.runtime_refs import get_speech_pipeline  # noqa: PLC0415
+        from dodaios.speech.stop_parts import voice_subsystems  # noqa: PLC0415
+
+        controller = get_stop_controller()
+        for part in voice_subsystems(get_speech_pipeline):
+            controller.add(part)
+        await controller.stop()
+
+    bus.subscribe(KillRequested, on_kill)
 
 
 # ----------------------------------------------------------------------
@@ -143,6 +196,7 @@ def wire_kill_switch_on_bus(
 
     if enable_voice:
         wire_voice_kill_switch(bus)        # pure subscriber, no task
+        wire_voice_stop_door(bus)
 
     if tray_command_queue is not None:
         tasks["tray"] = wire_tray_kill_switch(

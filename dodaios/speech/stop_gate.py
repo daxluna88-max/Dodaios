@@ -41,6 +41,17 @@ def new_ticket() -> VoiceTurnTicket:
     return VoiceTurnTicket(controller.ticket(), exempt=not controller.door_open)
 
 
+def session_ticket() -> VoiceTurnTicket:
+    """Ticket for a whole call (realtime, live/native, browser-held call).
+
+    Unlike a turn, a call is never ``exempt``: opened while the door is closed it is stale at
+    once (nothing it produces is emitted), and it goes stale on STOP or on STOP and resume.
+    """
+    from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
+    return VoiceTurnTicket(get_stop_controller().ticket(), exempt=False)
+
+
 @contextmanager
 def voice_turn() -> Iterator[VoiceTurnTicket]:
     """Take the ticket for one turn; the previous one (if any) comes back afterwards."""
@@ -73,6 +84,7 @@ __all__ = [
     "current_turn",
     "current_turn_stale",
     "new_ticket",
+    "session_ticket",
     "not_stale",
     "voice_turn",
 ]

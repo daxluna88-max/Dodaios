@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 from dataclasses import dataclass
 from typing import Any
@@ -155,9 +156,16 @@ async def run_browser_call(
     session_id: str = "",
 ) -> str:
     """Wake hands media to the WebView; the desktop never feeds speaker echo back."""
+    from dodaios.control.stop import get_stop_controller
     from dodaios.core.events import BrowserVoiceRequested
     from dodaios.live import startup
+    from dodaios.speech import stop_gate
 
+    # STOP ticket of this call (ADR-0058), taken at creation. A call asked for while the door is
+    # closed is never started; a STOP while it runs wakes the wait below and ends it.
+    stop_ticket = stop_gate.session_ticket()
+    if stop_ticket.stale():
+        return "client_stop"
     changed = asyncio.Event()
     watcher = (asyncio.get_running_loop(), changed)
     _watchers.add(watcher)
@@ -172,6 +180,16 @@ async def run_browser_call(
         if previous is not None:
             previous.failed = True
     _notify()
+
+    loop = asyncio.get_running_loop()
+
+    def _on_stop_door() -> None:
+        # The door listener may run on any thread: wake the wait on the owning loop.
+        with contextlib.suppress(RuntimeError):
+            loop.call_soon_threadsafe(changed.set)
+
+    controller = get_stop_controller()
+    controller.add_door_listener(_on_stop_door, lambda: None)
 
     def owns_request() -> bool:
         with _request_lock:
@@ -200,18 +218,24 @@ async def run_browser_call(
         # UI permission and device setup can take time. No idle billed connection.
         async with asyncio.timeout(timeout_s):
             while (not pending.registered and not own_sessions()
-                   and not hangup.is_set() and owns_request()):
+                   and not hangup.is_set() and owns_request() and not stop_ticket.stale()):
                 if pending.failed or (session_id and active()):
                     return "error"
                 await wait_change()
+        if stop_ticket.stale():
+            return "client_stop"
         if pending.failed:
             return "error"
-        while own_sessions() and not hangup.is_set() and owns_request():
+        while (own_sessions() and not hangup.is_set() and owns_request()
+               and not stop_ticket.stale()):
             await wait_change()
+        if stop_ticket.stale():
+            return "client_stop"
     except TimeoutError:
         # The caller receives an explicit error outcome for this bounded wait.
         return "error"
     finally:
+        controller.remove_door_listener(_on_stop_door)
         with _request_lock:
             _pending_browser_starts.pop(request_id, None)
             still_owned = _browser_call_requests.get(owner_key) == request_id

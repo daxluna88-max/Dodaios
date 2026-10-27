@@ -5041,6 +5041,28 @@ class DesktopApp:
                 self._server.app.state.speech_pipeline = pipeline
             # App-Control: expose the live SpeechPipeline so the
             # ``switch-provider`` tool can hot-swap the TTS provider (no restart).
+            # Spoken STOP: the kill intent heard by any voice path closes the same door as the
+            # button (ADR-0058, block 13). Idempotent per bus; best-effort, never blocks voice boot.
+            try:
+                from dodaios.control.wiring import wire_voice_kill_switch, wire_voice_stop_door
+
+                wire_voice_kill_switch(bus)
+                wire_voice_stop_door(bus)
+                # The KillSwitch (tokens) listens on the same bus as the voice kill intent.
+                from dodaios.control import get_kill_switch
+
+                get_kill_switch().bind(bus)
+                # Avatar signals from real events only (ADR-0058 block 13); the web server
+                # forwards every bus event, AvatarSignal included, to /ws.
+                from dodaios.avatar.bridge import AvatarBridge
+
+                if getattr(self, "_avatar_bridge", None) is None:
+                    self._avatar_bridge = AvatarBridge(bus)
+                    self._avatar_bridge.attach()
+            except Exception:  # noqa: BLE001
+                import logging as _stdlog
+
+                _stdlog.getLogger(__name__).warning("Voice STOP wiring failed.", exc_info=True)
             try:
                 from dodaios.core import runtime_refs
 

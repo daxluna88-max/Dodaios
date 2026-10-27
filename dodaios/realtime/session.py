@@ -2497,6 +2497,11 @@ class RealtimeVoiceSession:
         self._stale_generations_dropped = 0
         self._hangup_reason = ""
         self._hangup_confirmation = HangupConfirmation()
+        # STOP ticket of the call (ADR-0058), taken when the session is created: provider audio,
+        # surface speech and the hang-up question are dropped once it is stale.
+        from dodaios.speech import stop_gate as _stop_gate  # noqa: PLC0415
+
+        self._stop_ticket = _stop_gate.session_ticket()
         self._hangup_control_turn = ""
         self._end_after_turn = False
         self._end_call_timer: asyncio.Task[None] | None = None
@@ -11193,6 +11198,11 @@ class RealtimeVoiceSession:
 
     async def _handle_voice_hangup_input(self) -> bool:
         """Own voice termination before this utterance can authorize other tools."""
+        # A spoken stop closes the STOP door (same door as the button) before anything else; the
+        # session itself is then ended by the realtime_session part (voice hangup).
+        from dodaios.speech.spoken_stop import close_door_on_stop_phrase  # noqa: PLC0415
+
+        await close_door_on_stop_phrase(self._last_user_text)
         decision = self._hangup_confirmation.observe(self._last_user_text, self._turn_id)
         if not decision:
             return False
@@ -11216,7 +11226,8 @@ class RealtimeVoiceSession:
                 else hangup_cancelled_reply(self._language)
             )
             self._output_transcript.append(question)
-            await self._send_json(self._surface_speech_message(question))
+            if not self._stop_ticket.stale():
+                await self._send_json(self._surface_speech_message(question))
             if decision == "request":
                 self._hangup_confirmation.arm(self._turn_id)
         return True
@@ -12676,6 +12687,9 @@ class RealtimeVoiceSession:
     async def _emit_audio(self, chunk: Any) -> None:
         if self._ended:
             self._note_output_withheld("audio after session end")
+            return
+        if self._stop_ticket.stale():
+            self._note_output_withheld("audio after STOP")
             return
         if self._must_withhold_provider_output():
             self._note_output_withheld("audio")

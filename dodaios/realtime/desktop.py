@@ -140,7 +140,11 @@ class DesktopRealtimeBargeInDetector:
         ) = None,
         echo_correlation_threshold: float | None = None,
         model: Any = None,
+        stale: Callable[[], bool] | None = None,
     ) -> None:
+        #: STOP ticket of the session (ADR-0058): after STOP a confirmed "barge-in" must not be
+        #: forwarded to the provider (it would start a new generation the door has closed).
+        self._stale = stale
         self._grace_s = max(0.0, float(grace_s))
         self._speech_threshold = min(1.0, max(0.0, float(speech_threshold)))
         self._consecutive_frames = max(1, int(consecutive_frames))
@@ -237,6 +241,9 @@ class DesktopRealtimeBargeInDetector:
         """Return buffered user PCM once sustained speech is confirmed."""
 
         if not self._active or not self._ready or len(pcm16) < 2:
+            return None
+        if self._stale is not None and self._stale():
+            self._reset_buffers()
             return None
 
         if not self._playback_started:
@@ -697,6 +704,8 @@ class DesktopRealtimePlayback:
                 banked.append(chunk)
                 banked_bytes += len(chunk[1].pcm)
         for generation, chunk in banked:
+            if self._stale is not None and self._stale():
+                continue
             if (not getattr(self._player, "output_muted", False)
                     and generation == getattr(self._player, "output_generation", 0)):
                 yield chunk
@@ -707,6 +716,8 @@ class DesktopRealtimePlayback:
             if chunk is None:
                 return
             generation, audio = chunk
+            if self._stale is not None and self._stale():
+                continue
             if (not getattr(self._player, "output_muted", False)
                     and generation == getattr(self._player, "output_generation", 0)):
                 yield audio

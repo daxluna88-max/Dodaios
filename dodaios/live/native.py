@@ -559,6 +559,11 @@ class NativeLiveVoiceSession(LiveVoiceSession):
             "audio_delta", "input_transcript", "output_transcript_delta", "tool_call",
         }:
             self._native_turn_complete = False
+        if event.type in {"audio_delta", "output_transcript_delta", "tool_call"} and (
+            self._stopped()
+        ):
+            # STOP came after this call was created: nothing it produces is shown, heard or run.
+            return
         if event.type == "audio_delta" and event.audio is not None:
             self._report_started()
             await self._note_speaking()
@@ -777,6 +782,8 @@ class NativeLiveVoiceSession(LiveVoiceSession):
         if self._closing:
             return
         if message.get("type") == "text_input" and self._connection is not None:
+            if self._stopped():
+                return
             self._native_turn_complete = False
             if self._tools is not None:
                 self._tools.user_text = str(message.get("text", ""))

@@ -407,3 +407,84 @@ rebuilt, so the UI change is NOT live. Only `py_compile` and `ruff check` on the
 - Vitest `src/lib/controlStrip.test.ts` (the old "restart starts a new epoch" test was replaced): unseen old boot after the
   new boot is dropped; only a request sent after resync sets the new session; new boot first then old unseen boot last; a
   delayed older STOP reply after a resume and a foreign-boot write reply are refused.
+
+## Block 13 (plan): voice and avatar
+
+Nothing was run: no pytest, vitest, tsc, eslint, vite, npm, app, service or audio device. TypeScript not type-checked,
+`dist` not rebuilt, so any UI is NOT live (no UI file was changed). Checks done: reading, `python3 -m py_compile`,
+`ruff check`. Tests were written, not run. No new i18n key or namespace.
+
+### (a) One STOP for spoken, text and button
+
+| Point | State | Files |
+| --- | --- | --- |
+| Spoken stop and kill intent / voice-command `cancel` close the same door | done in code, not run | `speech/spoken_stop.py` (new, one path), `speech/pipeline.py` (`_close_door_on_stop_phrase` delegates), `control/wiring.py` (`wire_voice_stop_door`, `wire_voice_kill_switch` also hears a final `TranscriptionUpdate`, idempotent per bus) |
+| `wire_voice_kill_switch` wired in the app | done in code, not run | `ui/desktop_app.py`, right after the `SpeechPipeline` is built (`bus` in scope); also binds `get_kill_switch()` to that bus |
+| Per-turn / per-call ticket at creation, checked before each emit | see below | `speech/stop_gate.py` (`session_ticket`: never exempt, stale at once if the door is closed) |
+
+Entry points:
+- Speech pipeline: unchanged (block 4). Wake-word and hotkey calls go through the same `_active_session` /
+  `_active_realtime_session`.
+- Desktop realtime (`_active_realtime_session`): a session ticket is taken before anything is built; with the door
+  closed no duplex call is opened (returns `None`, classic path). Playback, the playing detector and the thinking
+  detector share it. `DesktopRealtimePlayback` now also drops chunks already queued (`_chunks`), not only new ones.
+  `DesktopRealtimeBargeInDetector` takes `stale`: after STOP `feed` returns nothing, so a confirmed barge-in is not
+  forwarded to the provider.
+- Realtime session (`realtime/session.py`): ticket at creation; `_emit_audio` drops after STOP; a final user transcript
+  is checked for a stop phrase before anything else (this path never published `TranscriptFinal`, hence the extra bus
+  source); the hang-up confirmation question is not spoken after STOP.
+- Live / native (`live/session.py`, `live/native.py`): ticket at creation; provider audio, output captions, speech
+  timing, native text input, tool calls and the hang-up question are dropped after STOP; `audio_start` after STOP is
+  refused; the session ends itself once (`reason="stopped"`) as a backstop to the `realtime_session` part.
+- Browser-held call (`live/runtime.run_browser_call`): ticket at creation (door closed = not started, no
+  `BrowserVoiceRequested`), a door listener wakes the wait on STOP and the call ends (`client_stop`); the listener is
+  removed afterwards (`StopController.remove_door_listener`, new).
+
+Residual limits:
+- Tray and hotkey `KillRequested` are NOT bridged to the door (only `source="voice"`): not changed here.
+- The kill regex is deliberately broad (existing); a false positive now also closes the door until Resume.
+- With the door closed a realtime call falls to the classic path, which may speak the "realtime unavailable" notice
+  (that turn is exempt, as in block 4).
+- Provider side: a closed local stream/handle is what is confirmed, not that the provider stopped generating; the live
+  browser plays WebRTC audio the desktop cannot gate once it is flowing (the session end closes it).
+- `_last_turn_all_failed` sharing between voice turns (block 4) is unchanged. Telephony (`telephony/session.py`) has its
+  own hang-up confirmation and was not touched.
+
+### (b) Avatar: real events only
+
+New `dodaios/avatar/bridge.py` (`AvatarBridge`) and bus event `AvatarSignal` (`core/events.py`, categorised in
+`runs/constants.py`). The web server already forwards every bus event to `/ws`, so no new transport. Mapping, each from a
+real event: `turn_start` <- `VoiceTurnStarted`; `thinking` <- `BrainTurnStarted` / supervisor THINKING; `listening` <-
+supervisor LISTENING; `speaking_start` <- `AudioOutFirst` (inside a turn of the current generation only);
+`speaking_stop` <- supervisor leaves SPEAKING or `VoiceTurnCompleted`, only after a start; `error` <- `ErrorOccurred` /
+supervisor ERROR; `stop` + `idle` <- the STOP door closing; `expression_plan` <- `offer_plan` (needs the ADR-0056
+`PlanGate` and the current generation). After STOP the bridge forgets the turn: a late `AudioOutFirst` is dropped even
+after Resume until a NEW turn starts. Every signal carries `generation` and `seq` so a consumer can drop older ones.
+State: done for the bridge, partial overall.
+Residual: no code builds an `ExpressionPlan` at runtime yet (profile + mood are not handed to the bridge), so
+`expression_plan` is available but never emitted, and `expression.CHANNELS["avatar"]` still says `not_wired`;
+`ErrorOccurred` is not filtered by layer, so a non-voice error also shows `error`; `speaking_stop` is the supervisor
+state change, not a measured end of physical playback. The avatar page itself (other repo, Jarvis-di-dax) was not
+read or changed; whether it consumes `AvatarSignal` is open.
+
+### (c) TTS modulation and lip sync
+
+Read from the code (`dodaios/avatar/capabilities.py`): `TTSProvider.synthesize` takes text, voice, language; `AudioChunk`
+is PCM only. No TTS plugin and no realtime/live adapter yields a viseme or phoneme stream, so **there is no lip sync and
+nothing may be labelled so**; what exists is speech ACTIVITY (start / stop). Amplitude exists only in-process
+(`audio/level_tap`, jarvis bar), not forwarded. Live `speech_timing` frames time caption characters, not mouth shapes.
+Per-provider parameters are fixed when the provider is built (ElevenLabs stability / style / speed; Cartesia, Grok,
+Inworld, OpenRouter, Piper speed; Gemini Flash `style_prompt`; fallback none), none per turn, so
+`expression.TTS_TURN_PARAMS` stays empty and no mood modulates a voice. State: done as documentation + a table with a
+test that no provider claims either.
+
+### Controls prepared, NOT RUN
+
+`tests/unit/speech/test_spoken_stop_block13.py` (phrase closes door, ordinary text does not, session ticket never exempt,
+final transcript via bus, partial ignored, only `voice` kill bridged, idempotent wiring, detector silent after STOP),
+`tests/unit/live/test_live_stop_block13.py` (browser call refused with door closed; STOP wakes and ends it, listener
+removed), `tests/unit/avatar/test_bridge_block13.py` (nothing without a real event, speaking needs turn + audible start,
+STOP -> stop/idle and late audio dropped, stale plan refused, no lip-sync claim). Not covered by any test: the realtime
+session and live/native edits (they need the large session fakes), `desktop_app` wiring. PC checklist owed: say "stop"
+in a classic call, a desktop realtime call, a browser call and a native live call and confirm the strip shows STOPPED and
+the avatar goes idle; Resume and check the avatar stays idle until the next turn.

@@ -102,6 +102,7 @@ EVENT_CATEGORY_BY_KIND: Final[dict[str, str]] = {
     "HotkeyPressed": EVENT_CAT_LIFECYCLE,
     "ListeningStarted": EVENT_CAT_LIFECYCLE,
     "SystemStateChanged": EVENT_CAT_LIFECYCLE,
+    "AvatarSignal": EVENT_CAT_LIFECYCLE,
     # speech
     "TranscriptFinal": EVENT_CAT_SPEECH,
     "TranscriptionUpdate": EVENT_CAT_SPEECH,
