@@ -181,6 +181,30 @@ class TaskRunner:
         values are available as ``{field}`` placeholders in the action prompt/text
         and in the ``announce_on_*`` strings. ``None`` for time-based tasks.
         """
+        from dodaios.control.stop import get_stop_controller, work_ticket  # noqa: PLC0415
+
+        # The run's STOP ticket: handed down by the scheduler (taken when the run was created) or,
+        # for a direct call, taken now. Every side effect below re-verifies it (``_check_cancel``).
+        controller = get_stop_controller()
+        ticket = work_ticket.get()
+        if ticket is None:
+            ticket = controller.ticket()
+        if not controller.admit(ticket).allowed:
+            log.info("task %s was not started: the owner pressed STOP", task_id)
+            return  # state untouched: it was never running
+        ticket_token = work_ticket.set(ticket)
+        try:
+            await self._run_admitted(task_id, cancel_token, trigger_event=trigger_event)
+        finally:
+            work_ticket.reset(ticket_token)
+
+    async def _run_admitted(
+        self,
+        task_id: str,
+        cancel_token: CancelToken | None = None,
+        *,
+        trigger_event: dict[str, Any] | None = None,
+    ) -> None:
         spec = await self._store.get_spec(task_id)
         if spec is None:
             log.warning("TaskRunner: task_id %s not found in store", task_id)
@@ -202,7 +226,11 @@ class TaskRunner:
         try:
             await self._execute_action(task_id, spec, cancel_token, ctx)
         except _Cancelled as exc:
-            await self._store.update_state(task_id, "cancelled", error=str(exc))
+            # A recurring routine that the owner's STOP overtook keeps its schedule (it fires
+            # again after a resume); any other cancel ends the run as before.
+            stopped = str(exc) == "stopped_by_owner" and await self._keeps_schedule(task_id, spec)
+            await self._store.update_state(
+                task_id, "scheduled" if stopped else "cancelled", error=str(exc))
             await self._store.append_step(
                 task_id, "log", {"event": "run_cancelled", "message": str(exc)}
             )
@@ -755,6 +783,7 @@ class TaskRunner:
         finally:
             if self._approver is not None:
                 self._approver.disarm(trace_id)
+        self._check_cancel(cancel_token)  # a result that finished after STOP is not delivered
         text = str(result).strip()
         seq = await self._store.append_step(
             task_id,
@@ -828,6 +857,13 @@ class TaskRunner:
     def _check_cancel(cancel_token: CancelToken | None) -> None:
         if cancel_token is not None and cancel_token.is_cancelled():
             raise _Cancelled(cancel_token.reason or "cancelled")
+        # The same points re-verify the run's STOP ticket (ADR-0058): after STOP, or STOP and a
+        # resume, no further step of a run created under the old generation takes effect.
+        from dodaios.control.stop import get_stop_controller, work_ticket  # noqa: PLC0415
+
+        ticket = work_ticket.get()
+        if ticket is not None and not get_stop_controller().admit(ticket).allowed:
+            raise _Cancelled("stopped_by_owner")
 
 
 # ----------------------------------------------------------------------

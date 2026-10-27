@@ -13359,7 +13359,11 @@ class BrainManager:
             worker_selection,
         )
 
+        from dodaios.control.stop import work_ticket  # noqa: PLC0415
+
         outer = _STOP_TURN.get()
+        if stop_ticket is None and work_ticket.get() is not None:
+            stop_ticket = work_ticket.get()  # handed down by whoever created the run
         if stop_ticket is None and outer is not None:
             ticket = outer.ticket  # called from inside a turn: it keeps that turn's generation
         else:

@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Iterable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Literal
 
@@ -269,6 +270,12 @@ class StopController:
             await asyncio.sleep(SETTLE_STEP_S)
 
 
+#: The STOP generation the unit of work running in THIS context was created under (a queued
+#: task, a background agent, a scheduled run). The creator sets it when it takes the ticket;
+#: code further down re-verifies it before a side effect without every signature in between
+#: having to carry it. ``None`` = no ticket was handed down (the work is taken to start now).
+work_ticket: ContextVar[int | None] = ContextVar("dodaios_stop_work_ticket", default=None)
+
 _PROCESS_CONTROLLER: StopController | None = None
 
 
@@ -301,4 +308,5 @@ __all__ = [
     "SubsystemResult",
     "get_stop_controller",
     "reset_stop_controller",
+    "work_ticket",
 ]
