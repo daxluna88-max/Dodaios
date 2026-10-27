@@ -10,7 +10,8 @@ const RESUME_SLOT = "jm_uploads"; // {fileKey: {id, sha}} - no secret, only lets
 
 const state = { csrf: "", device: null, sid: "", timer: 0, pending: [], busy: false, sig: "", rec: null,
   tab: "chat", staged: [], chunk: 4 * 1024 * 1024, maxFile: 0, uploads: new Map(), listTimer: 0,
-  gen: 0, authGen: 0, ctl: new AbortController(), drafts: new Map() };
+  gen: 0, authGen: 0, ctl: new AbortController(), drafts: new Map(),
+  strip: new StripOrderer(), doorOpen: true, generation: 0, stopNote: "" };
 
 // Every async continuation is bound to what was current when it started: `gen` changes on every
 // view change (list, chat, tab, logout), `authGen` only when the pairing ends. A response that
@@ -45,6 +46,9 @@ function endSession() {
   state.pending = [];
   state.sig = "";
   state.drafts.clear();
+  state.strip = new StripOrderer();
+  state.doorOpen = true;
+  state.stopNote = "";
   for (const view of state.uploads.keys()) view.ctl.abort();
   state.uploads.clear();
   if (state.rec) { try { state.rec.abort(); } catch { /* already stopped */ } state.rec = null; }
@@ -103,6 +107,7 @@ function show(view) {
   $("composer").classList.toggle("hide", !chat);
   $("back").classList.toggle("hide", !chat);
   $("logout").classList.toggle("hide", view === "pair");
+  $("stopall").classList.toggle("hide", view === "pair"); // STOP never depends on any other data
   $("tabs").classList.toggle("hide", view === "pair");
   if (!chat) { $("status").classList.add("hide"); }
   renderChips();
@@ -252,6 +257,9 @@ async function poll() {
     const data = await api(`/api/phone/chats/${encodeURIComponent(sid)}`, { signal: t.signal });
     if (t.stale() || sid !== state.sid) return;
     running = !!(data.session && data.session.running);
+    state.generation = Number.isInteger(data.stop_generation) ? data.stop_generation : state.generation;
+    state.doorOpen = data.door_open !== false;
+    if (state.doorOpen) state.stopNote = ""; // the owner resumed on the computer
     if (data.session && data.session.title) $("title").textContent = data.session.title;
     renderEvents(data.events || [], running);
   } catch (error) {
@@ -267,7 +275,7 @@ function renderEvents(events, running) {
   const last = events.length ? events[events.length - 1].seq : -1;
   const resolved = new Set(events.filter((e) => e.kind === "approval_resolved").map((e) => e.payload.approval_id));
   state.pending = events.filter((e) => e.kind === "approval_required" && !resolved.has(e.payload.approval_id));
-  const sig = `${last}:${state.pending.map((e) => e.payload.approval_id).join(",")}:${running}`;
+  const sig = `${last}:${state.pending.map((e) => e.payload.approval_id).join(",")}:${running}:${state.doorOpen}:${state.stopNote}`;
   if (sig === state.sig) return;
   state.sig = sig;
   const main = $("main");
@@ -281,6 +289,7 @@ function renderEvents(events, running) {
     else if (event.kind === "error") main.append(el("div", "msg bot err", String(p.message || "Errore")));
     else if (event.kind === "turn_finished" && p.status === "cancelled") main.append(el("div", "act", "Fermato."));
   }
+  if (state.stopNote) main.append(el("div", "msg bot err", state.stopNote));
   for (const event of state.pending) main.append(approvalCard(event.payload));
   if (stick) main.scrollTop = main.scrollHeight;
   const working = running || state.pending.length > 0;
@@ -297,7 +306,11 @@ function approvalCard(p) {
   try { detail = p.input ? JSON.stringify(p.input, null, 2) : ""; } catch { detail = ""; }
   if (detail) card.append(el("pre", "", detail.slice(0, 1500)));
   const row = el("div", "btns");
-  for (const [decision, label, cls] of [["allow", "Approva", "primary"], ["deny", "Nega", "danger"], ["allow_always", "Sempre", ""]]) {
+  // After STOP only "Nega" is offered; "Sempre" is a desktop decision.
+  const choices = [["allow", "Approva", "primary"], ["deny", "Nega", "danger"]]
+    .filter(([decision]) => state.doorOpen || decision === "deny");
+  if (!state.doorOpen) card.append(el("div", "act", "Fermato: nessuna approvazione finché non riprendi dal computer."));
+  for (const [decision, label, cls] of choices) {
     const button = el("button", cls, label);
     button.onclick = async () => {
       row.querySelectorAll("button").forEach((b) => (b.disabled = true));
@@ -305,7 +318,9 @@ function approvalCard(p) {
       const t = scope();
       try {
         await api(`/api/phone/chats/${encodeURIComponent(sid)}/approvals/${encodeURIComponent(p.approval_id)}`, {
-          method: "POST", body: { decision }, auth: t.auth,
+          method: "POST", auth: t.auth,
+          body: { decision, request_id: p.request_id || p.approval_id, tool_name: p.name || "",
+            call_fingerprint: p.call_fingerprint || "", generation: state.generation },
         });
       } catch (error) {
         if (error.aborted) return;
@@ -638,14 +653,42 @@ $("file").onchange = (e) => {
   startUploads(Array.from(e.target.files || []), (view) => { state.staged.push(view); renderChips(); });
   e.target.value = "";
 };
-$("stop").onclick = async () => {
-  const sid = state.sid;
+// STOP: the same door as the desktop (POST /api/stop semantics). It needs no poll, no chat and no
+// fresh data. The reply is ordered by the same rules as the desktop strip and its per-part outcomes
+// are shown as they are: "stopped" only when every part is confirmed, otherwise "partly stopped".
+const OUTCOME_IT = { confirmed: "fermato", requested: "richiesto, non confermato", still_active: "ancora attivo", unknown: "non verificabile" };
+async function stopEverything() {
   const auth = state.authGen;
+  const seq = state.strip.beginWriteRequest();
+  $("stopall").disabled = true;
   $("stop").disabled = true;
-  try { await api(`/api/phone/chats/${encodeURIComponent(sid)}/cancel`, { method: "POST", auth }); } catch (error) { if (!error.aborted) alert(error.message); }
+  let note;
+  try {
+    const reply = await api(`/api/phone/stop?client_seq=${seq}`, { method: "POST", auth });
+    if (state.strip.isCurrentWrite(seq)) state.strip.accept(reply, Date.now(), seq);
+    const rep = reply.stop || {};
+    state.doorOpen = false;
+    if (Number.isInteger(reply.generation)) state.generation = reply.generation;
+    const open = (rep.results || []).filter((r) => r.outcome !== "confirmed")
+      .map((r) => `${r.name}: ${OUTCOME_IT[r.outcome] || r.outcome}`);
+    note = rep.state === "stopped" ? "STOP: tutto fermato." : `STOP parziale. ${open.join("; ") || "Alcune parti non sono confermate."}`;
+  } catch (error) {
+    if (error.aborted) return;
+    if (error.auth) return lost();
+    note = `STOP non confermato (${error.message}). Riprova.`;
+  }
+  state.stopNote = note;
+  const sid = state.sid;
+  if (sid) { // also end the open chat's turn; the door is already closed either way
+    try { await api(`/api/phone/chats/${encodeURIComponent(sid)}/cancel`, { method: "POST", auth }); } catch { /* the STOP above is what counts */ }
+  }
+  $("stopall").disabled = false;
   $("stop").disabled = false;
-  if (state.sid === sid) poll();
-};
+  state.sig = "";
+  if (state.sid && state.sid === sid) poll(); else alert(note);
+}
+$("stop").onclick = stopEverything;
+$("stopall").onclick = stopEverything;
 $("input").addEventListener("input", (e) => {
   e.target.style.height = "auto";
   e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;

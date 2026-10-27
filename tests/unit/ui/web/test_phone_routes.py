@@ -259,10 +259,12 @@ def test_chat_calls_reuse_the_desktop_routes(app, owner, monkeypatch: pytest.Mon
     sid = first.session_id if hasattr(first, "session_id") else first["session_id"]
     assert [s["session_id"] for s in phone.get("/api/phone/chats").json()["sessions"]] == [sid]
     assert phone.get(f"/api/phone/chats/{sid}").json()["session"]["title"] == "Prova"
+    identity = {"request_id": "nope", "tool_name": "Write", "call_fingerprint": "f",
+                "generation": 0}
     assert phone.post(f"/api/phone/chats/{sid}/approvals/nope",
-                      json={"decision": "allow"}).status_code in {404, 410}
+                      json={"decision": "allow", **identity}).status_code in {404, 410}
     assert phone.post(f"/api/phone/chats/{sid}/approvals/nope",
-                      json={"decision": "sudo"}).status_code == 400
+                      json={"decision": "sudo", **identity}).status_code == 422
     assert phone.post(f"/api/phone/chats/{sid}/cancel").status_code == 200
     assert phone.post(f"/api/phone/chats/{sid}/messages", json={"text": ""}).status_code == 400
     assert phone.get("/api/phone/chats/does-not-exist").status_code == 404

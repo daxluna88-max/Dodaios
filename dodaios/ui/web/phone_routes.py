@@ -25,10 +25,10 @@ import re
 import time
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote, urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -66,13 +66,40 @@ class _Hub:
             self.store.sweep()
 
 
+def _phone_root(request: Request) -> Path:
+    """The phone data directory, inside THIS product's own data dir (ADR-0049, ADR-0062).
+
+    No relative ``data`` fallback: without a configured product data directory the phone surface
+    answers 503 instead of writing next to the working directory. When a product launch is active
+    (``JARVIS_PRODUCT_ACTIVE``) the root is also checked with ``check_product_root`` (not a link,
+    not nested with the shared or the other product's directory).
+    """
+    cfg = getattr(request.app.state, "config", None)
+    data_dir = getattr(getattr(cfg, "memory", None), "data_dir", None) or os.environ.get(
+        "JARVIS_DATA_DIR"
+    )
+    if not data_dir:
+        raise HTTPException(status_code=503, detail="phone data directory is not configured")
+    root = Path(data_dir).expanduser()
+    product = os.environ.get("JARVIS_PRODUCT_ACTIVE")
+    if product:
+        from dodaios.core.product_profile import ProductError, check_product_root  # noqa: PLC0415
+
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            check_product_root(product, root)
+        except (ProductError, OSError) as exc:
+            raise HTTPException(
+                status_code=503, detail="phone data directory is not valid for this product"
+            ) from exc
+    return root / "phone"
+
+
 def _hub(request: Request) -> _Hub:
     state = request.app.state
     hub = getattr(state, "phone_hub", None)
     if hub is None:
-        cfg = getattr(state, "config", None)
-        data_dir = getattr(getattr(cfg, "memory", None), "data_dir", None) or "data"
-        hub = state.phone_hub = _Hub(Path(data_dir) / "phone")
+        hub = state.phone_hub = _Hub(_phone_root(request))
     return hub
 
 
@@ -176,7 +203,21 @@ class PhoneMessage(BaseModel):
 
 
 class PhoneApproval(BaseModel):
-    decision: str
+    """The identity of the ONE card the owner looked at (ADR-0058, block 13, ADR-0062).
+
+    ``request_id`` (the card's opaque one-use id), ``tool_name``, ``call_fingerprint`` (digest of
+    tool + arguments AS SHOWN on the card, served by ``GET /chats/{id}``) and ``generation`` (the
+    STOP generation the phone saw) are all required. The phone may only allow once or deny:
+    "always allow" is a desktop decision.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    decision: Literal["allow", "deny"]
+    request_id: str = Field(min_length=1, max_length=200)
+    tool_name: str = Field(min_length=1, max_length=300)
+    call_fingerprint: str = Field(min_length=1, max_length=200)
+    generation: int
 
 
 class PhoneNewChat(BaseModel):
@@ -208,6 +249,7 @@ async def new_chat(
         provider=provider, model=getattr(latest, "model", "") or "",
         surface=getattr(latest, "surface", "agent") or "agent",
     )
+    _ensure_active(request, _device)
     return await asyncio.to_thread(routes.create_session, created, request)
 
 
@@ -215,7 +257,31 @@ async def new_chat(
 async def chat(
     session_id: str, request: Request, _device: dict[str, Any] = Depends(_device)  # noqa: B008
 ) -> dict[str, Any]:
-    return await _chat().get_session(session_id, request, tail=120)
+    view = await _chat().get_session(session_id, request, tail=120)
+    return _with_approval_identity(view)
+
+
+def _with_approval_identity(view: dict[str, Any]) -> dict[str, Any]:
+    """Add what a phone approval must echo: ``request_id`` and ``call_fingerprint`` on each
+    approval card, plus the STOP generation and whether the door is open. Copies, not edits."""
+    from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+    from dodaios.safety.effects import call_fingerprint  # noqa: PLC0415
+
+    controller = get_stop_controller()
+    events = []
+    for event in view.get("events") or []:
+        if event.get("kind") == "approval_required":
+            payload = dict(event.get("payload") or {})
+            payload["request_id"] = payload.get("approval_id", "")
+            payload["call_fingerprint"] = call_fingerprint(
+                str(payload.get("name") or ""), payload.get("input")
+            )
+            event = {**event, "payload": payload}
+        events.append(event)
+    return {
+        **view, "events": events,
+        "stop_generation": controller.generation, "door_open": controller.door_open,
+    }
 
 
 @router.post("/chats/{session_id}/messages", status_code=202)
@@ -256,6 +322,12 @@ async def send_message(
         raise HTTPException(status_code=400, detail="write a message or attach a file")
     # Preparing the attachments awaited; a device revoked meanwhile must not reach the agent.
     _ensure_active(request, device)
+    if attachments:
+        # Files from a phone are never "known not to be local-only": the turn starts UNAVAILABLE
+        # (fail closed for remote engines/speech) and this path never calls attach_unrestricted.
+        from dodaios.brain import provenance  # noqa: PLC0415
+
+        provenance.set_turn_provenance(provenance.Provenance.UNAVAILABLE)
     message = routes.MessageBody(text=body.text, attachments=attachments, timezone=body.timezone)
     return await routes.post_message(session_id, message, request)
 
@@ -263,9 +335,46 @@ async def send_message(
 @router.post("/chats/{session_id}/approvals/{approval_id}")
 async def approve(
     session_id: str, approval_id: str, body: PhoneApproval, request: Request,
-    _device: dict[str, Any] = Depends(_device),  # noqa: B008
+    device: dict[str, Any] = Depends(_device),  # noqa: B008
 ) -> dict[str, Any]:
+    """Answer one approval card, bound to its identity, through the chat's own coordinator.
+
+    The decision still reaches ``ToolExecutor`` only via the chat approval bridge, which echoes
+    the executor ticket's own id, tool and fingerprint; this route adds no other way in. An
+    "allow" needs the door open (no approval after STOP) and the generation the phone last saw;
+    a "deny" is always accepted (it only removes work).
+    """
+    from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+    from dodaios.safety.effects import call_fingerprint  # noqa: PLC0415
+
     routes = _chat()
+    if body.request_id != approval_id:
+        raise HTTPException(status_code=400, detail="request_id does not match the card")
+    if body.decision == "allow":
+        controller = get_stop_controller()
+        admission = controller.admit()
+        if not admission.allowed:
+            raise HTTPException(
+                status_code=409, detail={"code": "stopped", "reason": admission.reason})
+        if body.generation != controller.generation:
+            raise HTTPException(
+                status_code=409, detail={"code": "stale_generation", "reason": "stale_generation"})
+        svc = await routes._async_service(request)  # noqa: SLF001
+        events = await asyncio.to_thread(svc.store.list_events, session_id)
+        card = next(
+            (e.get("payload") or {} for e in events
+             if e.get("kind") == "approval_required"
+             and (e.get("payload") or {}).get("approval_id") == approval_id),
+            None,
+        )
+        if card is not None and (
+            str(card.get("name") or "") != body.tool_name
+            or call_fingerprint(str(card.get("name") or ""), card.get("input"))
+            != body.call_fingerprint
+        ):
+            raise HTTPException(
+                status_code=409, detail={"code": "identity_mismatch", "reason": "other_call"})
+    _ensure_active(request, device)  # the lookups above awaited; revoked means nothing is decided
     return await routes.resolve_approval(
         session_id, approval_id, routes.ApprovalBody(decision=body.decision), request
     )
@@ -275,7 +384,35 @@ async def approve(
 async def cancel(
     session_id: str, request: Request, _device: dict[str, Any] = Depends(_device)  # noqa: B008
 ) -> dict[str, Any]:
+    """Ends THIS chat's turn only. The phone's STOP is ``POST /stop`` (door first)."""
     return await _chat().cancel_turn(session_id, request)
+
+
+# --------------------------------------------------------------- stop / strip
+def _strip() -> Any:
+    from dodaios.ui.web import control_strip_routes
+
+    return control_strip_routes
+
+
+@router.get("/control-strip")
+async def control_strip(
+    request: Request, client_seq: int | None = Query(default=None, ge=0),
+    _device: dict[str, Any] = Depends(_device),  # noqa: B008
+) -> dict[str, Any]:
+    """The desktop strip's own snapshot (``boot_id``, ``seq``, ``generation``, ``client_seq``)."""
+    return await _strip().get_control_strip(request, client_seq)
+
+
+@router.post("/stop", openapi_extra={"x-jarvis-dangerous": True})
+async def stop(
+    request: Request, client_seq: int | None = Query(default=None, ge=0),
+    _device: dict[str, Any] = Depends(_device),  # noqa: B008
+) -> dict[str, Any]:
+    """STOP with the semantics of ``POST /api/stop``: the StopController closes the door first,
+    then every part answers on its own (``stopped`` / ``partly_stopped``, per-part outcomes).
+    There is no phone resume: reopening the door is the owner's act on the computer."""
+    return await _strip().post_stop(request, client_seq)
 
 
 # -------------------------------------------------------------------- files

@@ -2,8 +2,8 @@
 // The cache is owned by this panel: only caches named "jarvis-panel-*" are ever deleted, and only
 // same-origin GETs under /m/ are handled, so installing the panel cannot touch other app caches.
 const PREFIX = "jarvis-panel-";
-const SHELL = `${PREFIX}v3`;
-const FILES = ["/m/", "/m/app.js", "/m/sha256.js", "/m/manifest.webmanifest", "/m/icon-256.png"];
+const SHELL = `${PREFIX}v4`;
+const FILES = ["/m/", "/m/app.js", "/m/sha256.js", "/m/order.js", "/m/manifest.webmanifest", "/m/icon-256.png"];
 self.addEventListener("install", (e) => e.waitUntil(caches.open(SHELL).then((c) => c.addAll(FILES))));
 self.addEventListener("activate", (e) => e.waitUntil(
   caches.keys().then((keys) => Promise.all(

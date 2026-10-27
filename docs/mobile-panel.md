@@ -85,3 +85,6 @@ Then `https://<machine>.<tailnet>.ts.net/m/pair.html` on the computer (it shows 
 - Not built: native iOS app, Share Extension, push notifications and background transfers (a web
   page cannot transfer in the background: keep it open while uploading); live push for chat (it polls);
   answering agent questions and credential requests; creating the very first chat (use the desktop).
+
+## Integration with the control stack (block 14)
+See `docs/adr/0062-phone-integration.md`: approvals now echo request id, tool, fingerprint and STOP generation; the panel has an always-visible STOP using `POST /api/phone/stop` (the desktop `/api/stop` semantics); remote access design and limits are there. Nothing in that block was run or tested on a device.

@@ -145,7 +145,7 @@ const assert = (cond, message) => { if (!cond) throw new Error(message); };
       await caches.open("jarvis-panel-v1");
     });
     await page.goto(`${BASE}/m/`);
-    await page.waitForFunction(async () => (await navigator.serviceWorker.ready).active && (await caches.keys()).includes("jarvis-panel-v3"), null, { timeout: 15000 });
+    await page.waitForFunction(async () => (await navigator.serviceWorker.ready).active && (await caches.keys()).includes("jarvis-panel-v4"), null, { timeout: 15000 });
     await page.waitForFunction(async () => !(await caches.keys()).includes("jarvis-panel-v1"), null, { timeout: 15000 });
     const keys = await page.evaluate(() => caches.keys());
     assert(keys.includes("other-app-v1"), `another app's cache was deleted: ${keys}`);
