@@ -45,3 +45,17 @@ Work is therefore NOT yet certified offline: it is enforced at the doors listed 
 
 - Under `work`, a remote provider selected by stale config fails with `EnginePolicyError` and opens no connection.
 - The per-call check is cheap for the common case (a set lookup; the endpoint is resolved from cached config).
+
+## Block 6: coverage
+
+**Date:** 2026-10-27 · static audit, nothing run.
+
+`engine_policy` gains `work_active`, `require_local_inference` (cloud-only function: raises `unavailable_under_work`),
+`provider_blocked_reason` (card tier + id, no credential read) and `check_endpoint_url`. Applied at the doors the
+registry did not cover: mission worker factory and in-process worker, local-only critic, vendor CLI runners of agent
+chat, background-job candidate filter, resolver probes, Society browser/seat models, flash ack and its fallbacks,
+every Gemini/Vertex client, TTS/STT factories (no "unknown -> Gemini" default; policy before key reads), subscription
+voice, dictation polish endpoint, Provider Test and voice-preview routes, Ollama probes. A missing or busy local
+engine is an error, never a cloud fallback. Full table and the list of uncovered paths (process launching, tools,
+downloads, metadata fetches): docs/engine-inventory.md, "Work policy coverage". Tests are written, not run:
+`tests/unit/brain/test_work_coverage.py`.
