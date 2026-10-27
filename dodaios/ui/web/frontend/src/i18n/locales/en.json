@@ -10397,6 +10397,8 @@
     "stale_note": "Connection lost. Nothing here is current; last reading at {time}.",
     "engine_provisional": "Chosen at the start of the turn; not yet confirmed to have answered.",
     "engine_failed": "No engine answered this turn.",
+    "engine_superseded": "STOP came before this turn finished; its reply was dropped.",
+    "planned_partial": "(partial: only what the app declares, not every item of context)",
     "engine_fell_back": "A fallback answered instead of {requested}.",
     "engine_no_model": "No model was used for this turn."
   }

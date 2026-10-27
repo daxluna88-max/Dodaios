@@ -135,24 +135,35 @@ def _locality(provider: str) -> str:
         return "unknown"
 
 
+def _model_of(branch: Branch) -> str | None:
+    """The model the branch's engine was built with, when it says so (else not known)."""
+    model = getattr(getattr(branch, "brain", None), "model", None)
+    return model if isinstance(model, str) and model else None
+
+
 def _record_turn(
     ledger: Any, turn_id: str, branches: list[Branch], results: list[Any],
-    synthesizer: Branch | None, synth: Any,
+    synthesizer: Branch | None, synth: Any, *, key: Any = None, phase: str = "completed",
 ) -> None:
     """What this turn used, for the main screen: engines, planned and attempted categories.
 
     From the orchestrator's own egress records (metadata only), so it is "declared", not seen on
-    the wire. A fault here must never touch the answer.
+    the wire. A fault here must never touch the answer. With a ``key`` (the run's identity from
+    the manager) the write is a compare-and-set: a run that is no longer the current one writes
+    nothing. ``phase``: planned (before any call), attempted (reviewers done, synthesis pending),
+    completed / failed (final). ``planned`` is partial: the synthesizer also receives the other
+    engines' answers, which are not a listed category.
     """
     if ledger is None:
         return
     try:
         from dodaios.control import turn_record as tr  # noqa: PLC0415
 
-        engines = [tr.EngineUse(b.provider, "reviewer", _locality(b.provider)) for b in branches]
+        engines = [tr.EngineUse(b.provider, "reviewer", _locality(b.provider), _model_of(b))
+                   for b in branches]
         if synthesizer is not None:
             engines.append(tr.EngineUse(synthesizer.provider, "synthesizer",
-                                        _locality(synthesizer.provider)))
+                                        _locality(synthesizer.provider), _model_of(synthesizer)))
         planned = tuple(
             tr.Flow(_CATEGORY_NAMES["task"], b.provider)
             for b in branches if _locality(b.provider) != "local"
@@ -165,18 +176,34 @@ def _record_turn(
             for e in egress for c in e.categories
         )
         refused = tuple(sorted({r.provider for r in results if r.status == "refused"}))
-        ledger.record(tr.TurnRecord(
+        record = tr.TurnRecord(
             turn_id=turn_id, engines=tuple(engines),
             planned=tr.sanitize_flows(planned), attempted=tr.sanitize_flows(attempted),
             observability="declared", refused=refused,
-        ))
+            phase=phase, state=tr._STATE_OF_PHASE[phase],  # noqa: SLF001
+            planned_partial=True,
+        )
+        if key is not None:
+            ledger.apply(key, record)
+        else:
+            ledger.record(record)
     except Exception:  # noqa: BLE001 - the screen's record never breaks a turn
         log.debug("turn record could not be written", exc_info=True)
 
 
+def _close(ledger: Any, key: Any, phase: str) -> None:
+    """End a run that used no engine (off, no engines, Work product) or died: no model, no flows."""
+    if ledger is None or key is None:
+        return
+    try:
+        ledger.update(key, phase=phase, planned_partial=False)
+    except Exception:  # noqa: BLE001 - the screen's record never breaks a turn
+        log.debug("turn record could not be closed", exc_info=True)
+
+
 async def ask(
     task: str, config: Any, registry: Any, *, turn_id: str, style_instruction: str = "",
-    ledger: Any = None,
+    ledger: Any = None, record_key: Any = None,
 ) -> MultiEngineOutcome:
     """Run the configured engines on ``task`` and write one final answer.
 
@@ -187,10 +214,13 @@ async def ask(
     awaiting task cancels every engine still running.
     """
     if engine_policy.current_product() == "work":
+        _close(ledger, record_key, "completed")
         return MultiEngineOutcome("work", provenance=provenance.Provenance.UNRESTRICTED)
     if not config.enabled:
+        _close(ledger, record_key, "completed")
         return MultiEngineOutcome("off", provenance=provenance.Provenance.UNRESTRICTED)
     if not config.engines:
+        _close(ledger, record_key, "completed")
         return MultiEngineOutcome("no_engines", provenance=provenance.Provenance.UNRESTRICTED)
 
     refusals: list[str] = []
@@ -205,11 +235,14 @@ async def ask(
         max_concurrent=config.max_concurrent,
         allow_unknown_cost=config.allow_unknown_cost,
     )
+    # planned: the reviewers are decided, no call issued yet (the synthesizer is not known yet)
+    _record_turn(ledger, turn_id, branches, [], None, None, key=record_key, phase="planned")
     results = await orchestrator.run(turn_id, items, branches) if branches else []
     refusals += [f"{r.provider}: {r.reason or r.status}" for r in results if r.status != "ok"]
     report = fan_out_report(results, orchestrator.budget)
     if not any(r.status == "ok" and r.text.strip() for r in results):
-        _record_turn(ledger, turn_id, branches, results, None, None)
+        _record_turn(ledger, turn_id, branches, results, None, None, key=record_key,
+                     phase="failed")
         return MultiEngineOutcome("no_answer", reason="; ".join(refusals), report=report)
     # Unset synthesizer: the first engine that actually answered writes the final answer (an
     # engine that just failed is not asked to do the harder job).
@@ -221,11 +254,16 @@ async def ask(
     if synthesizer is not None and style_instruction:
         synthesizer = dataclasses.replace(synthesizer, instruction=style_instruction)
     if synthesizer is None:
-        _record_turn(ledger, turn_id, branches, results, None, None)
+        _record_turn(ledger, turn_id, branches, results, None, None, key=record_key,
+                     phase="failed")
         return MultiEngineOutcome("synthesis_failed", reason="; ".join(refusals), report=report)
 
+    # attempted: reviewers answered and their calls are on record; the synthesis call is next
+    _record_turn(ledger, turn_id, branches, results, synthesizer, None, key=record_key,
+                 phase="attempted")
     synth = await orchestrator.synthesize(turn_id, items, results, synthesizer)
-    _record_turn(ledger, turn_id, branches, results, synthesizer, synth)
+    _record_turn(ledger, turn_id, branches, results, synthesizer, synth, key=record_key,
+                 phase="completed" if synth.status == "ok" and synth.text.strip() else "failed")
     report = fan_out_report(results, orchestrator.budget)
     if synth.status != "ok" or not synth.text.strip():
         reason = synth.reason or synth.status

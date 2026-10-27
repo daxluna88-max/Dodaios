@@ -197,6 +197,11 @@ class _StopTurn:
     #: Id under which this turn's engine record was opened, and the engine that last ran for it.
     ledger_turn_id: str | None = None
     identity: tuple[str, str | None] | None = None
+    #: (turn id, STOP generation, run id) the record was opened under: every later write carries it.
+    record_key: Any = None
+    #: A path that writes the final record itself (multi-engine) sets this; the generic finish
+    #: then only marks the run superseded, it never swaps in a single-engine guess.
+    record_final: bool = False
 
     def stale(self) -> bool:
         """STOP (or STOP and a resume) happened after this turn started."""
@@ -3947,41 +3952,78 @@ class BrainManager:
             ledger = self._turn_ledger_obj = TurnLedger()
         return ledger
 
-    def _record_single_engine_turn(self, trace_id: UUID) -> None:
-        """The main engine of an ordinary turn, for the control strip. Locality is the endpoint's
-        (loopback only); tools and network use are not observed here and stay 'not observed'."""
-        from dodaios.brain import engine_policy  # noqa: PLC0415
+    def _begin_turn_record(self, trace_id: UUID) -> None:
+        """Open the record of this run: NO engine yet (block 9).
+
+        The engine and model are written at dispatch (``_note_dispatch``), from the provider/model
+        actually about to be called -- the TurnOverride's or the fallback attempt's -- never from
+        a mutable attribute of the manager. A turn answered by a fast path therefore keeps no
+        engine. Identity = (turn id, STOP generation, run id).
+        """
         from dodaios.control import turn_record as tr  # noqa: PLC0415
 
         try:
-            provider = self.active_provider
-            locality = "local" if engine_policy.destination_of(provider).local else "remote"
-            planned = () if locality == "local" else (tr.Flow("question", provider),)
-            self._turn_ledger().record(tr.TurnRecord(
-                turn_id=str(trace_id), engines=(tr.EngineUse(provider, "main", locality),),
-                planned=planned, observability="declared", state="running", requested=provider,
-            ))
-            if (turn := _STOP_TURN.get()) is not None:
-                turn.ledger_turn_id = str(trace_id)
+            turn = _STOP_TURN.get()
+            if turn is None:
+                return
+            record = tr.TurnRecord(
+                turn_id=str(trace_id), generation=turn.ticket, run_id=uuid4().hex,
+                phase="planned", state="running", planned_partial=False,
+                observability="declared",
+            )
+            key = self._turn_ledger().begin(record)
+            if key is not None:  # None = refused: this run is older than the current record
+                turn.record_key = key
+                turn.ledger_turn_id = key.turn_id
+        except Exception:  # noqa: BLE001 - the screen's record never breaks a turn
+            log.debug("turn record could not be written", exc_info=True)
+
+    def _note_dispatch(self, prov_name: str, model: str | None, requested: str | None) -> None:
+        """A call is about to go to ``prov_name``/``model`` (the chain entry, so the override's or
+        the fallback's own pair). Passed explicitly: this reads no instance attribute."""
+        from dodaios.brain import engine_policy  # noqa: PLC0415
+
+        try:
+            turn = _STOP_TURN.get()
+            if turn is None:
+                return
+            turn.identity = (prov_name, model)
+            if turn.record_key is None:
+                return
+            locality = "local" if engine_policy.destination_of(prov_name).local else "remote"
+            self._turn_ledger().attempt(
+                turn.record_key, provider=prov_name, model=model, locality=locality,
+                requested=requested,
+            )
         except Exception:  # noqa: BLE001 - the screen's record never breaks a turn
             log.debug("turn record could not be written", exc_info=True)
 
     def _finish_engine_record(self, turn: _StopTurn, *, crashed: bool = False) -> None:
         """Swap the start-of-turn guess for the engine that actually ran (a fallback may have
-        answered instead). ``None`` identity = no model was used, e.g. a fast path replied."""
-        if turn.ledger_turn_id is None:
+        answered instead). ``None`` identity = no model was used, e.g. a fast path replied.
+        A turn STOP overtook is marked superseded. Compare-and-set on the run's key."""
+        key = turn.record_key
+        if key is None:
             return
         from dodaios.brain import engine_policy  # noqa: PLC0415
 
         try:
+            ledger = self._turn_ledger()
+            if turn.stale():
+                ledger.finish(key, provider=None, locality="unknown", answered=False,
+                              superseded=True)
+                return
+            if turn.record_final:
+                return
             identity = turn.identity
             provider = identity[0] if identity is not None else None
+            model = identity[1] if identity is not None else None
             locality = "unknown"
             if provider is not None:
                 locality = "local" if engine_policy.destination_of(provider).local else "remote"
-            self._turn_ledger().finish(
-                turn.ledger_turn_id, provider=provider, locality=locality,  # type: ignore[arg-type]
-                answered=not (crashed or self._last_turn_all_failed),
+            ledger.finish(
+                key, provider=provider, locality=locality,  # type: ignore[arg-type]
+                answered=not (crashed or self._last_turn_all_failed), model=model,
             )
         except Exception:  # noqa: BLE001 - the screen's record never breaks a turn
             log.debug("turn record could not be finished", exc_info=True)
@@ -9660,6 +9702,7 @@ class BrainManager:
 
         # Fail closed while the engines run and if anything below raises (R6).
         provenance.set_turn_provenance(provenance.Provenance.UNAVAILABLE)
+        stop_turn = _STOP_TURN.get()
         try:
             outcome = await multi_engine_chat.ask(
                 task, await self._multi_engine_config(), BrainProviderRegistry(),
@@ -9667,11 +9710,17 @@ class BrainManager:
                 # The owner's style applies to the FINAL answer only: reviewers stay neutral.
                 style_instruction=self._style_instruction(compact=True),
                 ledger=self._turn_ledger(),
+                record_key=stop_turn.record_key if stop_turn is not None else None,
             )
+            if stop_turn is not None and stop_turn.record_key is not None:
+                stop_turn.record_final = True  # ask() wrote the terminal record of this run
         except Exception as exc:  # noqa: BLE001 - the person gets a reason, never a crashed turn
             log.warning("multi-engine turn failed: %s", type(exc).__name__)
             outcome = multi_engine_chat.MultiEngineOutcome(
                 "no_answer", reason=f"internal error ({type(exc).__name__})")
+            if stop_turn is not None and stop_turn.record_key is not None:
+                self._turn_ledger().update(stop_turn.record_key, phase="failed")
+                stop_turn.record_final = True
         # The outcome's typed label replaces the pessimistic one (the label only ever rides on the
         # turn channel and the returned LabelledText, never on the text content).
         provenance.begin_turn()
@@ -10804,6 +10853,9 @@ class BrainManager:
             )
             return stopped_reply
 
+        # Block 9: the run's record is opened here, before any fast path, with no engine yet.
+        self._begin_turn_record(turn_trace_id)
+
         # Tool-surface self-heal (live 2026-07-13): a source that connects
         # AFTER the boot's last BrainToolsChanged — or whose event is lost to a
         # wedged plugin bootstrap — otherwise stays invisible for the WHOLE
@@ -10916,7 +10968,6 @@ class BrainManager:
                 use_history=use_history, trace_id=turn_trace_id,
             )
             return multi_reply
-        self._record_single_engine_turn(turn_trace_id)
 
         society_reply = await self._run_society_inventory_fast_path(
             user_text, trace_id=turn_trace_id,
@@ -12050,8 +12101,7 @@ class BrainManager:
             # Set here — after dead/cooldown skips — so it always names the
             # provider that genuinely runs this attempt, including a fallback win.
             self._active_turn_identity = (prov_name, model)
-            if (turn := _STOP_TURN.get()) is not None:
-                turn.identity = (prov_name, model)
+            self._note_dispatch(prov_name, model, chain[0][0] if chain else prov_name)
             # Delegated realtime voice turns get hard loop bounds so an
             # unbounded delegate can never run away (live 2026-07-14: 14
             # rounds / 66 s on "what is in my wiki"). They are ceilings, not

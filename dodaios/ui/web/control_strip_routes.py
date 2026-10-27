@@ -292,12 +292,14 @@ def _engine_payload(record: Any) -> dict[str, Any]:
         return {"turn_id": None, "inference": "none", "engines": [],
                 "network_tools": "not_observed", "planned": [], "attempted": [],
                 "observability": "none", "refused": [], "state": "answered",
-                "requested": None, "fell_back": False}
+                "requested": None, "fell_back": False, "phase": "completed",
+                "planned_partial": False, "generation": None, "run_id": None,
+                "earlier_attempts": []}
     return {
         "turn_id": record.turn_id,
         "inference": record.inference,
-        "engines": [{"provider": e.provider, "role": e.role, "locality": e.locality}
-                    for e in record.engines],
+        "engines": [{"provider": e.provider, "role": e.role, "locality": e.locality,
+                     "model": e.model} for e in record.engines],
         "network_tools": record.network_tools,
         "planned": [{"category": f.category, "destination": f.destination}
                     for f in record.planned],
@@ -308,6 +310,11 @@ def _engine_payload(record: Any) -> dict[str, Any]:
         "state": record.state,
         "requested": record.requested,
         "fell_back": record.fell_back,
+        "phase": record.lifecycle,
+        "planned_partial": record.planned_partial,
+        "generation": record.generation,
+        "run_id": record.run_id,
+        "earlier_attempts": list(record.earlier_attempts),
     }
 
 

@@ -10397,6 +10397,8 @@
     "stale_note": "Conexión perdida. Nada aquí está actualizado; última lectura a las {time}.",
     "engine_provisional": "Elegido al empezar el turno; aún sin confirmar que respondió.",
     "engine_failed": "Ningún motor respondió en este turno.",
+    "engine_superseded": "STOP came before this turn finished; its reply was dropped.",
+    "planned_partial": "(partial: only what the app declares, not every item of context)",
     "engine_fell_back": "Respondió un motor alternativo en lugar de {requested}.",
     "engine_no_model": "No se usó ningún modelo en este turno."
   }

@@ -10397,6 +10397,8 @@
     "stale_note": "Verbindung verloren. Nichts hier ist aktuell; letzte Messung um {time}.",
     "engine_provisional": "Zu Beginn des Zugs gewählt; noch nicht als Antwortender bestätigt.",
     "engine_failed": "In diesem Zug hat keine Engine geantwortet.",
+    "engine_superseded": "STOP came before this turn finished; its reply was dropped.",
+    "planned_partial": "(partial: only what the app declares, not every item of context)",
     "engine_fell_back": "Ein Ersatz hat statt {requested} geantwortet.",
     "engine_no_model": "Für diesen Zug wurde kein Modell verwendet."
   }

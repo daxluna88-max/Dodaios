@@ -266,3 +266,26 @@ real app or Windows):
   `DesktopRealtimeBargeInDetector` are not ticketed. Realtime relies on the hangup to end the session; only provider
   PCM delivered through `DesktopRealtimePlayback` is gated. `control/wiring.wire_voice_kill_switch` is not wired in
   the app and was not changed. No lip sync or voice modulation exists or is claimed.
+
+## Block 9: turn record (2026-10-27, local, not run)
+
+The turn record now says what actually ran, and who it belongs to. Full event table, sources of truth and gaps:
+`docs/turn-record-audit-2026-10-27.md`.
+
+- **Identity.** A record is `(turn id, STOP generation, run id)`. `TurnLedger.begin` opens it when the turn passes
+  the STOP door (before any fast path); every later write (`attempt`, `apply`, `update`, `finish`) carries that key
+  and is applied only while it is still the current one (compare-and-set). A late writer of an older turn, or of an
+  older STOP generation, changes nothing. The multi-engine path writes with the same key, so an old answer finishing
+  late cannot replace the new turn's record.
+- **Engine and model at dispatch.** `BrainManager._note_dispatch(provider, model, requested)` is called with the chain
+  entry about to be called (the TurnOverride's pair or the fallback attempt's). The manager's `active_provider` is no
+  longer read. A fallback replaces the engine and keeps the failed one in `earlier_attempts`. A turn answered by a
+  fast path has no engine.
+- **States.** `phase`: planned, attempted, completed, failed, superseded (STOP overtook the turn). `state` stays for
+  older readers and agrees with it (`superseded` is new).
+- **Planned is partial.** `planned_partial` is true whenever a model ran: `planned` lists the question to a remote
+  engine, not history, memory, files or tool output. The panel says so.
+- **Not done.** Persistence and history; failure reasons; `resolve_engine` source and `FallbackRouter` attempts are
+  not wired to the record; `run_task` and non-`_generate` voice paths record nothing; `tools_used` / `network_tools`
+  still not observed. Tests were written, not run: `tests/unit/control/test_turn_record_identity.py`,
+  `tests/unit/brain/test_turn_record_dispatch.py`.
