@@ -164,3 +164,56 @@ not gated; the label lives in process memory; the text registry is still a floor
 Controls prepared, NOT RUN (`tests/test_block9_gpt_round2.py`, updated `tests/test_block8_review_r6_r7.py`): plain and
 short text ("42", "ok") is refused for a remote TTS; a transformed plain string is refused; a labelled UNRESTRICTED chunk
 passes; two turns in two asyncio tasks do not reset each other; an UNAVAILABLE merge cannot be lifted by UNRESTRICTED.
+
+## Block 13: GPT round 3 (G2)
+
+Finding G2 (HIGH): unknown provenance still became remote-replayable history and curator input. State: **fixed for the
+history, replay, curator and persisted-chat boundaries named below; partial overall** (uncovered paths listed).
+
+Cause: `withheld_from_remote_store` blocked only on a POSITIVE restricted/unavailable signal, and a turn that no path
+labelled starts in the undeclared state (`label()` is UNAVAILABLE but neither flag is set). `_record_response_side_effects`
+therefore wrote both messages with `restricted=False` and invoked the curator, so ordinary unlabelled paths (paths, tool,
+wiki, screen-derived data) were not fail-closed for later remote replay or curation.
+
+Implementation choice (typed label stored WITH each message, missing = UNAVAILABLE):
+
+* `brain/provenance.py`: `storage_label(text)` returns RESTRICTED on any positive signal, UNRESTRICTED only on a positive
+  declaration (turn channel `attach_unrestricted`, text label not contradicting, registry not matching), else UNAVAILABLE.
+  `withheld_from_remote_store` is now fail closed (`storage_label != UNRESTRICTED`). New `parse` (None, empty, unknown or
+  garbage = UNAVAILABLE), `remote_replayable` (only a stored UNRESTRICTED) and `local_only_signal` (the old block-8
+  "positive evidence" test, kept for callers that tag rather than permit).
+* `core/protocols.py`: `BrainMessage.provenance: str = "unavailable"` (the legacy `restricted` flag still vetoes).
+* `brain/manager.py`: `_record_response_side_effects` and the second history append in `generate` store the
+  `storage_label` value on the user and assistant messages; the curator runs only when the stored label is UNRESTRICTED
+  (the second path used to call it unconditionally). `_history_for_engine` sends a REMOTE (or unknown) engine only messages
+  whose label is positively UNRESTRICTED; a local engine still sees all history, unchanged and not relabelled.
+  `_seedable` keeps the label of a seeded dict/`BrainMessage` and gives a bare `(role, text)` pair UNAVAILABLE. Drop-context
+  notes, background notes and any other `BrainMessage` built without a label are UNAVAILABLE by default.
+* Durable: `state/chat_store.py` adds a nullable `chat_messages.provenance` column (`_COLUMN_MIGRATIONS`, applied on open);
+  `add_message(provenance=...)` stores it, `get_thread` returns it, NULL (every old row) reads as `unavailable`.
+  `ui/web/chats_routes.py`: `ChatTurn.provenance` and `_seed_messages` carry the stored label into `seed_history` on resume
+  (`_seed_pairs` is kept for the other callers). `memory/control/proposals.py` now tags with `local_only_signal` so its
+  "restricted/unlabelled" tag keeps its previous meaning.
+
+Functional consequence (intended, visible): with no path declaring UNRESTRICTED, a REMOTE engine receives no prior-turn
+history, and the curator learns nothing from ordinary turns, until a path proves a turn clean. Only the multi-engine
+outcomes already known clean declare UNRESTRICTED. History was NOT promoted to unrestricted to keep either feature working.
+
+Residual limits / open:
+* The chat writers in `ui/web/launcher.py` and `ui/desktop_app.py` call `add_message` outside the turn's context (the reply
+  comes back through an executor/task), so they do not pass a label: persisted ordinary rows are stored NULL = UNAVAILABLE.
+  After a restart a resumed chat is therefore local-engine-only for replay. Passing a real label needs the brain to hand it
+  back with the reply; not done (open).
+* Not covered: voice native/realtime (`take_voice_history_seed`, realtime context, the engine speaking by itself), the
+  `_previous_user_turn_text` follow-up detector (local use), and the memory labels of `turn_memory` (a provider that labels
+  a note `local_only=False` is still trusted as a positive "shareable" claim; unlabelled `recall()` text is already withheld
+  from remote). Summaries (`BrainManager.summarize`) take caller-supplied text and were not changed here. None of these is
+  claimed closed.
+* The label lives next to the text; text rewritten by a path that drops it becomes UNAVAILABLE, not leaked. No OS-level
+  enforcement exists.
+
+Controls prepared, NOT RUN (`tests/test_block13_gpt_round3.py`, updated `tests/test_block8_review_r6_r7.py`): an undeclared
+turn stores `unavailable` on both messages and does not call the curator; a declared-clean turn stores `unrestricted` and
+calls it once; a remote engine's history view contains only `unrestricted` messages; a local engine keeps all; seeded
+unlabelled pairs stay `unavailable`; a chat DB created before the column reads old rows as `unavailable`, and a label written
+before a "restart" (second `ChatStore` on the same file) is read back. Nothing was run: no test, no CI, no build, no app.

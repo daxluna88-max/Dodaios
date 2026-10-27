@@ -102,7 +102,8 @@ def test_history_for_remote_engine_drops_restricted_messages():
 
     hist = [BrainMessage(role="user", content="q", restricted=True),
             BrainMessage(role="assistant", content="a", restricted=True),
-            BrainMessage(role="user", content="ok")]
+            BrainMessage(role="user", content="ok", provenance="unrestricted"),
+            BrainMessage(role="user", content="unlabelled")]  # block 13: missing label = withheld
     remote_view = _history_for_engine(hist, "openai")
     assert [m.content for m in remote_view] == ["ok"]
 

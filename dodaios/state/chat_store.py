@@ -47,6 +47,10 @@ class ChatMessage:
     # The reasoning trace that produced an assistant reply (the event list
     # ``dodaios.state.turn_trace`` records); None for every other message.
     trace: dict[str, Any] | None = None
+    # Typed provenance (``dodaios.brain.provenance.Provenance`` value) stored with the message so
+    # it survives a restart. None = never labelled = UNAVAILABLE (never replayed to a remote
+    # engine); a local engine still sees the message.
+    provenance: str | None = None
 
 
 # Titles we treat as auto-derivable: the first user message replaces them.
@@ -81,6 +85,9 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_thread
 # the UI replays into "Thought for 4s" + steps when a chat is reopened.
 _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("chat_messages", "trace_json", "TEXT"),
+    # Block 13 (G2): typed provenance of the message. NULL on every pre-existing row, which reads
+    # as UNAVAILABLE: old history is never promoted to remote-replayable.
+    ("chat_messages", "provenance", "TEXT"),
 )
 
 
@@ -112,6 +119,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
         have = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
         if column not in have:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
+def _stored_provenance(raw: Any) -> str:
+    """A stored label read back; NULL, empty or unknown is ``unavailable`` (fail closed)."""
+    from dodaios.brain.provenance import parse  # noqa: PLC0415
+
+    return parse(raw).value
 
 
 def _dump_trace(trace: dict[str, Any] | None) -> str | None:
@@ -258,7 +272,7 @@ class ChatStore:
             if head is None:
                 return None
             msgs = conn.execute(
-                "SELECT message_id, thread_id, role, text, timestamp_ns, trace_json "
+                "SELECT message_id, thread_id, role, text, timestamp_ns, trace_json, provenance "
                 "FROM chat_messages WHERE thread_id = ? ORDER BY rowid",
                 (thread_id,),
             ).fetchall()
@@ -276,6 +290,7 @@ class ChatStore:
                     "text": m["text"],
                     "timestamp_ns": m["timestamp_ns"],
                     "trace": _load_trace(m["trace_json"]),
+                    "provenance": _stored_provenance(m["provenance"]),
                 }
                 for m in msgs
             ],
@@ -335,8 +350,13 @@ class ChatStore:
         text: str,
         publish_event: bool = True,
         trace: dict[str, Any] | None = None,
+        provenance: str | None = None,
     ) -> ChatMessage:
         """Append a message; ``trace`` is the reasoning trace behind a reply.
+
+        ``provenance`` is the typed label the writer positively knows (``unrestricted`` /
+        ``restricted`` / ``unavailable``). Omitted = stored NULL = UNAVAILABLE: a writer outside
+        the turn's context must not guess a label (block 13, G2).
 
         The trace is stored as JSON next to the text and handed back by
         :meth:`get_thread` so a reopened chat shows the steps again. It is
@@ -351,15 +371,17 @@ class ChatStore:
             text=text,
             timestamp_ns=time_ns(),
             trace=trace if trace and trace.get("events") else None,
+            provenance=None if provenance is None else _stored_provenance(provenance),
         )
         trace_json = _dump_trace(trace)
         conn = self._ensure_conn()
         with self._lock:
             conn.execute(
                 "INSERT INTO chat_messages "
-                "(message_id, thread_id, role, text, timestamp_ns, trace_json) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (msg.message_id, thread_id, role, text, msg.timestamp_ns, trace_json),
+                "(message_id, thread_id, role, text, timestamp_ns, trace_json, provenance) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (msg.message_id, thread_id, role, text, msg.timestamp_ns, trace_json,
+                 msg.provenance),
             )
             conn.execute(
                 "UPDATE chat_threads SET updated_at_ns = ? WHERE thread_id = ?",
