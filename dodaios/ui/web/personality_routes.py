@@ -52,6 +52,8 @@ def _saved() -> personality.ParsedProfile:
     try:
         raw = tomllib.loads(path.read_text(encoding="utf-8")).get("brain", {}).get("personality")
     except (OSError, ValueError):
+        log.warning("personality: the config file could not be read; showing the defaults",
+                    exc_info=True)
         raw = None
     return personality.parse(raw)
 
