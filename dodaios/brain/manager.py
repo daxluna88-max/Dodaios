@@ -7675,10 +7675,27 @@ class BrainManager:
         names: list[str],
         user_text: str,
     ) -> None:
-        """Brief newly mounted Codex panes once their real input lines exist."""
+        """Brief newly mounted Codex panes once their real input lines exist.
+
+        The STOP generation taken when this background task was created travels in
+        ``work_ticket`` (ADR-0058); it is re-verified at the start and right before the prompts
+        are delivered.
+        """
         from dodaios.agentic_ide import fanout as ide_fanout
         from dodaios.agentic_ide import intent as ide_intent
         from dodaios.agentic_ide.fleet_actions import wait_for_prompt_ready
+        from dodaios.control.stop import get_stop_controller, work_ticket  # noqa: PLC0415
+
+        stop_ticket = work_ticket.get()
+
+        def _stopped() -> bool:
+            return stop_ticket is not None and not get_stop_controller().admit(
+                stop_ticket
+            ).allowed
+
+        if _stopped():
+            log.info("Agentic IDE spawned-fleet briefing: not started, the owner pressed STOP")
+            return
 
         instruction = ide_intent.spawn_instruction(user_text)
         # Read once, up front: this runs as a background task that outlives the
@@ -7744,6 +7761,9 @@ class BrainManager:
                 ", ".join(missing),
             )
         if not ready:
+            return
+        if _stopped():
+            log.info("Agentic IDE spawned-fleet briefing: not delivered, the owner pressed STOP")
             return
 
         result = await ide_fanout.deliver(
@@ -8024,10 +8044,17 @@ class BrainManager:
             if tasks is None:
                 tasks = set()
                 self._ide_background_tasks = tasks
-            task = asyncio.create_task(
-                self._brief_spawned_agentic_ide_fleet(session, names, user_text),
-                name="agentic-ide-spawned-fleet-briefing",
-            )
+            from dodaios.control.stop import get_stop_controller, work_ticket  # noqa: PLC0415
+
+            # The task copies this context: the ticket is taken now, at creation.
+            ticket_token = work_ticket.set(get_stop_controller().ticket())
+            try:
+                task = asyncio.create_task(
+                    self._brief_spawned_agentic_ide_fleet(session, names, user_text),
+                    name="agentic-ide-spawned-fleet-briefing",
+                )
+            finally:
+                work_ticket.reset(ticket_token)
             tasks.add(task)
 
             def _briefing_done(done: asyncio.Task[Any]) -> None:

@@ -60,6 +60,9 @@ class ParkedWork:
     task: asyncio.Task[None] | None = None
     #: The delegates have reported; only the chat's seat is still awaited.
     reported: bool = False
+    #: The STOP generation when the request was parked (ADR-0058): a result of work the owner
+    #: stopped is not brought back as a new turn, not even after a resume.
+    stop_ticket: int | None = None
 
     def names(self) -> list[str]:
         """Who is still working on it."""
@@ -144,6 +147,9 @@ class ParkedWorkBoard:
             gate=gate,
             rows=list(rows),
         )
+        from dodaios.control.stop import get_stop_controller
+
+        parked.stop_ticket = get_stop_controller().ticket()
         self._parked.setdefault(session_id, []).append(parked)
         gate.detached = True
         # Started from the turn's own task, so the trusted turn identity that
@@ -213,11 +219,20 @@ class ParkedWorkBoard:
         self, session_id: str, parked: ParkedWork, rows: list[dict[str, Any]]
     ) -> None:
         """Continue the earlier request once the chat has room for it."""
+        from dodaios.control.stop import get_stop_controller
+
         from .send_queue import has_waiting
         from .service import NoSuchSession, SessionBusy
 
         prompt = continuation_prompt(rows, parked.original, later=True)
         while not parked.gate.stop.is_set():
+            if parked.stop_ticket is not None and not get_stop_controller().admit(
+                parked.stop_ticket
+            ).allowed:
+                # Re-verified before the continuation becomes a new turn.
+                log.info("agent chat %s: a background result was dropped after STOP", session_id)
+                await self._lost(session_id, parked)
+                return
             # The person's own waiting messages go first: they were typed
             # before this result existed.
             if not self._service.is_running(session_id) and not has_waiting(
