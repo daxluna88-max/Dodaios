@@ -132,7 +132,7 @@ async def test_a_started_row_from_a_crashed_process_is_unknown(tmp_path) -> None
     fp = call_fingerprint("send_mail", {"to": "a"})
     assert ledger.claim("turn", "call_1", "send_mail", fp)
     # simulate another process run: rewrite the boot id
-    ledger._db.execute("UPDATE effects SET boot='old-boot'")  # noqa: SLF001
+    ledger._db.execute("UPDATE effect_calls SET boot='old-boot'")  # noqa: SLF001
     assert ledger.inspect("turn", "call_1", "send_mail", fp).kind == "unknown"
 
 
@@ -158,11 +158,17 @@ async def test_approval_for_other_arguments_is_ignored() -> None:
     fp = call_fingerprint("send_mail", {"to": "a"})
     ticket = approval.arm(tid, tool_name="send_mail", fingerprint=fp)
     evil = call_fingerprint("send_mail", {"to": "evil"})
-    await bus.publish(ActionApproved(trace_id=tid, tool_name="send_mail", call_fingerprint=evil))
+    await bus.publish(ActionApproved(
+        trace_id=tid, tool_name="send_mail", call_fingerprint=evil, approval_id=ticket.approval_id,
+    ))
     assert ticket.peek() is None
-    await bus.publish(ActionApproved(trace_id=tid, tool_name="other_tool"))
+    await bus.publish(ActionApproved(
+        trace_id=tid, tool_name="other_tool", call_fingerprint=fp, approval_id=ticket.approval_id,
+    ))
     assert ticket.peek() is None
-    await bus.publish(ActionApproved(trace_id=tid, tool_name="send_mail", call_fingerprint=fp))
+    await bus.publish(ActionApproved(
+        trace_id=tid, tool_name="send_mail", call_fingerprint=fp, approval_id=ticket.approval_id,
+    ))
     assert ticket.peek() == (True, "auto")
     ticket.close()
 
@@ -191,12 +197,14 @@ async def test_voice_confirm_runs_the_stashed_arguments_once_and_only_when_match
     deferred = await ex.execute(
         tool, {"to": "a"}, trace_id=tid, effect_key="c1", config_snapshot={"voice_confirm": True}
     )
-    fp = deferred.output["call_fingerprint"]
-    wrong = await ex.execute_confirmed(tid, expected_fingerprint="0" * 64)
+    fp, aid = deferred.output["call_fingerprint"], deferred.output["approval_id"]
+    wrong = await ex.execute_confirmed(
+        tid, expected_fingerprint="0" * 64, expected_approval_id=aid
+    )
     assert not wrong.success and tool.runs == []
-    ok = await ex.execute_confirmed(tid, expected_fingerprint=fp)
+    ok = await ex.execute_confirmed(tid, expected_fingerprint=fp, expected_approval_id=aid)
     assert ok.success and tool.runs == [{"to": "a"}]
-    again = await ex.execute_confirmed(tid)
+    again = await ex.execute_confirmed(tid, expected_fingerprint=fp, expected_approval_id=aid)
     assert not again.success and len(tool.runs) == 1
 
 
@@ -205,11 +213,17 @@ async def test_voice_confirm_after_stop_does_not_run() -> None:
 
     _bus, _approval, ex = _executor(mode="ask")
     tool, tid = _Effect(tier="ask"), uuid4()
-    await ex.execute(tool, {"to": "a"}, trace_id=tid, config_snapshot={"voice_confirm": True})
+    deferred = await ex.execute(
+        tool, {"to": "a"}, trace_id=tid, config_snapshot={"voice_confirm": True}
+    )
     controller = get_stop_controller()
     await controller.stop()
     try:
-        result = await ex.execute_confirmed(tid)
+        result = await ex.execute_confirmed(
+            tid,
+            expected_fingerprint=deferred.output["call_fingerprint"],
+            expected_approval_id=deferred.output["approval_id"],
+        )
     finally:
         controller.resume()
     assert not result.success and tool.runs == []

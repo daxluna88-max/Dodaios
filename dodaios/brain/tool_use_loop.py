@@ -1616,6 +1616,7 @@ class ToolUseLoop:
                             "trace_id": result.output.get("trace_id"),
                             "tool_name": result.output.get("tool_name", tool_name),
                             "call_fingerprint": result.output.get("call_fingerprint"),
+                            "approval_id": result.output.get("approval_id"),
                         }
                         if text_consumer is not None and question:
                             try:

@@ -243,6 +243,9 @@ class LiveTools:
         # The session's connection generation, stamped on every task.
         self.wire_epoch: Any = lambda: 0
         self._pending: dict[str, tuple[UUID, str, dict, int]] = {}
+        # Identity of each open question (block 8): (call fingerprint, executor approval id).
+        # Presented again, with the trace, when the yes arrives.
+        self._pending_identity: dict[str, tuple[str, str]] = {}
         self._names: dict[str, str] = {}
         self._defer_catalog = False
         self.end_requested = False
@@ -815,6 +818,7 @@ class LiveTools:
                     "next_step": "Ask for a plain yes or no, then call confirm_action again.",
                 }
             trace, _, _, _ = self._pending.pop(approval_id)
+            identity = self._pending_identity.pop(approval_id, ("", ""))
             from dodaios.core.model_selection import ModelSelection, use_operation_model
 
             self._confirming.add(approval_id)
@@ -824,10 +828,12 @@ class LiveTools:
                         self.model_selection or ModelSelection("openai", self.backend_model)
                     ):
                         result = await self.gateway.execute_confirmed(
-                            trace, self._request(trace)
+                            trace, self._request(trace, *identity)
                         )
                 else:
-                    result = await self.gateway.execute_confirmed(trace, self._request(trace))
+                    result = await self.gateway.execute_confirmed(
+                        trace, self._request(trace, *identity)
+                    )
             finally:
                 self._confirming.discard(approval_id)
             return self._result(result)
@@ -909,6 +915,11 @@ class LiveTools:
             # unanswerable until its report was told (``approval_presented``).
             asked_at = sys.maxsize if call_id in self._released else self.revision
             self._pending[approval_id] = (trace, canonical, dict(args), asked_at)
+            if isinstance(result.output, dict):
+                self._pending_identity[approval_id] = (
+                    str(result.output.get("call_fingerprint") or ""),
+                    str(result.output.get("approval_id") or ""),
+                )
             return {
                 "success": False,
                 "confirmation_required": True,
@@ -1035,9 +1046,13 @@ class LiveTools:
         verdicts = {classify_response(text, language=locale) for locale in _APPROVAL_LOCALES}
         return "confirm" in verdicts and "veto" not in verdicts
 
-    def _request(self, trace: UUID) -> SupervisorToolRequest:
+    def _request(
+        self, trace: UUID, call_fingerprint: str = "", approval_id: str = ""
+    ) -> SupervisorToolRequest:
         return SupervisorToolRequest(
             trace_id=trace,
+            call_fingerprint=call_fingerprint,
+            approval_id=approval_id,
             origin="realtime",
             user_utterance=self.request_text,
             cancel_token=self.cancel_token,
@@ -1079,5 +1094,6 @@ class LiveTools:
     async def _cancel_confirmations(self, reason: str) -> None:
         pending = tuple(self._pending.values())
         self._pending.clear()
+        self._pending_identity.clear()
         for trace, _, _, _ in pending:
             await self.gateway.cancel_pending(trace, reason=reason)

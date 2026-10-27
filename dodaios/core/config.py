@@ -2059,6 +2059,10 @@ class SafetyConfig(BaseModel):
     # call should fail fast and honestly (the worker observes the denial and
     # adapts, ADR-0031/W3) instead of burning its iteration budget blocked.
     tool_approval_timeout_s: float = Field(default=60.0, ge=5.0, le=600.0)
+    # Block 8: when the persistent effect ledger cannot be opened, calls with side effects are
+    # refused. Setting this lets them run with a per-process ledger instead (a restart or a
+    # second process is then NOT covered; the state is reported as "reduced"). Owner choice.
+    effect_ledger_allow_reduced_protection: bool = False
 
 
 class SkillsConfig(BaseModel):

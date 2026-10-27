@@ -489,6 +489,9 @@ class _PendingConfirmation:
     trace_id: UUID
     tool_name: str
     confirmed: bool = False
+    #: Identity of the question that was asked (block 8): presented again on the "yes".
+    call_fingerprint: str = ""
+    approval_id: str = ""
 
 
 class RealtimeToolBridge:
@@ -879,7 +882,9 @@ class RealtimeToolBridge:
                         name, language=self._language
                     ),
                 }
-            result = await self._execute_confirmed(pending.trace_id)
+            result = await self._execute_confirmed(
+                pending.trace_id, pending.call_fingerprint, pending.approval_id
+            )
             self._pending = None
             response = _bounded_result(
                 bool(getattr(result, "success", False)),
@@ -897,7 +902,12 @@ class RealtimeToolBridge:
             getattr(result, "error", None) == VOICE_CONFIRM_SENTINEL
             and isinstance(getattr(result, "output", None), dict)
         ):
-            self._pending = _PendingConfirmation(trace_id=trace_id, tool_name=name)
+            self._pending = _PendingConfirmation(
+                trace_id=trace_id,
+                tool_name=name,
+                call_fingerprint=str(result.output.get("call_fingerprint") or ""),
+                approval_id=str(result.output.get("approval_id") or ""),
+            )
             impact = result.output.get("impact")
             if not isinstance(impact, dict):
                 impact = {}
@@ -953,7 +963,9 @@ class RealtimeToolBridge:
             trace_id=trace_id,
         )
 
-    async def _execute_confirmed(self, trace_id: UUID) -> Any:
+    async def _execute_confirmed(
+        self, trace_id: UUID, call_fingerprint: str = "", approval_id: str = ""
+    ) -> Any:
         if self._gateway is not None:
             return await self._gateway.execute_confirmed(
                 trace_id,
@@ -962,12 +974,16 @@ class RealtimeToolBridge:
                     origin="realtime",
                     user_utterance=self._last_user_text,
                     config_snapshot={"output_language": self._language},
+                    call_fingerprint=call_fingerprint,
+                    approval_id=approval_id,
                 ),
             )
         return await self._executor.execute_confirmed(
             trace_id,
             user_utterance=self._last_user_text,
             config_snapshot={"output_language": self._language},
+            expected_fingerprint=call_fingerprint or None,
+            expected_approval_id=approval_id or None,
         )
 
     async def _cancel_pending(self, trace_id: UUID) -> bool:

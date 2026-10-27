@@ -228,6 +228,7 @@ class FindToolsTool:
     name: str = FIND_TOOLS_NAME
     risk_tier: RiskTier = "safe"
     is_lookup_only: bool = True
+    read_only = True  # declared: the effect ledger no longer guesses reads from the safe tier
 
     def __init__(
         self,

@@ -12,9 +12,11 @@ the executor fetches transcript confidence + wake age and decides whether
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
@@ -46,6 +48,7 @@ from .effects import (
     call_fingerprint,
     get_default_ledger,
     is_side_effecting,
+    no_effect_evidence,
 )
 from .gate import (
     GATE_REASON,
@@ -111,6 +114,36 @@ APPROVAL_UNAVAILABLE_OUTCOME = "approval_unavailable"
 PlausibilityContextFn = Callable[[], "tuple[Transcript | None, float | None]"]
 
 
+#: ``ToolResult.error`` of an effectful call refused because the ledger cannot record it.
+LEDGER_UNAVAILABLE_ERROR = "effect-ledger-unavailable (not run: could not record it)"
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingVoice:
+    """One deferred two-turn confirmation. ``approval_id`` is its one-use identity: the "ja" must
+    present it together with the fingerprint, and it becomes the ledger ``attempt`` when the
+    confirmation was what allows an unknown/duplicate call to run again."""
+
+    tool: Tool
+    args: dict[str, Any]
+    fingerprint: str
+    key: str
+    stop_ticket: int
+    stashed_at: float
+    approval_id: str
+    effect_reason: str = ""
+
+
+def _snapshot_args(tool: Tool, args: dict[str, Any]) -> dict[str, Any] | None:
+    """A deep, private copy of the arguments: what is fingerprinted, shown, approved and run is
+    this one object, so a later change to the caller's dict (or a tool mutating its input)
+    cannot make the approved call differ from the executed one. None = cannot be copied."""
+    try:
+        return copy.deepcopy(args)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _door_ticket_now() -> int:
     from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
 
@@ -155,8 +188,7 @@ class ToolExecutor:
         # conversational turn, keyed by trace_id, awaiting an ``execute_confirmed``
         # (user said "ja") or ``cancel_pending`` (user said "nein"). The tool +
         # args live here OUT-OF-BAND — never in the serialized ToolResult.output.
-        # value: (tool, args, call fingerprint, effect key, STOP ticket, monotonic stash time)
-        self._pending_voice: dict[UUID, tuple[Tool, dict[str, Any], str, str, int, float]] = {}
+        self._pending_voice: dict[UUID, _PendingVoice] = {}
         # Effect ledger (block 7): None = the process-wide one.
         self._ledger = ledger
         # ADR-0040, record only: the addressable values tool results held, per
@@ -218,33 +250,64 @@ class ToolExecutor:
         fingerprint: str,
         side_effecting: bool,
         t_start: float,
+        stop_ticket: int,
+        attempt: str = "",
     ) -> ToolResult:
-        """Run the tool exactly once: claim the ledger row first, record the outcome after.
+        """The final execution boundary: recheck, reserve the ledger row, run exactly once.
 
-        A raise or a cancellation leaves the effect UNKNOWN (the next identical call must be
-        confirmed by the owner); a returned error result is a known failure."""
-        ledger = self._effects()
+        Everything that can say no is checked HERE, after the last authorization await and with
+        no await between the reservation and the tool: STOP for the generation this call
+        started under (``stop_ticket`` is mandatory; "the door is open now" is not enough after a
+        resume), the offline profile, and that the arguments still are the approved ones. A
+        raise or a cancellation leaves the effect UNKNOWN; so does a returned error unless the
+        tool vouched that it applied nothing."""
+        from dodaios.core.tool_read_only import allows_read as _reads
+
+        async def refuse(reason: str, error: str) -> ToolResult:
+            await self._bus.publish(ActionDenied(trace_id=tid, tool_name=tool.name, reason=reason))
+            return ToolResult(success=False, output=None, error=error)
+
+        stopped = stop_refusal(stop_ticket)
+        if stopped is not None and not _reads(tool, args):
+            return await refuse(stopped, f"stopped ({stopped})")
+        from dodaios.core import egress_guard
+
+        offline = egress_guard.tool_refusal(tool.name)
+        if offline is not None:
+            return await refuse(offline, offline)
+        if call_fingerprint(tool.name, args) != fingerprint:
+            return await refuse(
+                "arguments changed after the decision", "not run: arguments changed after approval"
+            )
+        ledger: EffectLedger | None = None
         scope = str(tid)
-        claimed = False
         if side_effecting:
             try:
-                claimed = ledger.claim(scope, key, tool.name, fingerprint)
-            except Exception as exc:  # noqa: BLE001 - a broken ledger must not run an effect unrecorded
+                ledger = self._effects()
+                reservation = ledger.reserve(scope, key, tool.name, fingerprint, attempt)
+            except Exception as exc:  # noqa: BLE001 - an unrecorded effect must not run
                 log.error("effect ledger unavailable (%r): refusing %s", exc, tool.name)
-                return ToolResult(
-                    False, None, "effect-ledger-unavailable (not run: could not record it)"
-                )
-            if not claimed:
+                return ToolResult(False, None, LEDGER_UNAVAILABLE_ERROR)
+            if reservation.kind == "replay" and reservation.row is not None:
+                return self._already_executed(tool, tid, reservation.row)
+            if reservation.kind == "in_flight":
                 return self._in_flight(tool, tid)
+            if reservation.kind != "reserved":
+                # became unknown/duplicate since the decision was taken: needs its own approval
+                return ToolResult(
+                    False, None,
+                    f"effect-{reservation.kind} (not run: a new confirmation is required)",
+                )
+        # No await between the reservation above and the tool below.
         try:
-            result = await tool.execute(args, ctx)
+            result = await tool.execute(copy.deepcopy(args), ctx)
         except asyncio.CancelledError:
-            if claimed:
-                ledger.mark_unknown(scope, key, "cancelled while running")
+            if ledger is not None:
+                ledger.mark_unknown(scope, key, "cancelled while running", attempt)
             raise
         except Exception as exc:  # noqa: BLE001
-            if claimed:
-                ledger.mark_unknown(scope, key, str(exc))
+            if ledger is not None:
+                ledger.mark_unknown(scope, key, str(exc), attempt)
             duration_ms = int((time.perf_counter() - t_start) * 1000)
             await self._bus.publish(ActionExecuted(
                 trace_id=tid,
@@ -254,11 +317,18 @@ class ToolExecutor:
                 error=str(exc),
             ))
             return ToolResult(success=False, output=None, error=str(exc))
-        if claimed:
-            ledger.finish(
-                scope, key, success=bool(result.success),
-                preview=safe_preview(result.output), error=str(result.error or ""),
-            )
+        if ledger is not None:
+            ok = bool(getattr(result, "success", False))
+            try:
+                ledger.finish(
+                    scope, key, success=ok, attempt=attempt,
+                    no_effect=(not ok) and no_effect_evidence(tool, result),
+                    preview=safe_preview(getattr(result, "output", None)),
+                    error=str(getattr(result, "error", "") or ""),
+                )
+            except Exception:  # noqa: BLE001 - the row stays "started": unknown next time
+                log.error("effect ledger could not record the outcome of %s", tool.name,
+                          exc_info=True)
         self._record_result_origin(tool, tid, result, args)
         duration_ms = int((time.perf_counter() - t_start) * 1000)
         await self._bus.publish(ActionExecuted(
@@ -294,7 +364,7 @@ class ToolExecutor:
             return GateDecision("allow")
         request = GateRequest(
             tool_name=tool.name,
-            args=dict(args),
+            args=_snapshot_args(tool, args) or {},
             tier=decision.tier,
             approved_by=decision.approved_by,
             effect=origin.effect,
@@ -478,6 +548,14 @@ class ToolExecutor:
         t_start = time.perf_counter()
         from dodaios.core.tool_read_only import allows_read as _allows_read
 
+        # One private deep copy is what gets fingerprinted, shown, approved and executed.
+        snapshot = _snapshot_args(tool, args)
+        if snapshot is None:
+            if not _allows_read(tool, args):
+                return ToolResult(False, None, "not run: arguments cannot be snapshotted")
+            snapshot = dict(args)
+        args = snapshot
+
         # STOP is a property of the executor, not of each caller: with the owner's door closed
         # nothing but a declared read runs, whatever the tier and whoever asked.
         stop_ticket = _door_ticket_now()
@@ -537,6 +615,14 @@ class ToolExecutor:
                 ))
                 return ToolResult(success=False, output=None, error=f"gate-denied ({reason})")
             gate_confirm = gate_decision.verdict == "ask"
+            # STOP can arrive while the gate is reviewing: its verdict is only good for the
+            # generation the call started under.
+            stopped = stop_refusal(stop_ticket)
+            if stopped is not None and not _allows_read(tool, args):
+                await self._bus.publish(
+                    ActionDenied(trace_id=tid, tool_name=tool.name, reason=stopped)
+                )
+                return ToolResult(False, None, f"stopped ({stopped})")
 
         # 1.6 Effect ledger (block 7): a side-effecting call already issued is not issued again.
         fingerprint = call_fingerprint(tool.name, args)
@@ -546,19 +632,20 @@ class ToolExecutor:
         if side_effecting:
             try:
                 inspection = self._effects().inspect(str(tid), key, tool.name, fingerprint)
-            except Exception as exc:  # noqa: BLE001 - unknown history: make the owner decide
-                log.warning("effect ledger unreadable (%r): forcing a confirmation", exc)
-                inspection = None
+            except Exception as exc:  # noqa: BLE001 - no history, no effect: fail closed
+                log.error("effect ledger unavailable (%r): refusing %s", exc, tool.name)
+                await self._bus.publish(ActionDenied(
+                    trace_id=tid, tool_name=tool.name, reason=LEDGER_UNAVAILABLE_ERROR,
+                ))
+                return ToolResult(False, None, LEDGER_UNAVAILABLE_ERROR)
+            if inspection.kind == "replay" and inspection.row is not None:
+                return self._already_executed(tool, tid, inspection.row)
+            if inspection.kind == "in_flight":
+                return self._in_flight(tool, tid)
+            if inspection.kind == "unknown":
                 effect_reason = EFFECT_UNKNOWN_REASON
-            if inspection is not None:
-                if inspection.kind == "replay" and inspection.row is not None:
-                    return self._already_executed(tool, tid, inspection.row)
-                if inspection.kind == "in_flight":
-                    return self._in_flight(tool, tid)
-                if inspection.kind == "unknown":
-                    effect_reason = EFFECT_UNKNOWN_REASON
-                elif inspection.kind == "duplicate":
-                    effect_reason = DUPLICATE_EFFECT_REASON
+            elif inspection.kind == "duplicate":
+                effect_reason = DUPLICATE_EFFECT_REASON
 
         # 2. Plausibility check (Phase 4): the result can force confirmation
         # even when the tier workflow does not (for example, ``monitor``).
@@ -626,6 +713,7 @@ class ToolExecutor:
         # park the executor forever.
         approval_timeout_s = self._approval_timeout(config_snapshot)
         approval_ticket = None
+        attempt = ""
         if needs_confirm and not voice_confirm:
             # An unattended call arms too: the pre-authorization bridges answer
             # synchronously on the ActionApprovalRequired publish below, and
@@ -689,6 +777,7 @@ class ToolExecutor:
                         (config_snapshot or {}).get("approval_ref")
                     ),
                     call_fingerprint=fingerprint,
+                    approval_id=approval_ticket.approval_id,
                     effect=origin.effect,
                     target_origin=origin.origin,
                     origin_source=origin.source,
@@ -703,6 +792,8 @@ class ToolExecutor:
                         trace_id=tid,
                         tool_name=tool.name,
                         approved_by="bypass",
+                        call_fingerprint=fingerprint,
+                        approval_id=approval_ticket.approval_id,
                     )
                 )
 
@@ -719,8 +810,10 @@ class ToolExecutor:
                     # A new question for this trace replaces the old one: the old action is
                     # dropped (and audited), never left to be approved by a "ja" meant for this.
                     await self.cancel_pending(tid, reason="superseded_by_new_confirmation")
-                self._pending_voice[tid] = (
-                    tool, dict(args), fingerprint, key, stop_ticket, time.monotonic(),
+                voice_approval_id = uuid4().hex
+                self._pending_voice[tid] = _PendingVoice(
+                    tool, args, fingerprint, key, stop_ticket, time.monotonic(),
+                    voice_approval_id, effect_reason,
                 )
                 log.info(
                     "voice-confirm: deferring %s (tier=%s) for two-turn confirmation",
@@ -731,6 +824,7 @@ class ToolExecutor:
                     "trace_id": str(tid),
                     "risk_tier": decision.tier,
                     "call_fingerprint": fingerprint,
+                    "approval_id": voice_approval_id,
                 }
                 # Optional hook (like ``risk_tier_for_args``): a tool may
                 # summarize what the deferred action would DO so the spoken
@@ -797,6 +891,10 @@ class ToolExecutor:
                     error = f"{APPROVAL_DENIED_PREFIX} ({who_or_reason})"
                 return ToolResult(success=False, output=None, error=error)
             approved_by = who_or_reason  # "user" or "auto"
+            # An approval that let an unknown/duplicate call run again is the explicit identity
+            # of that re-execution (its one-use id becomes the ledger attempt).
+            if effect_reason and approval_ticket is not None:
+                attempt = approval_ticket.approval_id
 
         if cancel_token is not None and cancel_token.is_cancelled():
             await self._bus.publish(ActionDenied(
@@ -828,6 +926,7 @@ class ToolExecutor:
         return await self._invoke(
             tool, args, ctx, tid=tid, key=key, fingerprint=fingerprint,
             side_effecting=side_effecting, t_start=t_start,
+            stop_ticket=stop_ticket, attempt=attempt,
         )
 
     # ------------------------------------------------------------------
@@ -846,6 +945,7 @@ class ToolExecutor:
         config_snapshot: dict[str, Any] | None = None,
         memory_read: Any | None = None,
         expected_fingerprint: str | None = None,
+        expected_approval_id: str | None = None,
     ) -> ToolResult:
         """Run the action stashed by a prior voice-confirm deferral ("ja").
 
@@ -855,9 +955,12 @@ class ToolExecutor:
         the normal execute path.
 
         A "ja" authorizes the exact action that was asked about: the stashed arguments (never
-        re-supplied), optionally checked against ``expected_fingerprint``. It does not outlive
-        ``VOICE_CONFIRM_TTL_S``, a STOP, plan mode, the offline guard, the blacklist or a gate
-        ``deny``, and it never re-runs a call the ledger already marks as executed.
+        re-supplied). For any action that is not a declared read the caller MUST present both
+        the fingerprint and the one-use approval id the question carried; a missing or different
+        value is refused and the pending question is kept for its own answer. The confirmation
+        does not outlive ``VOICE_CONFIRM_TTL_S``, the STOP generation it was asked under (checked
+        again after every await and at the final boundary), plan mode, the offline guard, the
+        blacklist or a gate ``deny``, and it never re-runs a call the ledger marks as executed.
         """
         pending = self._pending_voice.get(trace_id)
         if pending is None:
@@ -866,9 +969,17 @@ class ToolExecutor:
                 output=None,
                 error="voice-confirm expired (no pending action for this turn)",
             )
-        tool, args, fingerprint, key, stop_ticket, stashed_at = pending
-        if expected_fingerprint and expected_fingerprint != fingerprint:
-            # The "ja" was given to another question. Keep the pending one for its own answer.
+        tool, args, fingerprint = pending.tool, pending.args, pending.fingerprint
+        key, stop_ticket = pending.key, pending.stop_ticket
+        from dodaios.core.tool_read_only import allows_read
+
+        identity_ok = (
+            bool(expected_fingerprint) and expected_fingerprint == fingerprint
+            and bool(expected_approval_id) and expected_approval_id == pending.approval_id
+        )
+        if not identity_ok and not allows_read(tool, args):
+            # The "ja" was given to another question, or carries no identity at all. Keep the
+            # pending one for its own answer.
             return ToolResult(False, None, "voice-confirm does not match the pending action")
         self._pending_voice.pop(trace_id, None)
 
@@ -878,14 +989,12 @@ class ToolExecutor:
             )
             return ToolResult(success=False, output=None, error=error)
 
-        if time.monotonic() - stashed_at > VOICE_CONFIRM_TTL_S:
+        if time.monotonic() - pending.stashed_at > VOICE_CONFIRM_TTL_S:
             return await refuse("voice_confirm_expired", "voice-confirm expired (too old to run)")
         stopped = stop_refusal(stop_ticket)
         if stopped is not None:
             return await refuse(stopped, f"stopped ({stopped})")
         if (config_snapshot or {}).get("chat_read_only"):
-            from dodaios.core.tool_read_only import allows_read
-
             if not allows_read(tool, args):
                 return await refuse("Plan mode permits reads only", "Plan mode permits reads only")
         from dodaios.core import egress_guard
@@ -903,18 +1012,32 @@ class ToolExecutor:
             if verdict.verdict == "deny":
                 reason = f"gate: {verdict.reason}" if verdict.reason else "gate"
                 return await refuse(reason, f"gate-denied ({reason})")
+            # STOP can arrive while the gate is reviewing.
+            stopped = stop_refusal(stop_ticket)
+            if stopped is not None:
+                return await refuse(stopped, f"stopped ({stopped})")
         side_effecting = is_side_effecting(tool, args, decision.tier)
+        attempt = ""
         if side_effecting:
             try:
                 inspection = self._effects().inspect(str(trace_id), key, tool.name, fingerprint)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("effect ledger unreadable on confirm (%r)", exc)
-                inspection = None
-            kind = inspection.kind if inspection is not None else "new"
-            if kind == "replay" and inspection is not None and inspection.row is not None:
+            except Exception as exc:  # noqa: BLE001 - fail closed
+                log.error("effect ledger unavailable on confirm (%r): refusing", exc)
+                return await refuse(LEDGER_UNAVAILABLE_ERROR, LEDGER_UNAVAILABLE_ERROR)
+            kind = inspection.kind
+            if kind == "replay" and inspection.row is not None:
                 return self._already_executed(tool, trace_id, inspection.row)
             if kind == "in_flight":
                 return self._in_flight(tool, trace_id)
+            if kind in ("unknown", "duplicate"):
+                if pending.effect_reason:
+                    # This very question was the forced confirmation: its one-use id is the
+                    # explicit identity of the re-execution.
+                    attempt = pending.approval_id
+                else:
+                    return await refuse(
+                        f"effect-{kind}", f"effect-{kind} (not run: a new confirmation is required)"
+                    )
         ctx = ExecutionContext(
             trace_id=trace_id,
             user_utterance=user_utterance,
@@ -925,6 +1048,7 @@ class ToolExecutor:
         return await self._invoke(
             tool, args, ctx, tid=trace_id, key=key, fingerprint=fingerprint,
             side_effecting=side_effecting, t_start=time.perf_counter(),
+            stop_ticket=stop_ticket, attempt=attempt,
         )
 
     async def cancel_pending(self, trace_id: UUID, *, reason: str = "voice_vetoed") -> bool:
@@ -934,7 +1058,7 @@ class ToolExecutor:
         pending = self._pending_voice.pop(trace_id, None)
         if pending is None:
             return False
-        tool = pending[0]
+        tool = pending.tool
         await self._bus.publish(ActionDenied(
             trace_id=trace_id,
             tool_name=tool.name,

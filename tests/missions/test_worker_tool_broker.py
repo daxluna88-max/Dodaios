@@ -267,6 +267,8 @@ async def test_ask_tier_waits_then_resumes_the_exact_call_after_approval() -> No
             trace_id=request.trace_id,
             tool_name=request.tool_name,
             approved_by="user",
+            call_fingerprint=request.call_fingerprint,
+            approval_id=request.approval_id,
         )
     )
     result = await asyncio.wait_for(call, timeout=1.0)

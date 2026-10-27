@@ -22,8 +22,10 @@ when the user clicks.
 from __future__ import annotations
 
 import asyncio
+import logging
+from dataclasses import dataclass
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from dodaios.core.bus import EventBus
 from dodaios.core.events import ActionApproved, ActionDenied
@@ -32,6 +34,8 @@ from dodaios.core.events import ActionApproved, ActionDenied
 #: A named constant because the caller MUST be able to tell "nobody answered"
 #: apart from "somebody said no" — the two are different outcomes and used to
 #: be reported with the same word (audit GT-12).
+log = logging.getLogger(__name__)
+
 TIMEOUT_REASON = "timeout"
 #: ``who_or_reason`` of an approval that arrived after the owner's STOP (ADR-0058).
 STOPPED_REASON = "stopped_by_owner"
@@ -49,6 +53,20 @@ def _admitted(ticket: int) -> bool:
     return get_stop_controller().admit(ticket).allowed
 
 
+@dataclass(frozen=True, slots=True)
+class _Binding:
+    """What one pending approval was asked for (block 8). All four parts must come back."""
+
+    approval_id: str
+    tool_name: str
+    fingerprint: str
+    stop_ticket: int
+
+    @property
+    def call_bound(self) -> bool:
+        return bool(self.tool_name and self.fingerprint)
+
+
 class ApprovalTicket:
     """One armed approval decision that cannot lose an early bus response."""
 
@@ -60,6 +78,7 @@ class ApprovalTicket:
         *,
         tool_name: str = "",
         fingerprint: str = "",
+        approval_id: str = "",
     ) -> None:
         self._workflow = workflow
         self.trace_id = trace_id
@@ -67,6 +86,8 @@ class ApprovalTicket:
         self._closed = False
         self.tool_name = tool_name
         self.fingerprint = fingerprint
+        #: One-use identity of this approval; the request event carries it, the answer echoes it.
+        self.approval_id = approval_id
 
     def _verified(self, answer: tuple[bool, str]) -> tuple[bool, str]:
         """An approval is only good for the STOP generation it was requested under: after STOP
@@ -122,8 +143,8 @@ class ApprovalWorkflow:
         self._pending: dict[UUID, asyncio.Future[tuple[bool, str]]] = {}
         # trace_id -> STOP generation taken when the approval was armed (its creation).
         self._stop_tickets: dict[UUID, int] = {}
-        # trace_id -> (tool name, call fingerprint) the approval was requested for (block 7).
-        self._bound: dict[UUID, tuple[str, str]] = {}
+        # trace_id -> what the approval was requested for (block 7/8): own id, tool, fingerprint.
+        self._bound: dict[UUID, _Binding] = {}
         bus.subscribe(ActionApproved, self._on_approved)
         bus.subscribe(ActionDenied, self._on_denied)
 
@@ -139,9 +160,12 @@ class ApprovalWorkflow:
         may have only one active ticket, which keeps first-wins semantics and
         prevents unrelated events from pre-authorizing a future action.
 
-        ``tool_name`` and ``fingerprint`` bind the ticket to the exact call: an approval that
-        names another tool, or carries a different argument fingerprint, is ignored (a denial is
-        always honoured). An approval with neither field is a legacy answer and still counts.
+        ``tool_name`` and ``fingerprint`` bind the ticket to the exact call and the ticket gets
+        its own one-use ``approval_id``. For such a call-bound ticket an approval counts only when
+        it carries all three, equal to what was armed: a missing or different tool name,
+        fingerprint or approval id is ignored (a denial is always honoured). A ticket armed
+        without a tool and fingerprint is an unbound waiter for non-executor callers (tests, the
+        CLI launcher); ``ToolExecutor`` never arms one.
         """
         if trace_id in self._pending:
             raise RuntimeError(f"approval trace {trace_id} is already armed")
@@ -150,8 +174,12 @@ class ApprovalWorkflow:
         )
         self._pending[trace_id] = future
         self._stop_tickets[trace_id] = _door_ticket()
-        self._bound[trace_id] = (tool_name, fingerprint)
-        return ApprovalTicket(self, trace_id, future, tool_name=tool_name, fingerprint=fingerprint)
+        approval_id = uuid4().hex
+        self._bound[trace_id] = _Binding(approval_id, tool_name, fingerprint, _door_ticket())
+        return ApprovalTicket(
+            self, trace_id, future,
+            tool_name=tool_name, fingerprint=fingerprint, approval_id=approval_id,
+        )
 
     def _discard(
         self,
@@ -166,11 +194,18 @@ class ApprovalWorkflow:
             future.cancel()
 
     async def _on_approved(self, event: ActionApproved) -> None:
-        armed_tool, armed_fp = self._bound.get(event.trace_id, ("", ""))
-        if (armed_tool and event.tool_name and event.tool_name != armed_tool) or (
-            armed_fp and event.call_fingerprint and event.call_fingerprint != armed_fp
+        binding = self._bound.get(event.trace_id)
+        if binding is not None and binding.call_bound and (
+            event.approval_id != binding.approval_id
+            or event.tool_name != binding.tool_name
+            or event.call_fingerprint != binding.fingerprint
         ):
-            # An approval for another call (changed arguments, other tool): it does not apply.
+            # Missing identity, another approval, another tool or changed arguments: it does not
+            # apply to this call. The ticket stays open for the right answer or the timeout.
+            log.warning(
+                "approval for trace %s ignored: identity missing or not for this call",
+                event.trace_id,
+            )
             return
         self._resolve(event.trace_id, True, event.approved_by or "user")
 
@@ -196,9 +231,23 @@ class ApprovalWorkflow:
     # Convenience: synthetic approve/deny for tests & the CLI launcher
     # ------------------------------------------------------------------
 
-    async def approve(self, trace_id: UUID, who: str = "user") -> None:
-        """Resolves a pending approval (e.g. from a toast callback)."""
-        await self._bus.publish(ActionApproved(trace_id=trace_id, approved_by=who))
+    async def approve(
+        self,
+        trace_id: UUID,
+        who: str = "user",
+        *,
+        approval_id: str = "",
+        tool_name: str = "",
+        call_fingerprint: str = "",
+    ) -> None:
+        """Resolves a pending approval (e.g. from a toast callback). For a call-bound ticket the
+        caller must hand back the identity it was shown; nothing is filled in here."""
+        await self._bus.publish(
+            ActionApproved(
+                trace_id=trace_id, approved_by=who, approval_id=approval_id,
+                tool_name=tool_name, call_fingerprint=call_fingerprint,
+            )
+        )
 
     async def deny(self, trace_id: UUID, reason: str = "denied") -> None:
         await self._bus.publish(ActionDenied(trace_id=trace_id, reason=reason))

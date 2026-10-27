@@ -206,11 +206,15 @@ async def test_execute_confirmed_runs_the_stashed_action() -> None:
     bus.subscribe(ActionExecuted, lambda e: seen.append(e))  # type: ignore[arg-type]
     tool = _AskTool()
     tid = uuid4()
-    await executor.execute(
+    deferred = await executor.execute(
         tool, args={"to": "tom"},
         config_snapshot={"voice_confirm": True}, trace_id=tid,
     )
-    result = await executor.execute_confirmed(tid)
+    result = await executor.execute_confirmed(
+        tid,
+        expected_fingerprint=deferred.output["call_fingerprint"],
+        expected_approval_id=deferred.output["approval_id"],
+    )
     assert result.success is True
     assert result.output == "sent"
     assert tool.calls == 1
@@ -225,12 +229,16 @@ async def test_execute_confirmed_is_single_use() -> None:
     executor, _approval, _bus = _executor()
     tool = _AskTool()
     tid = uuid4()
-    await executor.execute(
+    deferred = await executor.execute(
         tool, args={}, config_snapshot={"voice_confirm": True}, trace_id=tid,
     )
-    await executor.execute_confirmed(tid)
+    identity = {
+        "expected_fingerprint": deferred.output["call_fingerprint"],
+        "expected_approval_id": deferred.output["approval_id"],
+    }
+    await executor.execute_confirmed(tid, **identity)
     # Second resume must NOT re-run the action (no double-send).
-    again = await executor.execute_confirmed(tid)
+    again = await executor.execute_confirmed(tid, **identity)
     assert again.success is False
     assert tool.calls == 1
 

@@ -694,15 +694,21 @@ class ActionApprovalRequired(Event):
     origin_source: str = ""
     #: Digest of the exact tool + arguments awaiting a decision (block 7); an answer echoes it.
     call_fingerprint: str = ""
+    #: One-use identity of THIS pending approval (block 8). An approval must echo it together
+    #: with the tool name and the fingerprint; it is spent by the first answer.
+    approval_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class ActionApproved(Event):
     tool_name: str = ""
     approved_by: str = "auto"  # "auto" | "user" | "whitelist"
-    #: Digest of the exact tool + arguments this approval was given for (block 7). A non-empty
-    #: value that differs from the armed request's is ignored; empty is a legacy answer.
+    #: Digest of the exact tool + arguments this approval was given for (block 7).
     call_fingerprint: str = ""
+    #: The ``ActionApprovalRequired.approval_id`` being answered (block 8). Tool name,
+    #: fingerprint and approval id are all MANDATORY for a call-bound ticket: an approval
+    #: missing any of them, or carrying another value, is ignored.
+    approval_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)

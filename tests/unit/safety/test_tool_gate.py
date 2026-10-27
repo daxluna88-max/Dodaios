@@ -118,7 +118,9 @@ async def test_ask_forces_confirmation_on_low_tiers(tool_cls: type[_Tool]) -> No
 
     async def _approve(e: ActionApprovalRequired) -> None:
         await bus.publish(ActionApproved(trace_id=e.trace_id, tool_name=e.tool_name,
-                                         approved_by="user"))
+                                         approved_by="user",
+                                         call_fingerprint=e.call_fingerprint,
+                                         approval_id=e.approval_id))
 
     bus.subscribe(ActionApprovalRequired, _approve)
     result = await executor.execute(tool, {}, config_snapshot=_SNAP)

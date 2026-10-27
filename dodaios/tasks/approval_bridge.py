@@ -79,6 +79,7 @@ class TaskAutoApprover:
                 tool_name=event.tool_name,
                 approved_by=approved_by,
                 call_fingerprint=event.call_fingerprint,
+                approval_id=event.approval_id,
             )
         )
 

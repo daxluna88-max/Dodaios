@@ -8,15 +8,19 @@ tool call passes, so the ledger lives there: one row per execution attempt, keye
 
 What a row says, and what the executor does with it:
 
-* ``started``  written BEFORE the tool runs. If the process dies or the task is cancelled the row
-  stays ``started``: the outcome is UNKNOWN.
-* ``done``     the tool returned (its ``success`` flag is kept). The same key again returns the
-  stored outcome and does NOT run the tool.
-* ``failed``   the tool returned an error result. A retry is allowed (it passes the normal
-  approval again).
-* ``unknown``  the tool raised, was cancelled, or a ``started`` row belongs to another process.
-  Never retried on its own: the next attempt is forced through a confirmation (the owner decides;
-  an unattended surface refuses).
+* ``started``  written BEFORE the tool runs, inside the same IMMEDIATE transaction that checked
+  the call id AND the (scope, tool, fingerprint) identity (``reserve``). If the process dies or
+  the task is cancelled the row stays ``started``: the outcome is UNKNOWN.
+* ``done``     the tool succeeded. The same key again returns the stored outcome and does NOT
+  run the tool.
+* ``failed``   the tool returned an error AND vouched that nothing was applied
+  (``ToolResult.no_effect_guaranteed`` or the tool's ``failure_means_no_effect``). A retry is
+  allowed (it passes the normal approval again).
+* ``unknown``  the tool raised, was cancelled, returned an error WITHOUT that evidence (a shell or
+  remote operation can apply an effect and then report an error), or a ``started`` row belongs
+  to another process. Never retried on its own: the next attempt is forced through a
+  confirmation (the owner decides; an unattended surface refuses). The confirmation's one-use
+  approval id becomes the ``attempt`` of the new row; nothing is ever overwritten.
 
 The same fingerprint under a DIFFERENT key in the same scope (the model re-issued an identical
 call with a new id, e.g. after a retry) is a ``duplicate``: also forced through a confirmation.
@@ -50,6 +54,7 @@ BOOT_ID = uuid.uuid4().hex
 RETENTION_S = 7 * 24 * 3600.0
 
 InspectionKind = Literal["new", "replay", "in_flight", "unknown", "duplicate"]
+ReservationKind = Literal["reserved", "replay", "in_flight", "unknown", "duplicate"]
 
 
 def call_fingerprint(tool_name: str, args: Any) -> str:
@@ -70,6 +75,7 @@ def call_fingerprint(tool_name: str, args: Any) -> str:
 class EffectRow:
     scope: str
     key: str
+    attempt: str
     tool: str
     fingerprint: str
     state: str  # started | done | failed | unknown
@@ -86,14 +92,29 @@ class Inspection:
     row: EffectRow | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class Reservation:
+    """Outcome of :meth:`EffectLedger.reserve`. ``kind == "reserved"`` is the only one that lets
+    the tool run; ``attempt`` identifies the row that was written."""
+
+    kind: ReservationKind
+    row: EffectRow | None = None
+    attempt: str = ""
+
+
+class LedgerUnavailable(RuntimeError):
+    """The effect ledger cannot be used, so an effectful call must not run (fails closed)."""
+
+
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS effects (
-    scope TEXT NOT NULL, key TEXT NOT NULL, tool TEXT NOT NULL, fingerprint TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS effect_calls (
+    scope TEXT NOT NULL, key TEXT NOT NULL, attempt TEXT NOT NULL DEFAULT '',
+    tool TEXT NOT NULL, fingerprint TEXT NOT NULL,
     state TEXT NOT NULL, boot TEXT NOT NULL, success INTEGER, preview TEXT NOT NULL DEFAULT '',
     error TEXT NOT NULL DEFAULT '', ts REAL NOT NULL,
-    PRIMARY KEY (scope, key)
+    PRIMARY KEY (scope, key, attempt)
 );
-CREATE INDEX IF NOT EXISTS effects_fp ON effects (scope, tool, fingerprint);
+CREATE INDEX IF NOT EXISTS effect_calls_fp ON effect_calls (scope, tool, fingerprint);
 """
 
 
@@ -109,137 +130,283 @@ class EffectLedger:
         self._db.executescript(_SCHEMA)
         self.persistent = path is not None
         if self.persistent:
-            self._db.execute("DELETE FROM effects WHERE ts < ?", (time.time() - RETENTION_S,))
+            self._db.execute("DELETE FROM effect_calls WHERE ts < ?", (time.time() - RETENTION_S,))
 
     @staticmethod
     def _row(r: tuple[Any, ...]) -> EffectRow:
-        return EffectRow(r[0], r[1], r[2], r[3], r[4], r[5],
-                         None if r[6] is None else bool(r[6]), r[7], r[8], r[9])
+        return EffectRow(r[0], r[1], r[2], r[3], r[4], r[5], r[6],
+                         None if r[7] is None else bool(r[7]), r[8], r[9], r[10])
 
-    _COLS = "scope, key, tool, fingerprint, state, boot, success, preview, error, ts"
+    _COLS = "scope, key, attempt, tool, fingerprint, state, boot, success, preview, error, ts"
 
-    def inspect(self, scope: str, key: str, tool: str, fingerprint: str) -> Inspection:
-        with self._lock:
-            same = self._db.execute(
-                f"SELECT {self._COLS} FROM effects WHERE scope=? AND key=?",  # noqa: S608
+    def _decide(
+        self, scope: str, key: str, tool: str, fingerprint: str, attempt: str
+    ) -> tuple[str, EffectRow | None]:
+        """What the ledger says about this call right now. Caller holds ``_lock`` and, when it
+        is going to write, an IMMEDIATE transaction, so the answer cannot go stale.
+
+        Identity checked: the call id ``(scope, key)`` AND the call content ``(scope, tool,
+        fingerprint)``. ``attempt`` is the one-use id of an approval the owner gave to run an
+        unknown or duplicate call again; it overrides ``unknown``/``duplicate`` only, never a
+        finished or still-running call."""
+        same = [
+            self._row(r)
+            for r in self._db.execute(
+                f"SELECT {self._COLS} FROM effect_calls WHERE scope=? AND key=? "  # noqa: S608
+                "ORDER BY ts DESC",
                 (scope, key),
-            ).fetchone()
-            if same is not None:
-                row = self._row(same)
-                if row.fingerprint == fingerprint and row.tool == tool:
-                    if row.state == "done":
-                        return Inspection("replay", row)
-                    if row.state == "started":
-                        return Inspection("in_flight" if row.boot == BOOT_ID else "unknown", row)
-                    if row.state == "unknown":
-                        return Inspection("unknown", row)
-                    # failed: a retry is allowed
-                else:
-                    # the same call id carrying other arguments is a different call
-                    log.warning("effect ledger: call id %s reused with other arguments", key)
-            other = self._db.execute(
-                f"SELECT {self._COLS} FROM effects "  # noqa: S608
-                "WHERE scope=? AND tool=? AND fingerprint=? "
-                "AND key<>? AND state IN ('done','started','unknown') ORDER BY ts DESC LIMIT 1",
-                (scope, tool, fingerprint, key),
-            ).fetchone()
-            if other is not None:
-                return Inspection("duplicate", self._row(other))
-        return Inspection("new")
+            ).fetchall()
+        ]
+        mine = [r for r in same if r.fingerprint == fingerprint and r.tool == tool]
+        if len(mine) != len(same):
+            # the same call id carrying other arguments is a different call
+            log.warning("effect ledger: call id %s reused with other arguments", key)
+        if attempt and any(r.attempt == attempt for r in same):
+            # an approval id is good for one execution
+            return "in_flight", next(r for r in same if r.attempt == attempt)
+        for r in mine:
+            if r.state == "done":
+                return "replay", r
+        for r in mine:
+            if r.state == "started" and r.boot == BOOT_ID:
+                return "in_flight", r
+        if not attempt:
+            for r in mine:
+                if r.state in ("started", "unknown"):
+                    return "unknown", r
+        other = self._db.execute(
+            f"SELECT {self._COLS} FROM effect_calls "  # noqa: S608
+            "WHERE scope=? AND tool=? AND fingerprint=? AND key<>? "
+            "AND state IN ('done','started','unknown') ORDER BY ts DESC",
+            (scope, tool, fingerprint, key),
+        ).fetchall()
+        others = [self._row(r) for r in other]
+        for r in others:
+            if r.state == "started" and r.boot == BOOT_ID:
+                return "in_flight", r
+        if others and not attempt:
+            return "duplicate", others[0]
+        return "new", None
 
-    def claim(self, scope: str, key: str, tool: str, fingerprint: str) -> bool:
-        """Write ``started`` before the tool runs. False when a live or finished row blocks it
-        (another task claimed the same key between ``inspect`` and now)."""
+    def inspect(
+        self, scope: str, key: str, tool: str, fingerprint: str, attempt: str = ""
+    ) -> Inspection:
+        """Advisory, read-only view. Admission is :meth:`reserve`, never inspect-then-claim."""
         with self._lock:
-            row = self._db.execute(
-                "SELECT state, boot FROM effects WHERE scope=? AND key=?", (scope, key)
-            ).fetchone()
-            live = row is not None and row[0] == "started" and row[1] == BOOT_ID
-            if row is not None and (row[0] == "done" or live):
-                return False
-            self._db.execute(
-                "INSERT OR REPLACE INTO effects (scope, key, tool, fingerprint, state, boot, ts) "
-                "VALUES (?,?,?,?, 'started', ?, ?)",
-                (scope, key, tool, fingerprint, BOOT_ID, time.time()),
-            )
-        return True
+            kind, row = self._decide(scope, key, tool, fingerprint, attempt)
+        return Inspection(kind, row)  # type: ignore[arg-type]
+
+    def reserve(
+        self, scope: str, key: str, tool: str, fingerprint: str, attempt: str = ""
+    ) -> Reservation:
+        """Inspect AND write ``started`` in ONE immediate transaction (cross-process safe).
+
+        Nothing is ever overwritten: another process's reservation, a finished call or an
+        unknown one stays as it is. Re-running an unknown or duplicate call needs ``attempt``,
+        the one-use id of the explicit approval the owner gave for it."""
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                kind, row = self._decide(scope, key, tool, fingerprint, attempt)
+                if kind != "new":
+                    self._db.execute("ROLLBACK")
+                    return Reservation(kind, row)  # type: ignore[arg-type]
+                try:
+                    self._db.execute(
+                        "INSERT INTO effect_calls "
+                        "(scope, key, attempt, tool, fingerprint, state, boot, ts) "
+                        "VALUES (?,?,?,?,?, 'started', ?, ?)",
+                        (scope, key, attempt, tool, fingerprint, BOOT_ID, time.time()),
+                    )
+                except sqlite3.IntegrityError:
+                    self._db.execute("ROLLBACK")
+                    return Reservation("in_flight", None)
+                self._db.execute("COMMIT")
+            except BaseException:
+                try:
+                    self._db.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
+                raise
+        return Reservation("reserved", None, attempt)
+
+    def claim(self, scope: str, key: str, tool: str, fingerprint: str, attempt: str = "") -> bool:
+        """Compatibility wrapper: True only when :meth:`reserve` wrote the row."""
+        return self.reserve(scope, key, tool, fingerprint, attempt).kind == "reserved"
 
     def finish(
-        self, scope: str, key: str, *, success: bool, preview: str = "", error: str = ""
+        self,
+        scope: str,
+        key: str,
+        *,
+        success: bool,
+        attempt: str = "",
+        no_effect: bool = False,
+        preview: str = "",
+        error: str = "",
     ) -> None:
+        """Record what the tool returned.
+
+        ``success``  -> ``done`` (replayable).
+        ``no_effect`` (the tool supplied trusted evidence that nothing was applied) -> ``failed``
+        (a retry through the normal approval is allowed).
+        any other failure -> ``unknown``: a shell or remote operation can apply an effect and then
+        report an error, so it is never retried on its own."""
+        if success:
+            state = "done"
+        elif no_effect:
+            state = "failed"
+        else:
+            state = "unknown"
         with self._lock:
             self._db.execute(
-                "UPDATE effects SET state=?, success=?, preview=?, error=?, ts=? "
-                "WHERE scope=? AND key=?",
-                ("done" if success else "failed", int(success), preview[:500],
-                 (error or "")[:500], time.time(), scope, key),
+                "UPDATE effect_calls SET state=?, success=?, preview=?, error=?, ts=? "
+                "WHERE scope=? AND key=? AND attempt=? AND state='started' AND boot=?",
+                (state, int(success), preview[:500], (error or "")[:500], time.time(),
+                 scope, key, attempt, BOOT_ID),
             )
 
-    def mark_unknown(self, scope: str, key: str, error: str = "") -> None:
+    def mark_unknown(self, scope: str, key: str, error: str = "", attempt: str = "") -> None:
         with self._lock:
             self._db.execute(
-                "UPDATE effects SET state='unknown', error=?, ts=? WHERE scope=? AND key=?",
-                ((error or "")[:500], time.time(), scope, key),
+                "UPDATE effect_calls SET state='unknown', error=?, ts=? "
+                "WHERE scope=? AND key=? AND attempt=? AND state='started'",
+                ((error or "")[:500], time.time(), scope, key, attempt),
+            )
+
+    def release(self, scope: str, key: str, attempt: str = "") -> None:
+        """Drop a reservation whose tool provably never started."""
+        with self._lock:
+            self._db.execute(
+                "DELETE FROM effect_calls WHERE scope=? AND key=? AND attempt=? "
+                "AND state='started' AND boot=?",
+                (scope, key, attempt, BOOT_ID),
             )
 
     def get(self, scope: str, key: str) -> EffectRow | None:
         with self._lock:
             r = self._db.execute(
-                f"SELECT {self._COLS} FROM effects WHERE scope=? AND key=?",  # noqa: S608
+                f"SELECT {self._COLS} FROM effect_calls WHERE scope=? AND key=? "  # noqa: S608
+                "ORDER BY ts DESC LIMIT 1",
                 (scope, key),
             ).fetchone()
         return None if r is None else self._row(r)
 
 
+# --------------------------------------------------------------------------- process-wide state
+
+ProtectionMode = Literal["memory", "persistent", "reduced", "unavailable"]
+
+
+@dataclass(frozen=True, slots=True)
+class ProtectionState:
+    """How well duplicate effects are guarded right now, in plain terms (for status surfaces)."""
+
+    mode: ProtectionMode
+    detail: str
+
+
 _default: EffectLedger | None = None
+_mode: ProtectionMode = "memory"
+_detail = "per-process ledger (nothing persistent was configured)"
 _default_lock = threading.Lock()
 
 
+def protection_state() -> ProtectionState:
+    with _default_lock:
+        return ProtectionState(_mode, _detail)
+
+
 def get_default_ledger() -> EffectLedger:
-    """The process-wide ledger for executors without their own (memory until configured)."""
+    """The process-wide ledger. Raises :class:`LedgerUnavailable` when persistence was required
+    and could not be provided: effectful calls then fail closed instead of running unrecorded."""
     global _default
     with _default_lock:
+        if _mode == "unavailable":
+            raise LedgerUnavailable(_detail)
         if _default is None:
             _default = EffectLedger()
         return _default
 
 
 def set_default_ledger(ledger: EffectLedger | None) -> None:
-    global _default
+    global _default, _mode, _detail
     with _default_lock:
         _default = ledger
+        if ledger is None:
+            _mode, _detail = "memory", "per-process ledger (nothing persistent was configured)"
+        elif ledger.persistent:
+            _mode, _detail = "persistent", "persistent effect ledger"
+        else:
+            _mode, _detail = "memory", "per-process ledger (nothing persistent was configured)"
 
 
-def configure_default_ledger(path: str | os.PathLike[str]) -> EffectLedger:
-    """Make the default ledger persistent (survives a restart). Idempotent; falls back to the
-    in-memory ledger, loudly, when the file cannot be opened."""
-    global _default
+def configure_default_ledger(
+    path: str | os.PathLike[str], *, allow_reduced_protection: bool = False
+) -> EffectLedger | None:
+    """Make the default ledger persistent (survives a restart). Idempotent.
+
+    When the file cannot be opened, effectful calls are REFUSED (``get_default_ledger`` raises)
+    unless the owner enabled reduced protection in the config. Reduced protection is a
+    per-process, in-memory ledger and is reported as such by :func:`protection_state`; it never
+    happens by default and never silently."""
+    global _default, _mode, _detail
     with _default_lock:
-        if _default is not None and _default.persistent:
+        if _default is not None and _default.persistent and _mode == "persistent":
             return _default
         try:
             _default = EffectLedger(path)
-        except Exception:  # noqa: BLE001 - never block start-up; say what is lost
-            log.warning(
-                "effect ledger: could not open %s; duplicate protection is per-process only",
-                path, exc_info=True,
-            )
-            if _default is None:
+            _mode, _detail = "persistent", f"persistent effect ledger at {path}"
+            return _default
+        except Exception as exc:  # noqa: BLE001 - never block start-up; decide what is lost
+            if allow_reduced_protection:
                 _default = EffectLedger()
-        return _default
+                _mode = "reduced"
+                _detail = (
+                    f"REDUCED PROTECTION (owner-enabled): the effect ledger at {path} could not "
+                    f"be opened ({type(exc).__name__}). Duplicate effects are detected only "
+                    "within this running process; a restart or a second process is NOT covered."
+                )
+                log.warning("effect ledger: %s", _detail, exc_info=True)
+                return _default
+            _default = None
+            _mode = "unavailable"
+            _detail = (
+                f"effect ledger at {path} could not be opened ({type(exc).__name__}): calls with "
+                "side effects are refused until it can be; reads and chat keep working"
+            )
+            log.error("effect ledger: %s", _detail, exc_info=True)
+            return None
 
 
-def is_side_effecting(tool: Any, args: dict[str, Any], tier: str) -> bool:
-    """Conservative: only a tool that declares itself read-only or lookup-only is exempt, and a
-    ``safe`` tier tool that makes no claim either way is treated as a read (otherwise every
-    unflagged lookup would be asked about when repeated)."""
+def mark_unavailable(reason: str) -> None:
+    """Record that persistence was required but could not even be attempted: effectful calls are
+    refused until ``configure_default_ledger`` succeeds."""
+    global _default, _mode, _detail
+    with _default_lock:
+        _default = None
+        _mode = "unavailable"
+        _detail = f"effect ledger not configured ({reason}): calls with side effects are refused"
+    log.error("effect ledger: %s", _detail)
+
+
+def is_side_effecting(tool: Any, args: dict[str, Any], tier: str = "") -> bool:
+    """Only a tool that DECLARES itself read-only (``allows_read``: the same standard STOP and
+    plan mode use) skips the ledger. A ``safe`` tier is a risk label, not an effect claim, and an
+    unknown or broken capability counts as an effect."""
     from dodaios.core.tool_read_only import allows_read
 
-    if getattr(tool, "is_lookup_only", False):
-        return False
-    if allows_read(tool, args):
-        return False
-    return tier != "safe" or getattr(tool, "read_only", None) is False
+    return not allows_read(tool, args)
+
+
+def no_effect_evidence(tool: Any, result: Any) -> bool:
+    """True only when the tool itself vouches that this failure applied nothing: the result says
+    ``no_effect_guaranteed`` or the tool declares ``failure_means_no_effect``. Absent evidence a
+    failed side-effecting call is UNKNOWN."""
+    return (
+        getattr(result, "no_effect_guaranteed", False) is True
+        or getattr(tool, "failure_means_no_effect", False) is True
+    )
 
 
 __all__ = [
@@ -247,9 +414,15 @@ __all__ = [
     "EffectLedger",
     "EffectRow",
     "Inspection",
+    "LedgerUnavailable",
+    "ProtectionState",
+    "Reservation",
     "call_fingerprint",
     "configure_default_ledger",
     "get_default_ledger",
     "is_side_effecting",
+    "mark_unavailable",
+    "no_effect_evidence",
+    "protection_state",
     "set_default_ledger",
 ]

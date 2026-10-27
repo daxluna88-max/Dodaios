@@ -11,6 +11,7 @@ Lines starting with `TOOL:` are extracted as tool calls
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import re
@@ -393,22 +394,25 @@ class SkillRunner:
             )
             step_start = time.monotonic()
             try:
-                from dodaios.core import egress_guard
-
-                offline = egress_guard.tool_refusal(tool_name)
-                # No approver exists on this path: the owner's STOP and the process-wide tool
-                # gate (ADR-0044) still apply, and anything but "allow" refuses (block 7).
-                from dodaios.safety.preflight import unattended_refusal
-
-                held = None if offline is not None else await unattended_refusal(
-                    tool_name, tool_args
+                # No approver exists on this path: the owner's STOP, the offline profile and the
+                # process-wide tool gate (ADR-0044) still apply, and anything but "allow" refuses
+                # (block 7). The STOP generation is captured BEFORE the gate is awaited and
+                # rechecked right before the tool is invoked (block 8).
+                from dodaios.safety.preflight import (
+                    current_ticket,
+                    final_refusal,
+                    unattended_refusal,
                 )
-                if offline is not None:
-                    result = ToolResult(success=False, output=None, error=offline)
-                elif held is not None:
+
+                run_ticket = current_ticket()
+                exec_args = copy.deepcopy(tool_args)
+                held = await unattended_refusal(tool_name, exec_args, ticket=run_ticket)
+                if held is None:
+                    held = final_refusal(tool_name, run_ticket)
+                if held is not None:
                     result = ToolResult(success=False, output=None, error=f"not run: {held}")
                 else:
-                    result = await tool_obj.execute(tool_args, ctx)
+                    result = await tool_obj.execute(exec_args, ctx)
                 if not isinstance(result, ToolResult):
                     result = ToolResult(success=bool(result), output=result)
                 step = {

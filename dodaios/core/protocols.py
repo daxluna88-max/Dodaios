@@ -229,6 +229,9 @@ class ToolResult:
     output: Any
     error: str | None = None
     artifacts: tuple[str, ...] = field(default_factory=tuple)
+    #: Trusted evidence from the tool that a FAILED call applied nothing (block 8). Without it a
+    #: failed side-effecting call is recorded as unknown, never as safely retryable.
+    no_effect_guaranteed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,6 +275,11 @@ class SupervisorToolRequest:
     worker_id: str | None = None
     config_snapshot: dict[str, Any] = field(default_factory=dict)
     cancel_token: CancelToken | None = None
+    #: Identity of the deferred question a "yes" answers (block 8): both are copied from the
+    #: confirmation sentinel's output and are mandatory for ``execute_confirmed`` of any call
+    #: that is not a declared read.
+    call_fingerprint: str = ""
+    approval_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)

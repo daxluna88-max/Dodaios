@@ -39,6 +39,7 @@ a task of its own and the decision published when it lands.
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
@@ -134,7 +135,7 @@ class ChatApprovalBridge:
         # The card wants the real arguments; the approval event only carries
         # a redacted preview. Keep the last few proposals by trace.
         try:
-            self._args[event.trace_id] = dict(event.args or {})
+            self._args[event.trace_id] = copy.deepcopy(dict(event.args or {}))
             while len(self._args) > _ARGS_CACHE_SIZE:
                 self._args.popitem(last=False)
         except Exception:  # noqa: BLE001 — AP-18: a subscriber never raises into the bus
@@ -167,6 +168,7 @@ class ChatApprovalBridge:
                         tool_name=event.tool_name,
                         approved_by=decision,
                         call_fingerprint=event.call_fingerprint,
+                        approval_id=event.approval_id,
                     )
                 )
                 return
@@ -244,6 +246,7 @@ class ChatApprovalBridge:
                     tool_name=event.tool_name,
                     approved_by="user",
                     call_fingerprint=event.call_fingerprint,
+                    approval_id=event.approval_id,
                 )
             )
             return

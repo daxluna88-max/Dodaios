@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from uuid import UUID
 
 from loguru import logger
@@ -34,9 +34,13 @@ class PendingMissionToolApproval:
     expires_at_ns: int
     #: Digest of the exact tool + arguments that were asked about; the decision echoes it.
     call_fingerprint: str = ""
+    #: One-use identity of this pending approval (block 8); kept server-side and echoed by
+    #: ``approve``, never taken from the HTTP client. Not part of ``to_dict`` on purpose.
+    approval_id: str = field(default="", repr=False)
 
     def to_dict(self) -> dict[str, str | int | None]:
         payload = asdict(self)
+        payload.pop("approval_id", None)  # a server-side secret of the pending call
         payload["trace_id"] = str(self.trace_id)
         return payload
 
@@ -92,6 +96,7 @@ class MissionToolApprovalCoordinator:
             requested_at_ns=event.timestamp_ns,
             expires_at_ns=event.expires_at_ns,
             call_fingerprint=event.call_fingerprint,
+            approval_id=event.approval_id,
         )
         async with self._lock:
             self._pending[event.trace_id] = pending
@@ -155,6 +160,7 @@ class MissionToolApprovalCoordinator:
                 tool_name=pending.tool_name,
                 approved_by=approved_by,
                 call_fingerprint=pending.call_fingerprint,
+                approval_id=pending.approval_id,
             )
         )
         return pending
@@ -313,6 +319,7 @@ class MissionToolAutoApprover:
                 tool_name=tool_name,
                 approved_by=approved_by,
                 call_fingerprint=event.call_fingerprint,
+                approval_id=event.approval_id,
             )
         )
 

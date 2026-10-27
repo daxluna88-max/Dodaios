@@ -184,6 +184,8 @@ async def test_unattended_still_honours_a_synchronous_preauthorization() -> None
                 trace_id=event.trace_id,
                 tool_name=event.tool_name,
                 approved_by="scheduled-task:abc",
+                call_fingerprint=event.call_fingerprint,
+                approval_id=event.approval_id,
             )
         )
 
@@ -248,9 +250,20 @@ async def test_interactive_surface_still_waits_for_the_mission_deck() -> None:
     tool = _AskTool()
     tid = uuid4()
 
+    asked: list[ActionApprovalRequired] = []
+
+    async def _capture(event: ActionApprovalRequired) -> None:
+        asked.append(event)
+
+    bus.subscribe(ActionApprovalRequired, _capture)
+
     async def _click_approve() -> None:
         await asyncio.sleep(0.02)
-        await bus.publish(ActionApproved(trace_id=tid, approved_by="user"))
+        # block 8: the answer must echo the identity the card was shown
+        await bus.publish(ActionApproved(
+            trace_id=tid, approved_by="user", tool_name=asked[0].tool_name,
+            call_fingerprint=asked[0].call_fingerprint, approval_id=asked[0].approval_id,
+        ))
 
     clicker = asyncio.create_task(_click_approve())
     result = await executor.execute(
@@ -331,7 +344,11 @@ async def test_conversational_surface_defers_for_a_two_turn_question() -> None:
     assert deferred.error == VOICE_CONFIRM_SENTINEL
     assert deferred.output["trace_id"] == str(tid)
 
-    resumed = await executor.execute_confirmed(tid)
+    resumed = await executor.execute_confirmed(
+        tid,
+        expected_fingerprint=deferred.output["call_fingerprint"],
+        expected_approval_id=deferred.output["approval_id"],
+    )
     assert resumed.success is True
     assert tool.calls == 1
     assert tool.last_ctx is not None

@@ -179,7 +179,10 @@ async def test_a_ticket_answered_elsewhere_closes_its_card(tmp_path: Path):
         await asyncio.sleep(0)
     assert card.asked and tickets
     await bus.publish(
-        ActionApproved(trace_id=tickets[0].trace_id, tool_name="Write", approved_by="user")
+        ActionApproved(
+            trace_id=tickets[0].trace_id, tool_name="Write", approved_by="user",
+            call_fingerprint=tickets[0].call_fingerprint, approval_id=tickets[0].approval_id,
+        )
     )
     result = await asyncio.wait_for(running, timeout=5.0)
     await asyncio.sleep(0.01)
