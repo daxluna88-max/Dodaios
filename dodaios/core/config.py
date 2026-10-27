@@ -964,6 +964,47 @@ class MultiEngineConfig(BaseModel):
     max_concurrent: int = Field(default=3, ge=1, le=6)
 
 
+Tone = Literal["neutral", "friendly", "calm", "energetic", "serious"]
+Mood = Literal["neutral", "cheerful", "calm", "focused", "serious"]
+PersonalityMode = Literal["manual", "adaptive", "mixed"]
+PersonalityPreset = Literal["professional", "friendly", "concise"]
+_ALL_MOODS: tuple[str, ...] = ("neutral", "cheerful", "calm", "focused", "serious")
+
+
+class PersonalityConfig(BaseModel):
+    """``[brain.personality]``: the owner's chosen style for THIS product (issue 17).
+
+    Only enumerated values and small bounded integers: nothing the owner types as free text ever
+    becomes an instruction, so the profile cannot override policy and carries no personal data to a
+    remote engine. Initiative is NOT here: ``[brain] proactivity`` already is that setting.
+    An unset (None) dimension takes the preset's value; ``preset`` unset takes the product default
+    (professional for Work, friendly for Consumer). ``dodaios.brain.personality`` resolves it.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    schema_version: int = Field(default=1, ge=0, le=1_000, strict=True)
+    mode: PersonalityMode = "mixed"
+    preset: PersonalityPreset | None = None
+    tone: Tone | None = None
+    # 0..4 scales (0 = least, 4 = most; concision: 4 = shortest).
+    formality: int | None = Field(default=None, ge=0, le=4, strict=True)
+    warmth: int | None = Field(default=None, ge=0, le=4, strict=True)
+    humor: int | None = Field(default=None, ge=0, le=4, strict=True)
+    concision: int | None = Field(default=None, ge=0, le=4, strict=True)
+    #: How far the adaptive part may move a dimension from the base (0 = not at all).
+    expressive_range: int = Field(default=1, ge=0, le=2, strict=True)
+    #: Moods the adaptive part may use. ``neutral`` is always allowed (the way back).
+    moods_allowed: list[Mood] = Field(default_factory=lambda: list(_ALL_MOODS), max_length=5)
+    #: A mood the owner pinned until they change it; None = no pin.
+    locked_mood: Mood | None = None
+
+    @field_validator("moods_allowed", mode="after")
+    @classmethod
+    def _neutral_always_and_unique(cls, value: list[str]) -> list[str]:
+        return ["neutral", *dict.fromkeys(m for m in value if m != "neutral")]
+
+
 class BrainPolicyConfig(BaseModel):
     use_routing_model_for_intent: bool = True
     prompt_cache_heartbeat_seconds: int = 240
@@ -1650,6 +1691,7 @@ class BrainConfig(BaseModel):
     providers: dict[str, BrainProviderConfig] = Field(default_factory=dict)
     policy: BrainPolicyConfig = Field(default_factory=BrainPolicyConfig)
     multi_engine: MultiEngineConfig = Field(default_factory=MultiEngineConfig)
+    personality: PersonalityConfig = Field(default_factory=PersonalityConfig)
     # Per-response output ceiling (tokens) for every spoken/chat reply. This is
     # a SAFETY CEILING, not a target: the model still stops on its own
     # (``finish_reason == "stop"``), so a short question keeps its short answer.

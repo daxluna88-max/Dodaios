@@ -1645,6 +1645,62 @@ def set_multi_engine(
     return stored
 
 
+def set_personality(
+    settings: dict[str, Any], *, path: Path = DEFAULT_CONFIG_FILE
+) -> dict[str, Any]:
+    """Persist ``[brain.personality]`` (issue 17): the owner's stable style for this product.
+
+    The block is validated first (a bad value raises ``ValueError``; nothing is written) and then
+    replaces the old block in one atomic write, stamped with the current schema version so a
+    migrated profile is saved explicitly. Unset dimensions are omitted: they follow the preset.
+    Returns the block as stored.
+    """
+    from .config import PersonalityConfig  # noqa: PLC0415
+
+    stored = PersonalityConfig.model_validate(
+        {**settings, "schema_version": 1}
+    ).model_dump(exclude_none=True)
+    path = _ensure_writable_config_path(path)
+    with _WRITE_LOCK:
+        raw = path.read_text(encoding="utf-8")
+        had_bom = raw.startswith(_BOM)
+        if had_bom:
+            raw = raw[len(_BOM) :]
+        doc: TOMLDocument = tomlkit.parse(raw)
+        brain = doc.get("brain")
+        if brain is None:
+            brain = tomlkit.table()
+            doc["brain"] = brain
+        block = tomlkit.table()
+        for key, value in stored.items():
+            block[key] = value
+        brain["personality"] = block
+        out = tomlkit.dumps(doc)
+        if had_bom:
+            out = _BOM + out
+        _atomic_write(path, out)
+    return stored
+
+
+def reset_personality(*, path: Path = DEFAULT_CONFIG_FILE) -> None:
+    """Remove ``[brain.personality]``: every value returns to the product's defaults."""
+    path = _ensure_writable_config_path(path)
+    with _WRITE_LOCK:
+        raw = path.read_text(encoding="utf-8")
+        had_bom = raw.startswith(_BOM)
+        if had_bom:
+            raw = raw[len(_BOM) :]
+        doc: TOMLDocument = tomlkit.parse(raw)
+        brain = doc.get("brain")
+        if brain is None or "personality" not in brain:
+            return
+        del brain["personality"]
+        out = tomlkit.dumps(doc)
+        if had_bom:
+            out = _BOM + out
+        _atomic_write(path, out)
+
+
 def set_silence_window_ms(ms: int, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
     """Persist the voice silence window to ``[speech] vad_silence_ms`` in jarvis.toml.
 
