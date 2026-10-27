@@ -32,6 +32,23 @@ export interface FirstRunEngine {
   ready: boolean;
   verified: boolean;
   reason: string;
+  /** Detected on this computer: true/false, or null when it cannot be told without contacting it. */
+  detected?: boolean | null;
+  /** configured / detected / reachable / verified. `reachable` and `verified` are never reached by the first run. */
+  levels?: { configured: string; detected: string; reachable: string; verified: string };
+}
+
+export interface FirstRunPermission {
+  id: "microphone" | "screen" | "files" | "network" | "tools" | "memory_learning";
+  state: "off" | "on" | "ask" | "other";
+  note: string;
+}
+
+export interface FirstRunJournal {
+  digest: string | null;
+  done: string[];
+  planned: string[];
+  resume: string | null;
 }
 
 export interface FirstRunSummary {
@@ -41,6 +58,9 @@ export interface FirstRunSummary {
   engine: FirstRunEngine;
   memory: { learning_enabled: boolean };
   actions: { approval_mode: string };
+  components?: { voice: { needed: string; speech_package: string; model_weights: string; microphone: string } };
+  permissions?: FirstRunPermission[];
+  journal?: FirstRunJournal;
   start: "start" | "explore";
 }
 

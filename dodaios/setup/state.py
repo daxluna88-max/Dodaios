@@ -226,6 +226,10 @@ _ONBOARDING_KEYS = (
     # were applied to the config. A reset clears both so a replay starts from nothing.
     "first_run",
     "first_run_applied_at",
+    # The real applied mark and the step journal (block 11). The applied mark was missing from this
+    # list, so a reset left a stale digest and the replayed apply skipped every write.
+    "first_run_applied",
+    "first_run_journal",
 )
 
 
@@ -258,6 +262,39 @@ def _merge_state(updates: dict[str, Any], path: Path | None = None) -> None:
                 tempfile_path.unlink()
             except OSError:
                 logger.debug("_merge_state: tempfile cleanup failed for %s", tempfile_path)
+
+
+def drop_state_keys(keys: tuple[str, ...] | list[str], path: Path | None = None) -> list[str]:
+    """Remove ONLY ``keys`` from the state file (atomic, never raises). Returns those removed.
+
+    Unlike :func:`reset_onboarding` this keeps the terms acceptance and every other key.
+    """
+    state = load_setup_state(path)
+    removed = [k for k in keys if k in state]
+    if not removed:
+        return []
+    for k in removed:
+        state.pop(k, None)
+    target = state_path(path)
+    tmp: Path | None = None
+    try:
+        tmp = target.with_suffix(target.suffix + f".tmp-{secrets.token_hex(4)}")
+        with open(tmp, "w", encoding="utf-8", newline="") as fp:
+            json.dump(state, fp, indent=2, ensure_ascii=False)
+            fp.flush()
+            os.fsync(fp.fileno())
+        os.replace(tmp, target)
+        tmp = None
+    except OSError as exc:
+        logger.warning("drop_state_keys: write failed for %s: %s", target, exc)
+        return []
+    finally:
+        if tmp is not None and tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                logger.debug("drop_state_keys: tempfile cleanup failed for %s", tmp)
+    return removed
 
 
 def _now_iso() -> str:
@@ -377,4 +414,5 @@ __all__ = [
     "acknowledge_wake_word",
     "mark_onboarding_complete",
     "reset_onboarding",
+    "drop_state_keys",
 ]

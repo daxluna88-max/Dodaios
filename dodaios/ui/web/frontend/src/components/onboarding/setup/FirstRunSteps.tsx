@@ -11,7 +11,7 @@ import { ArrowRight, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { fill, useT } from "@/i18n";
+import { fill, useLocaleChunk, useT } from "@/i18n";
 import type { FirstRunChoices, FirstRunEngine, FirstRunState, Interaction, useFirstRun } from "@/lib/firstRun";
 import { BackAction, StepFooter, StepHead } from "./wizardParts";
 
@@ -309,8 +309,80 @@ function engineLine(t: (key: string) => string, engine: FirstRunEngine): string 
   if (!engine.provider) return t("first_run.summary.engine_state_no_engine");
   const where = engine.local === true ? t("first_run.summary.where_local") : t("first_run.summary.where_remote");
   const kind = engine.kind ? t(`first_run.summary.kind_${engine.kind}`) : "";
-  const state = t(`first_run.summary.engine_state_${engine.reason || "no_engine"}`);
+  const hardened = engine.reason === "local_not_found" || engine.reason === "local_unconfirmed";
+  const state = hardened
+    ? t(`first_run_hardening.reason_${engine.reason}`)
+    : t(`first_run.summary.engine_state_${engine.reason || "no_engine"}`);
   return [engine.provider, kind, where, state].filter(Boolean).join(" · ");
+}
+
+/** Block 11: the engine levels, the permissions (each listed as on/off) and an unfinished earlier apply. */
+function HardeningRows({ summary }: { summary: NonNullable<FirstRunState["summary"]> }) {
+  useLocaleChunk("first_run_hardening");
+  const t = useT();
+  const h = (key: string) => t(`first_run_hardening.${key}`);
+  const value = (v: string) => h(`value_${v}`);
+  const levels = summary.engine.levels;
+  const permissions = summary.permissions ?? [];
+  const on = permissions.filter((p) => p.state === "on").map((p) => h(`perm_${p.id}`));
+  const off = permissions.filter((p) => p.state === "off").map((p) => h(`perm_${p.id}`));
+  const journal = summary.journal;
+  const voice = summary.components?.voice;
+  return (
+    <div className="mt-4 space-y-4 text-sm" data-testid="setup-hardening">
+      {levels && (
+        <section data-testid="setup-engine-levels">
+          <h3 className="font-medium text-foreground">{h("levels_title")}</h3>
+          <dl className="mt-2 divide-y divide-border rounded-lg border border-border bg-popover">
+            {(["configured", "detected", "reachable", "verified"] as const).map((level) => (
+              <div key={level} className="flex justify-between gap-4 px-4 py-2">
+                <dt className="text-muted-foreground">{h(`level_${level}`)}</dt>
+                <dd className="text-foreground">{value(levels[level])}</dd>
+              </div>
+            ))}
+          </dl>
+          <p className="mt-2 text-xs text-muted-foreground">{h("levels_note")}</p>
+        </section>
+      )}
+      {voice && (
+        <p className="text-muted-foreground" data-testid="setup-voice-component">
+          {h("voice_title")}:{" "}
+          {voice.needed !== "yes"
+            ? h("voice_not_needed")
+            : voice.speech_package === "present"
+              ? h("voice_package_present")
+              : h("voice_package_missing")}
+        </p>
+      )}
+      {permissions.length > 0 && (
+        <section data-testid="setup-permissions">
+          <h3 className="font-medium text-foreground">{h("permissions_title")}</h3>
+          <p className="mt-1 text-xs text-muted-foreground">{h("permissions_lede")}</p>
+          <dl className="mt-2 divide-y divide-border rounded-lg border border-border bg-popover">
+            {permissions.map((p) => (
+              <div key={p.id} className="flex justify-between gap-4 px-4 py-2">
+                <dt className="text-muted-foreground">
+                  {h(`perm_${p.id}`)} <span className="text-xs">({h(`note_${p.note}`)})</span>
+                </dt>
+                <dd className="text-foreground">{h(`state_${p.state}`)}</dd>
+              </div>
+            ))}
+          </dl>
+          <p className="mt-2 text-xs text-foreground" data-testid="setup-permissions-enabled">
+            {h("enabled_title")}: {on.length ? on.join(", ") : h("none")}
+          </p>
+          <p className="text-xs text-muted-foreground" data-testid="setup-permissions-off">
+            {h("left_off_title")}: {off.length ? off.join(", ") : h("none")}
+          </p>
+        </section>
+      )}
+      {journal && journal.resume && (
+        <p role="status" className="text-xs text-muted-foreground" data-testid="setup-journal">
+          {fill(h("journal_unfinished"), { done: journal.done.join(", ") || h("journal_nothing") })}
+        </p>
+      )}
+    </div>
+  );
 }
 
 export function SummaryStep({
@@ -366,6 +438,7 @@ export function SummaryStep({
           {t("first_run.summary.unavailable")}
         </p>
       )}
+      {summary && <HardeningRows summary={summary} />}
       <p className="mt-4 text-sm leading-relaxed text-foreground" data-testid="setup-summary-ready">
         {ready
           ? state.product === "work"
