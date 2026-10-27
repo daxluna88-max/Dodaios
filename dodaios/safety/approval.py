@@ -33,6 +33,20 @@ from dodaios.core.events import ActionApproved, ActionDenied
 #: apart from "somebody said no" — the two are different outcomes and used to
 #: be reported with the same word (audit GT-12).
 TIMEOUT_REASON = "timeout"
+#: ``who_or_reason`` of an approval that arrived after the owner's STOP (ADR-0058).
+STOPPED_REASON = "stopped_by_owner"
+
+
+def _door_ticket() -> int:
+    from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
+    return get_stop_controller().ticket()
+
+
+def _admitted(ticket: int) -> bool:
+    from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
+    return get_stop_controller().admit(ticket).allowed
 
 
 class ApprovalTicket:
@@ -49,10 +63,18 @@ class ApprovalTicket:
         self._future = future
         self._closed = False
 
+    def _verified(self, answer: tuple[bool, str]) -> tuple[bool, str]:
+        """An approval is only good for the STOP generation it was requested under: after STOP
+        (or STOP and a resume) the tool must not run, whoever clicked."""
+        stop_ticket = self._workflow._stop_tickets.get(self.trace_id)
+        if answer[0] and stop_ticket is not None and not _admitted(stop_ticket):
+            return (False, STOPPED_REASON)
+        return answer
+
     async def wait(self, timeout_s: float) -> tuple[bool, str]:
         """Wait for the first decision, defaulting safely to deny on timeout."""
         try:
-            return await asyncio.wait_for(self._future, timeout=timeout_s)
+            return self._verified(await asyncio.wait_for(self._future, timeout=timeout_s))
         except TimeoutError:
             return (False, TIMEOUT_REASON)
         finally:
@@ -76,7 +98,7 @@ class ApprovalTicket:
             return None
         if self._future.exception() is not None:
             return None
-        return self._future.result()
+        return self._verified(self._future.result())
 
     def close(self) -> None:
         """Remove an unresolved ticket so cancellation cannot leak state."""
@@ -93,6 +115,8 @@ class ApprovalWorkflow:
         self._bus = bus
         self._timeout_s = timeout_s
         self._pending: dict[UUID, asyncio.Future[tuple[bool, str]]] = {}
+        # trace_id -> STOP generation taken when the approval was armed (its creation).
+        self._stop_tickets: dict[UUID, int] = {}
         bus.subscribe(ActionApproved, self._on_approved)
         bus.subscribe(ActionDenied, self._on_denied)
 
@@ -114,6 +138,7 @@ class ApprovalWorkflow:
             asyncio.get_running_loop().create_future()
         )
         self._pending[trace_id] = future
+        self._stop_tickets[trace_id] = _door_ticket()
         return ApprovalTicket(self, trace_id, future)
 
     def _discard(
@@ -123,6 +148,7 @@ class ApprovalWorkflow:
     ) -> None:
         if self._pending.get(trace_id) is future:
             self._pending.pop(trace_id, None)
+            self._stop_tickets.pop(trace_id, None)
         if not future.done():
             future.cancel()
 
