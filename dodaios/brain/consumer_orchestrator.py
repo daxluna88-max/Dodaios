@@ -253,6 +253,8 @@ class BranchResult:
     #: Identity of the run that produced this result (``turn/generation/nonce``). Synthesis accepts
     #: only results of the run that is still current for its turn; empty means "not from a run".
     run_id: str = ""
+    #: Tool calls the engine asked for anyway. They were DROPPED, never run (block 7).
+    dropped_tool_calls: int = 0
 
 
 @dataclass(slots=True)
@@ -312,6 +314,10 @@ class Orchestrator:
             return "the branch timeout must be a finite number of seconds > 0"
         if not b.authenticated:
             return f"{b.provider} is not authenticated"
+        if getattr(b.brain, "executes_tools_itself", False) is True:
+            # A branch must not act: an engine that runs its own tools outside ToolExecutor
+            # (no approval, no STOP, no ledger) cannot be a review branch.
+            return f"{b.provider} runs its own tools and cannot be a no-tools branch"
         if b.needs_api and b.kind == "subscription":
             return f"{b.provider} is an app subscription connection: it is not API access"
         try:
@@ -393,6 +399,7 @@ class Orchestrator:
                 b.kind, "local_resources"
             )
             timing: dict[str, float] = {}
+            dropped = [0]
 
             def done(status: str, **fields: Any) -> BranchResult:
                 began = timing.get("start")
@@ -400,7 +407,8 @@ class Orchestrator:
                     b.branch_id, b.provider, status, egress=record,
                     first_token_s=timing.get("first"),
                     total_s=None if began is None else time.perf_counter() - began,
-                    cost_basis=basis, tainted=tainted, run_id=run_id, **fields,
+                    cost_basis=basis, tainted=tainted, run_id=run_id,
+                    dropped_tool_calls=dropped[0], **fields,
                 )
 
             async with sem:
@@ -423,7 +431,8 @@ class Orchestrator:
                             if self._current.get(turn_id) != gen:
                                 return done("stale")
                             if delta.tool_call is not None:
-                                continue  # tools are centralized: a branch cannot ask to run one
+                                dropped[0] += 1  # tools are centralized: dropped, never run
+                                continue
                             if delta.content:
                                 timing.setdefault("first", time.perf_counter() - started)
                                 out.append(delta.content)

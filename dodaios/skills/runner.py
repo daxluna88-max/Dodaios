@@ -396,8 +396,17 @@ class SkillRunner:
                 from dodaios.core import egress_guard
 
                 offline = egress_guard.tool_refusal(tool_name)
+                # No approver exists on this path: the owner's STOP and the process-wide tool
+                # gate (ADR-0044) still apply, and anything but "allow" refuses (block 7).
+                from dodaios.safety.preflight import unattended_refusal
+
+                held = None if offline is not None else await unattended_refusal(
+                    tool_name, tool_args
+                )
                 if offline is not None:
                     result = ToolResult(success=False, output=None, error=offline)
+                elif held is not None:
+                    result = ToolResult(success=False, output=None, error=f"not run: {held}")
                 else:
                     result = await tool_obj.execute(tool_args, ctx)
                 if not isinstance(result, ToolResult):
