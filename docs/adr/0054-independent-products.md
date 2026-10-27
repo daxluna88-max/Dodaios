@@ -43,3 +43,47 @@ processes. An unknown product name is an error, not a default.
   vault and directory; use the flag.
 - Nothing migrates existing shared data or keys into a product; that is a separate, explicit
   step.
+
+## Block 5: environment and entry points
+
+Static review only. **Nothing was executed**: no pytest, no test, no build, no app; only
+`py_compile` and `ruff check` on the touched files.
+
+What changed:
+
+- `product_profile.validate_inherited` (used by the "already active, inherited" branch of
+  `activate_from_argv`): the child no longer accepts the parent's variables on trust. It checks
+  the announced product (`JARVIS_PRODUCT` and `JARVIS_PRODUCT_ACTIVE` agree), the credential
+  service, that the data directory is absolute, named `<root>-<product>` and does not overlap the
+  shared directory, that the config is that product's `dodaios.toml` inside it, and that the
+  `.product` marker exists and names this product (a missing, corrupt or other-product marker is
+  refused). Read-only: it does not claim and does not re-acquire the launch lock (the parent
+  holds it). A product credential service with no `JARVIS_PRODUCT_ACTIVE` is refused as a
+  half-inherited environment, in `activate_from_argv` and on every early entry.
+- `paths.user_data_dir` no longer returns the inherited path blindly: absolute, `-<product>`
+  suffix, and a marker that, if present, names the active product (else `RuntimeError`).
+- `product_profile.validate_entry` + `dodaios/__main__.py`: the early dispatches (`update`,
+  `--relauncher`, `--background-service` / `--persistent-server` / `--connect`, `--turn-host`)
+  used to match only `argv[1]`, so `--product work --background-service` fell into the normal
+  parser and `update --product work` hit the update parser. The entry flag is now found with
+  `--product` removed (any position, `--product work` and `--product=work`). `update`,
+  `--relauncher` and `--turn-host` validate the inherited environment before touching anything;
+  the two helpers refuse a `--product` flag (the product comes from the parent's environment).
+  The background-service entries pass the whole argv to the launcher, which selects or validates
+  the product (it already did). `relauncher.main`, `turn_host.main` and `app_update.main` validate
+  too, for `python -m <module>` starts that bypass `__main__`.
+- Relaunch: the restart chain carries no `--product`; the new launcher inherits the same
+  environment, validates it and reuses the same directory (no second suffix, no re-derivation).
+
+Not verified or not done:
+
+- Nothing above was run; the written tests (`tests/unit/core/test_product_profile_env.py`) were
+  never executed. The stricter validation could reject an environment a real run produces (for
+  example a legacy `Jarvis` shared directory renamed between parent and child is tolerated only
+  because the check compares overlap, not the exact name).
+- `update` is install-wide and takes no product lock: `dodaios update` from a shell cannot see a
+  running product app's session, so it does not detect a running Work/Consumer app (limit, not
+  fixed). `--product` on `update` is only validated, not used.
+- Frozen builds, macOS LaunchServices and Windows branded-launcher restarts were read, not run.
+  Other early or direct module entries (`--clipboard-read`, `--audio-device-probe`, the control
+  CLI) were not changed.
