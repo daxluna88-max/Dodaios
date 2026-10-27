@@ -63,6 +63,7 @@ from dodaios.core.product_profile import (
     SERVICE_PREFIX,
     ProductError,
     _read_owner,
+    check_product_root,
     paths_for,
     validate_product,
 )
@@ -725,6 +726,10 @@ def _product_data_dir(product: str, install_dir: Path) -> Path | str:
         return str(exc)
     if owner != product:
         return f"{data_dir} has no {product} ownership marker (owner: {owner or 'none'})."
+    try:
+        check_product_root(product, data_dir, canonical=True)
+    except ProductError as exc:
+        return str(exc)
     a, b = os.path.realpath(data_dir), os.path.realpath(install_dir)
     if a == b or a.startswith(b + os.sep) or b.startswith(a + os.sep):
         return f"{data_dir} overlaps the shared install folder {install_dir}."

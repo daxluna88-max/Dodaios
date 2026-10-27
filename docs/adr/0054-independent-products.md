@@ -147,3 +147,35 @@ owns only its data directory `<shared>-<product>` (marker `.product`), its crede
   beyond passing `--product` through.
 - Old Desktop output under `Dodaios-Output` made before this change is not moved or re-linked.
 <!-- END block 5: mirror and uninstall -->
+
+## Block 8: review fixes R8
+
+Finding (HIGH): an inherited product directory could still nest inside the OTHER product (for
+example `<root>-work/nested-consumer` with a consumer marker and a matching config), so deleting
+Work could delete Consumer data. The config check looked at `config.parent` only, so a
+`dodaios.toml` that was a symlink to the other product's file was not seen.
+
+Changes:
+
+- `core/product_profile.check_product_root(product, data_dir, canonical=...)`: the root must not
+  be a link; its strict real path must not be an ancestor, descendant or equal of the shared root
+  (current and resolved legacy name) or of the other product's root; with `canonical=True` it
+  must also equal exactly `<shared-root>-<product>` after resolving.
+- `validate_inherited` uses the canonical form, refuses a symlinked `.product` marker, and checks
+  the config FILE: not a symlink and its resolved path must be `dodaios.toml` inside the resolved
+  data root.
+- `paths.user_data_dir` (scoped branch) runs the same non-canonical disjointness/link check, so
+  every process of a product refuses a root nested with the other product (the sibling-name rule
+  is not forced there, to keep custom test roots working).
+- `setup/uninstall._product_data_dir` runs the canonical check before any removal, so a
+  per-product uninstall cannot reach the other product's data.
+
+Remaining limits:
+
+- Nothing was run: no tests, no build, no deletion experiment. The new tests
+  (`tests/unit/core/test_product_roots_disjoint.py`) are written, not run, and the existing tests
+  that use non-sibling roots with `validate_inherited` or uninstall were not re-checked.
+- Checks are point-in-time (check, then use): a link swapped in between is not prevented.
+- OS registration and install identities (app bundle id, autostart entry, Start menu shortcut,
+  `.desktop` entry, terminal commands) and the shared install folder stay shared.
+- A product root cannot be a symlink at all, including a deliberate one to another disk.

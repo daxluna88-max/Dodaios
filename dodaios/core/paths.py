@@ -72,6 +72,8 @@ def user_data_dir() -> Path:
         owner = _pp._read_owner(scoped_dir / _pp.MARKER_NAME)  # noqa: SLF001 - same package
         if owner is not None and owner != active:
             raise RuntimeError(f"{scoped_dir} belongs to the {owner} product, not {active}")
+        # Never a link, never nested with the shared root or the other product (ADR-0054 R8).
+        _pp.check_product_root(active, scoped_dir)
         return scoped_dir
     return resolve_pair(user_data_dir_pair())
 
