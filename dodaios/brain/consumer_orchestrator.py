@@ -269,6 +269,15 @@ class SynthesisResult:
     #: be sent to a remote engine, a remote TTS or a shared memory.
     tainted: bool = False
 
+    @property
+    def provenance(self) -> str:
+        """Typed label of ``text`` for the caller (R6): ``restricted`` when tainted, else
+        ``unrestricted`` only for a finished answer; anything else is ``unavailable`` (fail closed).
+        Values match :class:`dodaios.brain.provenance.Provenance`."""
+        if self.tainted:
+            return "restricted"
+        return "unrestricted" if self.status == "ok" else "unavailable"
+
 
 SYNTHESIS_INSTRUCTION = (
     "Several engines answered the same request. Write ONE final answer for the user. "

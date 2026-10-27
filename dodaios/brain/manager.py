@@ -232,6 +232,23 @@ def _chain_has_remote(chain: Any) -> bool:
         return True
 
 
+def _history_for_engine(history: Any, provider: str) -> Any:
+    """History for ONE engine: restricted messages are not replayed to a remote one (R6).
+
+    Local engines see everything. Unknown destination counts as remote (fails closed).
+    """
+    from dodaios.brain import engine_policy  # noqa: PLC0415
+
+    if not any(getattr(m, "restricted", False) for m in history):
+        return history
+    try:
+        if engine_policy.destination_of(str(provider)).local:
+            return history
+    except Exception:  # noqa: BLE001 - unreadable means unknown means remote
+        log.debug("engine locality of %s unreadable: treated as remote", provider)
+    return [m for m in history if not getattr(m, "restricted", False)]
+
+
 def _turn_is_stale() -> bool:
     turn = _STOP_TURN.get()
     return turn is not None and turn.stale()
@@ -9639,6 +9656,10 @@ class BrainManager:
         from dodaios.brain.provider_registry import BrainProviderRegistry  # noqa: PLC0415
 
         lang = self._phrase_language(user_text)
+        from dodaios.brain import provenance  # noqa: PLC0415
+
+        # Fail closed while the engines run and if anything below raises (R6).
+        provenance.set_turn_provenance(provenance.Provenance.UNAVAILABLE)
         try:
             outcome = await multi_engine_chat.ask(
                 task, await self._multi_engine_config(), BrainProviderRegistry(),
@@ -9651,8 +9672,12 @@ class BrainManager:
             log.warning("multi-engine turn failed: %s", type(exc).__name__)
             outcome = multi_engine_chat.MultiEngineOutcome(
                 "no_answer", reason=f"internal error ({type(exc).__name__})")
+        # The outcome's typed label replaces the pessimistic one (the label only ever rides on the
+        # turn channel and the returned LabelledText, never on the text content).
+        provenance.begin_turn()
+        provenance.set_turn_provenance(outcome.provenance)
         if outcome.status == "ok":
-            return outcome.text
+            return provenance.label(outcome.text, outcome.provenance)
         key = {"work": "work", "off": "off", "no_engines": "no_engines",
                "no_answer": "no_answer", "synthesis_failed": "synthesis_failed"}[outcome.status]
         return i18n_catalog.t(
@@ -9668,9 +9693,15 @@ class BrainManager:
         trace_id: UUID | None = None,
     ) -> None:
         """Apply the normal response side effects for non-provider paths too."""
+        from dodaios.brain import provenance  # noqa: PLC0415
+
+        # R6: the typed label (own + turn channel) decides; the text match is an extra signal.
+        # UNAVAILABLE is treated as restricted: no curator note, no replay to a remote engine.
+        withheld = provenance.remote_speech_blocked(response_text)
         if use_history and not _turn_is_stale():
-            self._history.append(BrainMessage(role="user", content=user_text))
-            self._history.append(BrainMessage(role="assistant", content=response_text))
+            self._history.append(BrainMessage(role="user", content=user_text, restricted=withheld))
+            self._history.append(
+                BrainMessage(role="assistant", content=response_text, restricted=withheld))
             if len(self._history) > 40:
                 self._history = self._history[-40:]
 
@@ -9679,9 +9710,7 @@ class BrainManager:
             text=response_text,
         )
 
-        from dodaios.brain import provenance  # noqa: PLC0415
-
-        if self._curator is not None and not provenance.is_restricted(response_text) and not (
+        if self._curator is not None and not withheld and not (
             (profile_override := _TURN_OVERRIDE.get()) is not None
             and profile_override.tool_context.get("tool_origin") == "society"
         ):
@@ -10745,6 +10774,10 @@ class BrainManager:
         self._last_turn_all_failed = False
         self._last_turn_suppressed = False
         self._last_turn_executed_action_tool = False
+        # R6: typed provenance is per turn; a new turn starts unrestricted until a path says more.
+        from dodaios.brain import provenance as _provenance  # noqa: PLC0415
+
+        _provenance.begin_turn()
         # Clear last turn's provider identity so a helper prompt build before the
         # fallback loop (wiki-delta base) does not carry a stale provider name.
         self._active_turn_identity = None
@@ -12059,7 +12092,7 @@ class BrainManager:
                 agg = await disp.dispatch(
                     user_text,
                     images=images,
-                    history=history,
+                    history=_history_for_engine(history, prov_name),
                     trace_id=trace_id,
                     intent_level=decision.level,
                     evidence_required_tool=self._evidence_required_tool,

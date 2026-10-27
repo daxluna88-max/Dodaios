@@ -129,6 +129,8 @@ class BrainMessage:
     tool_call_id: str | None = None
     name: str | None = None
     images: tuple[ImageBlock, ...] = ()
+    #: Derives from local-only material (typed provenance, R6): never replayed to a remote engine.
+    restricted: bool = False
 
 
 #: The reasoning-effort ladder a request may ask for, ascending. Providers

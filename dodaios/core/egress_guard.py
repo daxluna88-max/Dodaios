@@ -229,9 +229,10 @@ NOT_COVERED = (
 
 # --- Function coverage (ADR-0060) -------------------------------------------------------------
 # The socket guard sees only this Python process. Under the profile, a function that starts a
-# child process or talks over the network is UNAVAILABLE unless proven covered. Classification is
-# by tool name: it errs on the side of refusing, and an unclassified in-process tool is only
-# covered by the socket guard (listed in UNCLASSIFIED).
+# child process or talks over the network is UNAVAILABLE unless proven covered. R7: the default is
+# DENY. A tool passes only when positively classified as no-network (``OFFLINE_SAFE_TOOLS`` or a
+# capability declared by the registry via ``declare_tool_coverage``); a name in a refusal class
+# below is refused whatever it declares.
 
 #: Python modules (``python -m <module>``) that are verified to call ``install_from_env`` first.
 #: Empty on purpose: add one only together with a test that starts it and sees the refusal.
@@ -256,7 +257,8 @@ _TOOL_CLASSES: dict[str, tuple[str, frozenset[str], tuple[str, ...], tuple[str, 
 
 #: What is NOT classified and so only covered by the in-process socket guard.
 UNCLASSIFIED = (
-    "tools added by plugins or the marketplace under a name not listed here (socket guard only)",
+    "call sites that pass only a tool NAME (not the tool) cannot see its declared capability: the "
+    "MCP harness and skill runner must call tool_refusal(name, tool) (ADR-0053, R7)",
     "git operations run by the code workspace (fetch, push, clone) and the Codex app server",
     "agent runtime installers/gateways, the terminal host, native pickers, media tools (ffmpeg)",
 )
@@ -280,15 +282,85 @@ def tool_class(tool_name: str) -> str | None:
     return None
 
 
-def tool_refusal(tool_name: str) -> str | None:
-    """A plain refusal message when the profile is active and the tool cannot be covered."""
-    key = tool_class(tool_name) if _active() else None
-    if key is None:
+#: Tools POSITIVELY classified as "starts no child process and opens no network connection of
+#: its own": first-party local UI-input and read-only local tools (names as the tools declare
+#: them). Checked by reading their modules for network/process imports, NOT by running them.
+#: Everything that is neither here, nor declared, nor in a refusal class above is UNAVAILABLE
+#: under the profile (default deny, R7).
+OFFLINE_SAFE_TOOLS: frozenset[str] = frozenset({
+    "click", "click_element", "drag", "hotkey", "move_mouse", "scroll", "type_text",
+    "switch_window", "wait_for_element", "wait_for_ui_state", "read_visible_ui_state",
+    "inspect-pointer", "reset_orb_position", "show_on_screen", "whoami",
+    "wiki-list", "wiki-page-read", "product_help",
+})
+
+#: Coverage declared at registration time by the tool/plugin registry (it vets the plugin first).
+_DECLARED: dict[str, str] = {}
+
+CAPABILITY_NONE = "none"  # no network, no child process: the only value that passes the profile
+CAPABILITY_NETWORK = "network"
+CAPABILITY_CHILD = "child_process"
+CAPABILITY_UNKNOWN = "unknown"
+_CAPABILITIES = frozenset({CAPABILITY_NONE, CAPABILITY_NETWORK, CAPABILITY_CHILD})
+
+
+def declare_tool_coverage(tool_name: str, capability: str) -> None:
+    """Called by the tool/plugin registry for a tool it has vetted. An unknown value is recorded
+    as UNKNOWN (so it is refused): a typo must not open a tool."""
+    name = (tool_name or "").strip().lower()
+    if name:
+        _DECLARED[name] = capability if capability in _CAPABILITIES else CAPABILITY_UNKNOWN
+
+
+def tool_capability(tool_name: str, tool: Any = None) -> str:
+    """``none`` only when positively classified; everything else is ``network``/``child_process``
+    (declared or by refusal class) or ``unknown`` (refused under the profile).
+
+    A refusal class by NAME always wins: a tool cannot declare itself offline-safe to leave one.
+    The ``network_capability`` attribute (or ``offline_safe is True``) on a tool object is honoured
+    only for first-party classes (module under ``dodaios.``); a third-party plugin must be declared
+    through :func:`declare_tool_coverage` by the registry.
+    """
+    name = (tool_name or "").strip().lower()
+    if tool_class(name) is not None:
+        return CAPABILITY_CHILD
+    if name in _DECLARED:
+        return _DECLARED[name]
+    if name in OFFLINE_SAFE_TOOLS:
+        return CAPABILITY_NONE
+    if tool is not None and str(getattr(type(tool), "__module__", "")).startswith("dodaios."):
+        declared = getattr(tool, "network_capability", None)
+        if declared in _CAPABILITIES:
+            return str(declared)
+        if getattr(tool, "offline_safe", None) is True:
+            return CAPABILITY_NONE
+    return CAPABILITY_UNKNOWN
+
+
+def tool_refusal(tool_name: str, tool: Any = None) -> str | None:
+    """A plain refusal message when the profile is active and the tool is not positively covered.
+
+    Default deny (R7): an unclassified name is UNAVAILABLE, not allowed. Call sites that hold the
+    tool object (the MCP harness, the skill runner) must pass it as ``tool`` so its declared
+    capability is consulted; ``tool_name`` alone only matches the built-in lists.
+    """
+    if not _active():
         return None
-    label = _TOOL_CLASSES[key][0]
+    key = tool_class(tool_name)
+    if key is not None:
+        label = _TOOL_CLASSES[key][0]
+        return (
+            f"Unavailable in the strict offline profile: {tool_name!r} ({label}) cannot be kept "
+            "offline. Turn the profile off in Settings > General > Network to use it."
+        )
+    capability = tool_capability(tool_name, tool)
+    if capability == CAPABILITY_NONE:
+        return None
+    why = ("declared as using the network or a child process" if capability != CAPABILITY_UNKNOWN
+           else "not classified as offline-safe")
     return (
-        f"Unavailable in the strict offline profile: {tool_name!r} ({label}) cannot be kept "
-        "offline. Turn the profile off in Settings > General > Network to use it."
+        f"Unavailable in the strict offline profile: {tool_name!r} is {why}, so it cannot be "
+        "kept offline. Turn the profile off in Settings > General > Network to use it."
     )
 
 

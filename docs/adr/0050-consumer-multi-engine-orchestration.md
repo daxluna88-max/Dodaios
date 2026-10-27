@@ -87,3 +87,38 @@ NOT covered:
   (local engine only), are not gated. Existing memory providers must implement `recall_notes` to reach remote engines.
 * Embeddings: no remote embedding call was found in `dodaios/brain` or the speech path; not exhaustively searched.
 * Durable storage of the label (it is in-process and lost on restart); labels on stored history/curator output.
+
+## Block 8: review fixes R6
+
+Review finding (high): text matching is not a privacy label. The registry of block 7 ignores text under 6 characters,
+expires after 1 h, evicts after 256 entries, vanishes on restart and fails after any transformation, so a short
+restricted answer ("42") reached a remote TTS. Written, not run: no test, build or service was executed in this block.
+
+What changed:
+
+1. **Typed label.** `dodaios/brain/provenance.py` has `Provenance` (`unrestricted` | `restricted` | `unavailable`),
+   `LabelledText` (a `str` that carries the label) and a per-turn channel (`begin_turn`, `set_turn_provenance`,
+   `turn_provenance`) that does not read the text at all. The label only gets more restrictive within a turn.
+   `remote_speech_blocked(text)` fails closed: restricted AND unavailable both keep text off a remote synthesizer; a
+   local one is unaffected. The text-match registry stays only as an extra signal.
+2. **Carried through the turn.** `MultiEngineOutcome.provenance` (default `unavailable`; explicit `restricted` /
+   `unrestricted` only where known) and `SynthesisResult.provenance`. `BrainManager._run_multi_engine_turn` sets
+   `unavailable` before the engines run (an exception leaves it so), then replaces it with the outcome's label and
+   returns a `LabelledText`. `_generate_untagged` calls `begin_turn()` first.
+3. **Doors.** `MeteredTTS.synthesize` uses `remote_speech_blocked` (also for 1-5 character text and rewritten text).
+   `_record_response_side_effects` skips the curator for a restricted/unavailable response and marks the history pair
+   `BrainMessage.restricted`; the per-engine dispatch uses `_history_for_engine`, which drops restricted messages for any
+   engine not provably local (unknown = remote).
+
+Remaining gaps (NOT closed):
+
+* Normal-chat tool output (`tool_use_loop`) carries no label, nor does the wiki injector, screen context, pointer
+  context or `_upcoming_block`; those still reach remote engines. Their material is labelled `unrestricted` by default
+  because nobody labels it, which is a gap, not a proof.
+* The turn channel is process-wide and resets at the next turn: speech of a restricted answer still being synthesized
+  when the next turn begins is covered only by the text registry. Concurrent sessions share it (conservative).
+* Native/realtime voice connections that speak by themselves, `live/native.py` `set_turn_context`, and other speech
+  that does not pass `MeteredTTS` are not gated. Ack/phrase TTS during a restricted turn is also suppressed for remote.
+* `turn_memory.py` is unchanged: `MemoryNote.local_only` still decides, and a provider without `recall_notes` still
+  contributes nothing to a remote chain; notes are not yet typed `Provenance`.
+* The label is in process memory: it is lost on restart and not stored with history on disk.
