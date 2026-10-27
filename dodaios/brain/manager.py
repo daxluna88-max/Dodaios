@@ -185,6 +185,50 @@ class _SkillTurnState:
         self.injected_inline = False
 
 
+@dataclass(slots=True)
+class _StopTurn:
+    """The STOP generation a turn started under (ADR-0058).
+
+    ``exempt`` marks a turn the door never blocks: the refusal reply itself and a stop phrase.
+    """
+
+    ticket: int
+    exempt: bool = False
+    #: Id under which this turn's engine record was opened, and the engine that last ran for it.
+    ledger_turn_id: str | None = None
+    identity: tuple[str, str | None] | None = None
+
+    def stale(self) -> bool:
+        """STOP (or STOP and a resume) happened after this turn started."""
+        if self.exempt:
+            return False
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
+        return not get_stop_controller().admit(self.ticket).allowed
+
+
+_STOP_TURN: ContextVar[_StopTurn | None] = ContextVar("jarvis_brain_stop_turn", default=None)
+
+
+def _turn_is_stale() -> bool:
+    turn = _STOP_TURN.get()
+    return turn is not None and turn.stale()
+
+
+def _guard_text_consumer(
+    consumer: Callable[[str], None] | None, turn: _StopTurn
+) -> Callable[[str], None] | None:
+    """Streamed text of a turn that started before STOP stops reaching the screen and the voice."""
+    if consumer is None:
+        return None
+
+    def guarded(chunk: str) -> None:
+        if not turn.stale():
+            consumer(chunk)
+
+    return guarded
+
+
 _SKILL_TURN_STATE: ContextVar[_SkillTurnState | None] = ContextVar(
     "dodaios.brain.manager.skill_turn_state",
     default=None,
@@ -3730,6 +3774,10 @@ class BrainManager:
         """Publish the public response event unless this call is an internal reply."""
         if not _PUBLISH_RESPONSE_EVENT.get():
             return
+        if _turn_is_stale():
+            # Nothing a turn that started before STOP says is shown or spoken afterwards.
+            log.info("a response that arrived after STOP was not published")
+            return
         await self._bus.publish(
             ResponseGenerated(
                 trace_id=trace_id,
@@ -3831,6 +3879,115 @@ class BrainManager:
             return target_prefix + raw_output[len(de_prefix):]
         return raw_output
 
+    def _style_runtime(self) -> Any:
+        from dodaios.brain.style import StyleRuntime  # noqa: PLC0415
+
+        runtime = getattr(self, "_style_runtime_obj", None)
+        if runtime is None:
+            runtime = self._style_runtime_obj = StyleRuntime()
+        return runtime
+
+    def _turn_ledger(self) -> Any:
+        """What the latest turn used (engines, categories), for the main screen's control strip."""
+        from dodaios.control.turn_record import TurnLedger  # noqa: PLC0415
+
+        ledger = getattr(self, "_turn_ledger_obj", None)
+        if ledger is None:
+            ledger = self._turn_ledger_obj = TurnLedger()
+        return ledger
+
+    def _record_single_engine_turn(self, trace_id: UUID) -> None:
+        """The main engine of an ordinary turn, for the control strip. Locality is the endpoint's
+        (loopback only); tools and network use are not observed here and stay 'not observed'."""
+        from dodaios.brain import engine_policy  # noqa: PLC0415
+        from dodaios.control import turn_record as tr  # noqa: PLC0415
+
+        try:
+            provider = self.active_provider
+            locality = "local" if engine_policy.destination_of(provider).local else "remote"
+            planned = () if locality == "local" else (tr.Flow("question", provider),)
+            self._turn_ledger().record(tr.TurnRecord(
+                turn_id=str(trace_id), engines=(tr.EngineUse(provider, "main", locality),),
+                planned=planned, observability="declared", state="running", requested=provider,
+            ))
+            if (turn := _STOP_TURN.get()) is not None:
+                turn.ledger_turn_id = str(trace_id)
+        except Exception:  # noqa: BLE001 - the screen's record never breaks a turn
+            log.debug("turn record could not be written", exc_info=True)
+
+    def _finish_engine_record(self, turn: _StopTurn, *, crashed: bool = False) -> None:
+        """Swap the start-of-turn guess for the engine that actually ran (a fallback may have
+        answered instead). ``None`` identity = no model was used, e.g. a fast path replied."""
+        if turn.ledger_turn_id is None:
+            return
+        from dodaios.brain import engine_policy  # noqa: PLC0415
+
+        try:
+            identity = turn.identity
+            provider = identity[0] if identity is not None else None
+            locality = "unknown"
+            if provider is not None:
+                locality = "local" if engine_policy.destination_of(provider).local else "remote"
+            self._turn_ledger().finish(
+                turn.ledger_turn_id, provider=provider, locality=locality,  # type: ignore[arg-type]
+                answered=not (crashed or self._last_turn_all_failed),
+            )
+        except Exception:  # noqa: BLE001 - the screen's record never breaks a turn
+            log.debug("turn record could not be finished", exc_info=True)
+
+    def personality_snapshot(self) -> tuple[Any, Any, bool]:
+        """(effective profile, mood state now, adaptation on) for the settings screen."""
+        from dodaios.brain import engine_policy  # noqa: PLC0415
+
+        profile, state = self._style_runtime().sync(
+            self._config.brain.personality, engine_policy.current_product())
+        return profile, state, self._style_runtime().adaptation_on
+
+    def personality_apply(self, event: Any) -> Any:
+        """A mood event from the owner (screen or command); the saved profile is untouched."""
+        self.personality_snapshot()  # make sure a profile is loaded before the reducer acts
+        return self._style_runtime().apply(event)
+
+    def set_personality(self, cfg: Any) -> None:
+        """The owner saved a profile: the next turn and the screen follow it at once."""
+        self._config.brain.personality = cfg
+
+    def _style_command_reply(self, user_text: str) -> str | None:
+        """A short style command («more serious», «stay like this»): this session only, no model."""
+        from dodaios.brain import style_commands  # noqa: PLC0415
+
+        cmd = style_commands.parse(user_text)
+        brain_cfg = getattr(self._config, "brain", None)
+        if cmd is None or getattr(brain_cfg, "personality", None) is None:
+            return None
+        self.personality_snapshot()  # a profile must be loaded before the session changes
+        runtime = self._style_runtime()
+        if cmd.kind == "nudge":
+            runtime.nudge(*cmd.argument)
+        elif cmd.kind == "reset_style":
+            runtime.reset_nudges()
+        elif cmd.kind != "clarify":
+            applied = runtime.apply(cmd.event())
+            if applied is not None and not applied.accepted:
+                return style_commands.reply(
+                    cmd, refused=style_commands.refusal_text(applied.refused, cmd.language))
+        return style_commands.reply(cmd)
+
+    def _style_instruction(self, *, compact: bool = False) -> str:
+        """The personality + mood text for this turn; empty when no profile is configured."""
+        from dodaios.brain import engine_policy, style  # noqa: PLC0415
+
+        cfg = getattr(getattr(getattr(self, "_config", None), "brain", None), "personality", None)
+        if cfg is None:
+            return ""
+        try:
+            profile, state = self._style_runtime().sync(cfg, engine_policy.current_product())
+            return style.instruction(profile, state, compact=compact)
+        except Exception:  # noqa: BLE001 - a style fault must never break the prompt
+            log.warning("personality style could not be built; turn continues without it",
+                        exc_info=True)
+            return ""
+
     def _build_system_prompt(self) -> str:
         """Builds the system prompt with Jarvis-Agent-style workspace injection.
 
@@ -3888,6 +4045,12 @@ class BrainManager:
         persona_block = load_effective_persona_prompt()
         if persona_block:
             parts.append(persona_block)
+
+        # The owner's stable personality plus the current simulated mood (issue 17): enumerated
+        # values only, so no free text and no mood history ever reaches the engine.
+        style_text = self._style_instruction()
+        if style_text:
+            parts.append(style_text)
 
         # User's own standing-instructions file (CLAUDE.md equivalent),
         # named after the assistant (e.g. Assistant.md). Distinct from the persona: the
@@ -9379,6 +9542,48 @@ class BrainManager:
         except Exception:  # noqa: BLE001
             log.debug("Background completion history mirror failed", exc_info=True)
 
+    async def _multi_engine_config(self) -> Any:
+        """``[brain.multi_engine]`` as saved NOW (the Settings screen writes the file, no restart);
+        the config this manager started with when the file cannot be read."""
+        from dodaios.core.config import load_config  # noqa: PLC0415
+
+        try:
+            return (await asyncio.to_thread(load_config)).brain.multi_engine
+        except Exception:  # noqa: BLE001 - an unreadable file must not end the question
+            log.warning("multi-engine settings could not be re-read; using the startup copy",
+                        exc_info=True)
+            return self._config.brain.multi_engine
+
+    async def _run_multi_engine_turn(self, user_text: str, *, trace_id: UUID) -> str | None:
+        """The one answer of an explicit "ask several engines" request, else None (normal turn)."""
+        from dodaios.brain import multi_engine_chat  # noqa: PLC0415
+
+        task = multi_engine_chat.extract_task(user_text)
+        if task is None:
+            return None
+        from dodaios.brain.provider_registry import BrainProviderRegistry  # noqa: PLC0415
+
+        lang = self._phrase_language(user_text)
+        try:
+            outcome = await multi_engine_chat.ask(
+                task, await self._multi_engine_config(), BrainProviderRegistry(),
+                turn_id=str(trace_id),
+                # The owner's style applies to the FINAL answer only: reviewers stay neutral.
+                style_instruction=self._style_instruction(compact=True),
+                ledger=self._turn_ledger(),
+            )
+        except Exception as exc:  # noqa: BLE001 - the person gets a reason, never a crashed turn
+            log.warning("multi-engine turn failed: %s", type(exc).__name__)
+            outcome = multi_engine_chat.MultiEngineOutcome(
+                "no_answer", reason=f"internal error ({type(exc).__name__})")
+        if outcome.status == "ok":
+            return outcome.text
+        key = {"work": "work", "off": "off", "no_engines": "no_engines",
+               "no_answer": "no_answer", "synthesis_failed": "synthesis_failed"}[outcome.status]
+        return i18n_catalog.t(
+            f"brain.multi_engine.{key}", lang, reasons=outcome.reason, reason=outcome.reason,
+        ).strip()
+
     async def _record_response_side_effects(
         self,
         *,
@@ -9388,7 +9593,7 @@ class BrainManager:
         trace_id: UUID | None = None,
     ) -> None:
         """Apply the normal response side effects for non-provider paths too."""
-        if use_history:
+        if use_history and not _turn_is_stale():
             self._history.append(BrainMessage(role="user", content=user_text))
             self._history.append(BrainMessage(role="assistant", content=response_text))
             if len(self._history) > 40:
@@ -10335,6 +10540,7 @@ class BrainManager:
         consume_pending_voice_attachments: bool = False,
         turn_override: TurnOverride | None = None,
         language_text: str | None = None,
+        stop_ticket: int | None = None,
     ) -> str:
         """Generate a turn, optionally leaving its public response event to the caller.
 
@@ -10366,8 +10572,15 @@ class BrainManager:
         )
         skill_state = _SkillTurnState(self)
         skill_token = _SKILL_TURN_STATE.set(skill_state)
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
+        stop_turn = _StopTurn(
+            stop_ticket if stop_ticket is not None else get_stop_controller().ticket())
+        stop_turn_token = _STOP_TURN.set(stop_turn)
+        text_consumer = _guard_text_consumer(text_consumer, stop_turn)
+        crashed = True
         try:
-            return await self._generate(
+            result = await self._generate(
                 user_text,
                 use_history=use_history,
                 trace_id=trace_id,
@@ -10383,8 +10596,17 @@ class BrainManager:
                     consume_pending_voice_attachments
                 ),
                 language_text=language_text,
+                stop_ticket=stop_turn.ticket,
             )
+            crashed = False
+            if stop_turn.stale():
+                # The owner pressed STOP while this turn was running: its answer is not delivered.
+                log.info("a reply that finished after STOP was dropped")
+                return ""
+            return result
         finally:
+            self._finish_engine_record(stop_turn, crashed=crashed)
+            _STOP_TURN.reset(stop_turn_token)
             # Keep the last completed turn inspectable for diagnostics/tests,
             # while active concurrent turns continue reading their own
             # ContextVar-backed state.
@@ -10424,6 +10646,7 @@ class BrainManager:
         force_output_language: str | None = None,
         consume_pending_voice_attachments: bool = False,
         language_text: str | None = None,
+        stop_ticket: int | None = None,
     ) -> str:
         # 1. Intercept meta-commands (cancel, switch, depth override).
         # User request 2026-04-25: no standardised confirmation phrases
@@ -10441,6 +10664,27 @@ class BrainManager:
         # fallback loop (wiki-delta base) does not carry a stale provider name.
         self._active_turn_identity = None
         turn_trace_id = trace_id or uuid4()
+
+        # After the owner's STOP nothing new starts until they resume (ADR-0058). A turn queued
+        # before STOP carries its old ticket and stays refused. A spoken/typed "stop" must still
+        # get through, so the cancel intent is let past the door.
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
+        if not get_stop_controller().admit(stop_ticket).allowed:
+            # The refusal reply and a stop phrase are never themselves dropped as "late".
+            if (turn := _STOP_TURN.get()) is not None:
+                turn.exempt = True
+        if not get_stop_controller().admit(stop_ticket).allowed and not self._detect_cancel_intent(
+            user_text
+        ):
+            stopped_reply = i18n_catalog.t(
+                "brain.stopped_waiting_resume", self._phrase_language(user_text)
+            ).strip()
+            await self._record_response_side_effects(
+                user_text=user_text, response_text=stopped_reply,
+                use_history=False, trace_id=turn_trace_id,
+            )
+            return stopped_reply
 
         # Tool-surface self-heal (live 2026-07-13): a source that connects
         # AFTER the boot's last BrainToolsChanged — or whose event is lost to a
@@ -10534,6 +10778,27 @@ class BrainManager:
                 trace_id=turn_trace_id,
             )
             return confirmation
+
+        # «More serious», «stay like this», «turn adaptation off» (issue 17): deterministic, this
+        # conversation only, never saved, no model call.
+        style_reply = self._style_command_reply(user_text)
+        if style_reply is not None:
+            await self._record_response_side_effects(
+                user_text=user_text, response_text=style_reply,
+                use_history=use_history, trace_id=turn_trace_id,
+            )
+            return style_reply
+
+        # "Ask several engines: ..." (ADR-0055). One final answer, published once through the
+        # normal response path, so the voice speaks it once; branch answers never leave the module.
+        multi_reply = await self._run_multi_engine_turn(user_text, trace_id=turn_trace_id)
+        if multi_reply is not None:
+            await self._record_response_side_effects(
+                user_text=user_text, response_text=multi_reply,
+                use_history=use_history, trace_id=turn_trace_id,
+            )
+            return multi_reply
+        self._record_single_engine_turn(turn_trace_id)
 
         society_reply = await self._run_society_inventory_fast_path(
             user_text, trace_id=turn_trace_id,
@@ -11665,6 +11930,8 @@ class BrainManager:
             # Set here — after dead/cooldown skips — so it always names the
             # provider that genuinely runs this attempt, including a fallback win.
             self._active_turn_identity = (prov_name, model)
+            if (turn := _STOP_TURN.get()) is not None:
+                turn.identity = (prov_name, model)
             # Delegated realtime voice turns get hard loop bounds so an
             # unbounded delegate can never run away (live 2026-07-14: 14
             # rounds / 66 s on "what is in my wiki"). They are ceilings, not

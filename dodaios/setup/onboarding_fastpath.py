@@ -124,6 +124,10 @@ async def handle(scope: dict, receive: Any, send: Any) -> bool:
     if not path.startswith(_PREFIX):
         return False
     method, sub = scope.get("method", "GET"), path[len(_PREFIX):]
+    if sub.startswith("/first-run"):
+        # The guided first run reads the real configuration and the provider registry, which the
+        # warming window does not have: let the request wait for the real app instead of a 404.
+        return False
 
     if method == "GET" and sub == "/state":
         await _send_json(send, state_payload(_path()))

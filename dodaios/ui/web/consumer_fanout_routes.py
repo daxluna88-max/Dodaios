@@ -28,13 +28,17 @@ from dodaios.brain.consumer_orchestrator import (
     PrivacyGate,
     fan_out_report,
 )
+from dodaios.brain.multi_engine_chat import (  # noqa: F401 - re-exported for callers and tests
+    SUBSCRIPTION_PROVIDERS,
+    connection_kind,
+)
+from dodaios.brain.multi_engine_chat import authenticated as _authenticated
+from dodaios.core.config import MultiEngineConfig
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/consumer", tags=["consumer"])
 
-#: Plan-login providers: they spend a subscription quota, not an API key.
-SUBSCRIPTION_PROVIDERS = frozenset({"codex", "claude-cli", "antigravity"})
 MAX_BRANCHES = 6
 MAX_ITEMS = 20
 MAX_TEXT = 20_000
@@ -71,28 +75,6 @@ class FanOutBody(BaseModel):
     #: When set, ONE final answer is written by this engine from the branch answers, through the
     #: same privacy gate, budget and cancellation as the branches.
     synthesizer: BranchBody | None = None
-
-
-def connection_kind(provider: str) -> str:
-    if provider in engine_policy.LOCAL_PROVIDERS:
-        return "local"
-    return "subscription" if provider in SUBSCRIPTION_PROVIDERS else "api"
-
-
-def _authenticated(provider: str, kind: str, registry: Any) -> bool:
-    """Whether the provider is usable now, WITHOUT contacting it (no call, no spend)."""
-    if kind == "local":
-        return True
-    if kind == "subscription":
-        probe = getattr(registry.get_class(provider), "subscription_connected", None)
-        try:
-            return bool(probe()) if callable(probe) else False
-        except Exception:  # noqa: BLE001 - an unreadable login state means not connected
-            log.debug("subscription probe for %s failed", provider, exc_info=True)
-            return False
-    from dodaios.core.config import get_provider_secret  # noqa: PLC0415
-
-    return bool(get_provider_secret(provider))
 
 
 def _status_rows() -> list[dict[str, Any]]:
@@ -190,3 +172,37 @@ async def consumer_fanout(body: FanOutBody) -> dict[str, Any]:
                     "categories": list(e.categories), "items": e.items, "chars": e.chars,
                     "withheld_local_only": e.withheld_local_only} for e in gate.egress_log],
     }
+
+
+# -- "Ask several engines" from the chat: its settings (ADR-0055) ---------------------------------
+
+
+def _multi_engine_payload() -> dict[str, Any]:
+    from dodaios.core import config as cfg_mod  # noqa: PLC0415
+
+    if engine_policy.current_product() == "work":
+        return {"available": False, "reason": "work_local_only"}
+    return {"available": True, "reason": "",
+            **cfg_mod.load_config().brain.multi_engine.model_dump(exclude_none=True)}
+
+
+@router.get("/multi-engine", summary="Settings of the chat's 'ask several engines'")
+async def get_multi_engine() -> dict[str, Any]:
+    return await asyncio.to_thread(_multi_engine_payload)
+
+
+@router.put("/multi-engine", summary="Save the chat's 'ask several engines' settings")
+async def put_multi_engine(body: MultiEngineConfig) -> dict[str, Any]:
+    """Saved to the config file and read on the next request: no restart. Work refuses it."""
+    from dodaios.core import config_writer  # noqa: PLC0415
+
+    if engine_policy.current_product() == "work":
+        raise HTTPException(
+            status_code=403,
+            detail="Asking several engines is not available in the Work product (local only).",
+        )
+    try:
+        await asyncio.to_thread(config_writer.set_multi_engine, body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return await asyncio.to_thread(_multi_engine_payload)

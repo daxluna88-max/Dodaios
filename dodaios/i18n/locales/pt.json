@@ -61,6 +61,7 @@
     },
     "mid_answer_error": "Executei os passos, mas algo falhou ao redigir a resposta. Volta a perguntar-me daqui a um momento.",
     "action_failed": "Reconheci a ação, mas não consegui executá-la.",
+    "stopped_waiting_resume": "Estou parado. Retome-me pela barra de controle e eu continuo.",
     "lang_switch_confirm": "Feito — a partir de agora respondo em português.",
     "lang_switch_confirm_auto": "Feito — a partir de agora respondo na língua que usares.",
     "ack": {

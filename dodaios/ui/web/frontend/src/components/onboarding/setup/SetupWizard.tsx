@@ -7,7 +7,7 @@
  * step's own rows, with the way forward at the bottom right. Nothing in the
  * window blocks: every step past the name can be left for later.
  */
-import { ArrowLeft, ArrowRight, Check, Loader2 } from "lucide-react";
+import { ArrowRight, Check, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
@@ -24,9 +24,20 @@ import { formatCombo, validationText } from "@/views/settings/KeybindRow";
 import { useChordCapture } from "@/views/settings/useChordCapture";
 import { GuidePetFigure } from "../pet/GuidePet";
 import { TOUR_LAYER_ATTR } from "../tourEvents";
-import { QuietAction } from "../ui";
+import { useFirstRun } from "@/lib/firstRun";
 import { ConnectStep } from "./ConnectStep";
+import {
+  EngineNotes,
+  InteractionChoice,
+  OwnerFields,
+  PersonalityStep,
+  PrivacyStep,
+  SummaryStep,
+  WorkEnginePanel,
+  type FirstRun,
+} from "./FirstRunSteps";
 import { WIZARD_STEP_IDS, type WizardStepId } from "./setupSteps";
+import { BackAction, StepFooter, StepHead } from "./wizardParts";
 
 const LANGS: UiLanguage[] = ["en", "de", "es", "zh", "pt"];
 // Each language names itself, so a reader finds theirs before they can read
@@ -62,6 +73,9 @@ export function SetupWizard({
   const index = WIZARD_STEP_IDS.indexOf(step);
   const next = WIZARD_STEP_IDS[index + 1];
   const prev = index > 0 ? WIZARD_STEP_IDS[index - 1] : null;
+  // One state for the whole window: the owner's choices, saved as they go (a replay keeps them local).
+  const run = useFirstRun(preview);
+  const product = run.state?.product ?? "consumer";
 
   return createPortal(
     <div
@@ -88,14 +102,34 @@ export function SetupWizard({
           <StepPills current={index} onPick={(i) => onStep(WIZARD_STEP_IDS[i])} />
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto border-t border-border bg-background/60 px-6 py-6">
-          {step === "name" && <NameStep onContinue={() => onStep("connect")} />}
-          {step === "connect" && (
-            <ConnectStepFrame
+          {step === "name" && <NameStep run={run} onContinue={() => onStep("voice")} />}
+          {step === "voice" && (
+            <VoiceStep run={run} preview={preview} onBack={() => prev && onStep(prev)} onContinue={() => onStep("personality")} />
+          )}
+          {step === "personality" && (
+            <PersonalityStep
+              run={run}
               onBack={() => prev && onStep(prev)}
-              onContinue={(anything) => (anything ? onStep(next ?? "voice") : onSkip(next ?? "voice"))}
+              onContinue={() => onStep("connect")}
+              onSkip={() => onSkip("connect")}
             />
           )}
-          {step === "voice" && <VoiceStep preview={preview} onBack={() => prev && onStep(prev)} onFinish={onFinish} />}
+          {step === "connect" &&
+            (product === "work" ? (
+              <WorkEnginePanel state={run.state} onBack={() => prev && onStep(prev)} onContinue={() => onStep("privacy")} />
+            ) : (
+              <ConnectStepFrame
+                product={product}
+                onBack={() => prev && onStep(prev)}
+                onContinue={(anything) => (anything ? onStep(next ?? "privacy") : onSkip(next ?? "privacy"))}
+              />
+            ))}
+          {step === "privacy" && (
+            <PrivacyStep run={run} onBack={() => prev && onStep(prev)} onApplied={() => onStep("summary")} />
+          )}
+          {step === "summary" && (
+            <SummaryStep run={run} preview={preview} onEdit={() => onStep("name")} onFinish={onFinish} />
+          )}
         </div>
       </div>
     </div>,
@@ -189,43 +223,13 @@ function LanguageSwitch({ className }: { className?: string }) {
   );
 }
 
-function StepHead({ title, lede }: { title: string; lede: string }) {
-  return (
-    <>
-      <h2 className="text-2xl font-semibold tracking-tight text-foreground" data-testid="setup-step-title">
-        {title}
-      </h2>
-      <p className="mt-2.5 text-sm leading-relaxed text-muted-foreground">{lede}</p>
-    </>
-  );
-}
-
-function StepFooter({ left, children }: { left?: ReactNode; children: ReactNode }) {
-  return (
-    <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
-      <div>{left}</div>
-      <div className="flex items-center gap-2">{children}</div>
-    </div>
-  );
-}
-
-function BackAction({ onClick }: { onClick: () => void }) {
-  const t = useT();
-  return (
-    <QuietAction onClick={onClick} className="inline-flex items-center gap-1 text-sm" testId="setup-back">
-      <ArrowLeft aria-hidden className="h-3.5 w-3.5" />
-      {t("first_run.back")}
-    </QuietAction>
-  );
-}
-
 /* ------------------------------------------------------------------ steps */
 
 /**
  * "What would you like to call me?" The name is the wake word: saving it
  * renames the assistant everywhere (bylines, the voice, the sidebar).
  */
-function NameStep({ onContinue }: { onContinue: () => void }) {
+function NameStep({ run, onContinue }: { run: FirstRun; onContinue: () => void }) {
   const t = useT();
   const { config, saveWakeWord } = useWakeWord();
   const saved = deriveAssistantName(config?.phrase ?? "");
@@ -275,6 +279,7 @@ function NameStep({ onContinue }: { onContinue: () => void }) {
         className="mt-5 h-12 w-full rounded-lg border border-border-strong bg-input px-4 text-lg text-foreground placeholder:text-foreground-faint focus-visible:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
       {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
+      <OwnerFields run={run} />
       <StepFooter>
         <Button type="submit" disabled={!name || saving} data-testid="onboarding-primary">
           {saving && <Loader2 aria-hidden className="animate-spin" />}
@@ -286,7 +291,15 @@ function NameStep({ onContinue }: { onContinue: () => void }) {
   );
 }
 
-function ConnectStepFrame({ onBack, onContinue }: { onBack: () => void; onContinue: (anything: boolean) => void }) {
+function ConnectStepFrame({
+  product,
+  onBack,
+  onContinue,
+}: {
+  product: "consumer" | "work";
+  onBack: () => void;
+  onContinue: (anything: boolean) => void;
+}) {
   const t = useT();
   const [anything, setAnything] = useState(false);
   const onConnectedChange = useCallback((any: boolean) => setAnything(any), []);
@@ -296,6 +309,7 @@ function ConnectStepFrame({ onBack, onContinue }: { onBack: () => void; onContin
       <div className="mt-5">
         <ConnectStep onConnectedChange={onConnectedChange} />
       </div>
+      <EngineNotes product={product} />
       {!anything && (
         <p className="mt-4 text-xs leading-relaxed text-muted-foreground" data-testid="setup-connect-nothing">
           {t("first_run.connect.nothing_yet")}
@@ -459,7 +473,17 @@ function CallShortcutRow() {
  * How the user talks to the assistant: the wake word heard all the time (or
  * the Call shortcut), and the app starting at login so it is there to hear.
  */
-function VoiceStep({ preview, onBack, onFinish }: { preview: boolean; onBack: () => void; onFinish: () => void }) {
+function VoiceStep({
+  run,
+  preview,
+  onBack,
+  onContinue,
+}: {
+  run: FirstRun;
+  preview: boolean;
+  onBack: () => void;
+  onContinue: () => void;
+}) {
   const t = useT();
   const { config, setWakeActivation } = useWakeWord();
   const autostart = useAutostart();
@@ -471,6 +495,8 @@ function VoiceStep({ preview, onBack, onFinish }: { preview: boolean; onBack: ()
   const name = deriveAssistantName(phrase) || assistantName;
   const on = listening ?? Boolean(config?.enabled && phrase);
   const loginOn = startAtLogin ?? Boolean(autostart.config?.enabled);
+  // Voice settings only when the owner chose voice: choosing text asks for nothing.
+  const voiceChosen = run.state?.choices.interaction !== "text";
 
   useEffect(() => {
     if (config) setListening(null);
@@ -511,6 +537,8 @@ function VoiceStep({ preview, onBack, onFinish }: { preview: boolean; onBack: ()
   return (
     <>
       <StepHead title={t("first_run.voice.title")} lede={t("first_run.voice.lede")} />
+      <InteractionChoice run={run} />
+      {voiceChosen && (
       <div className="mt-5 divide-y divide-border overflow-hidden rounded-lg border border-border bg-popover">
         <SettingRow
           testId="setup-voice-wake"
@@ -543,13 +571,16 @@ function VoiceStep({ preview, onBack, onFinish }: { preview: boolean; onBack: ()
           />
         )}
       </div>
+      )}
       {wakeNote && <p className="mt-2 px-1 text-xs text-muted-foreground">{wakeNote}</p>}
-      <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
-        {preview ? t("first_run.voice.preview_note") : t("first_run.voice.restart_note")}
-      </p>
+      {voiceChosen && (
+        <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
+          {preview ? t("first_run.voice.preview_note") : t("first_run.voice.restart_note")}
+        </p>
+      )}
       <StepFooter left={<BackAction onClick={onBack} />}>
-        <Button onClick={onFinish} data-testid="onboarding-start">
-          {t("first_run.voice.start")}
+        <Button onClick={onContinue} data-testid="onboarding-primary">
+          {t("first_run.continue")}
           <ArrowRight aria-hidden />
         </Button>
       </StepFooter>

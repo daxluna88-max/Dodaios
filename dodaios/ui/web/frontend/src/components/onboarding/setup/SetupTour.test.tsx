@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { _resetProvidersCacheForTests } from "@/hooks/useProviders";
 import type { useOnboarding } from "@/hooks/useOnboarding";
 import { loadLocaleChunk } from "@/i18n";
+import en from "@/i18n/locales/onboarding/en.json";
 import { useEventStore } from "@/store/events";
 import { SetupTour } from "./SetupTour";
 
@@ -28,6 +29,41 @@ let wakeWord = { phrase: "", enabled: false, engine: "auto" };
 let cliStatus: Record<string, object> = {};
 let loginReplies: Record<string, { status: number; body: unknown }> = {};
 let calls: Array<{ url: string; method: string; body?: string }> = [];
+// null: the server answers like an older one that has no guided first run (the steps then behave as before).
+let firstRun: Record<string, unknown> | null = null;
+let applyReply: { status: number; body: unknown } | null = null;
+
+function firstRunState(over: Record<string, unknown> = {}, choices: Record<string, unknown> = {}) {
+  return {
+    product: "consumer",
+    choices: {
+      owner_name: null,
+      space_name: null,
+      interaction: "text",
+      personality_skip: false,
+      personality_tone: "adapt",
+      personality_preset: null,
+      memory: "off",
+      ...choices,
+    },
+    applied: false,
+    presets: ["friendly", "ironic", "essential"],
+    default_preset: "friendly",
+    summary: {
+      product: "consumer",
+      interaction: "text",
+      personality: { preset: "friendly", mode: "mixed" },
+      engine: {
+        provider: "ollama", kind: "local", local: true, installed: true, allowed: true,
+        authenticated: true, ready: true, verified: false, reason: "local_server_not_checked",
+      },
+      memory: { learning_enabled: false },
+      actions: { approval_mode: "ask" },
+      start: "start",
+    },
+    ...over,
+  };
+}
 
 function stubFetch() {
   calls = [];
@@ -39,6 +75,16 @@ function stubFetch() {
       const reply = (body: unknown, status = 200) =>
         Promise.resolve({ ok: status < 400, status, json: () => Promise.resolve(body) });
       if (url === "/api/permissions/status") return reply({ platform: "win32" });
+      if (url === "/api/onboarding/first-run" && method === "PUT" && firstRun) {
+        firstRun = { ...firstRun, choices: JSON.parse(String(init?.body)) };
+        return reply(firstRun);
+      }
+      if (url === "/api/onboarding/first-run/apply" && applyReply) return reply(applyReply.body, applyReply.status);
+      if (url === "/api/onboarding/first-run/apply" && firstRun) {
+        firstRun = { ...firstRun, applied: true };
+        return reply(firstRun);
+      }
+      if (url === "/api/onboarding/first-run" && method === "GET" && firstRun) return reply(firstRun);
       if (url === "/api/providers") return reply({ providers });
       if (url === "/api/setup/starter-plans") return reply({ plans: [], selected: null, custom_id: "custom" });
       if (url === "/api/settings/wake-word" && method === "PUT") {
@@ -97,6 +143,8 @@ beforeEach(() => {
   wakeWord = { phrase: "", enabled: false, engine: "auto" };
   cliStatus = {};
   loginReplies = {};
+  firstRun = null;
+  applyReply = null;
   _resetProvidersCacheForTests();
   window.sessionStorage.clear();
   useEventStore.getState().setActiveSection("chats");
@@ -109,16 +157,16 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("opens the setup window on the name, with three step pills", async () => {
+it("opens the setup window on the name, with six step pills", async () => {
   render(<SetupTour onb={fakeOnb()} preview={false} onFinished={vi.fn()} />);
   await screen.findByTestId("setup-name-input");
   expect(step()).toBe("name");
   const pills = within(screen.getByTestId("setup-steps")).getAllByRole("button");
-  expect(pills).toHaveLength(3);
+  expect(pills).toHaveLength(6);
   expect(screen.getByTestId("setup-pill-name").getAttribute("aria-current")).toBe("step");
 });
 
-it("asks for a name, saves it as the wake word and moves on to connecting", async () => {
+it("asks for a name, saves it as the wake word and moves on to how you talk", async () => {
   const onb = fakeOnb();
   render(<SetupTour onb={onb} preview={false} onFinished={vi.fn()} />);
   const input = (await screen.findByTestId("setup-name-input")) as HTMLInputElement;
@@ -128,10 +176,10 @@ it("asks for a name, saves it as the wake word and moves on to connecting", asyn
   await act(async () => {
     fireEvent.click(go);
   });
-  await waitFor(() => expect(step()).toBe("connect"));
+  await waitFor(() => expect(step()).toBe("voice"));
   const put = calls.find((c) => c.url === "/api/settings/wake-word" && c.method === "PUT");
   expect(JSON.parse(put!.body!)).toMatchObject({ phrase: "Nova", persist: true });
-  expect(onb.saveStep).toHaveBeenCalledWith("connect", []);
+  expect(onb.saveStep).toHaveBeenCalledWith("voice", []);
 });
 
 it("keeps a name that did not change without saving it again", async () => {
@@ -141,7 +189,7 @@ it("keeps a name that did not change without saving it again", async () => {
   await act(async () => {
     fireEvent.click(screen.getByTestId("onboarding-primary"));
   });
-  await waitFor(() => expect(step()).toBe("connect"));
+  await waitFor(() => expect(step()).toBe("voice"));
   expect(calls.some((c) => c.url === "/api/settings/wake-word" && c.method === "PUT")).toBe(false);
 });
 
@@ -156,8 +204,8 @@ it("lists one row per provider, marks a signed-in one as ready and records a ski
   await act(async () => {
     fireEvent.click(screen.getByTestId("onboarding-primary"));
   });
-  await waitFor(() => expect(step()).toBe("voice"));
-  expect(onb.saveStep).toHaveBeenLastCalledWith("voice", []);
+  await waitFor(() => expect(step()).toBe("privacy"));
+  expect(onb.saveStep).toHaveBeenLastCalledWith("privacy", []);
 });
 
 it("lets the user go on with nothing connected, recorded as skipped", async () => {
@@ -167,8 +215,8 @@ it("lets the user go on with nothing connected, recorded as skipped", async () =
   await act(async () => {
     fireEvent.click(screen.getByTestId("onboarding-primary"));
   });
-  await waitFor(() => expect(step()).toBe("voice"));
-  expect(onb.saveStep).toHaveBeenLastCalledWith("voice", ["connect"]);
+  await waitFor(() => expect(step()).toBe("privacy"));
+  expect(onb.saveStep).toHaveBeenLastCalledWith("privacy", ["connect"]);
 });
 
 it("shows the install command when a subscription's app is missing", async () => {
@@ -195,14 +243,20 @@ it("takes an API key right in the provider's row", async () => {
   expect(screen.queryByTestId("setup-sub-claude-key")).toBeNull();
 });
 
-it("ends the window on the voice step and walks the app, then finishes", async () => {
+it("shows the voice settings when the server has no guided first run", async () => {
   wakeWord = { phrase: "Nova", enabled: false, engine: "auto" };
-  const onb = fakeOnb({ current_step: "voice" });
-  const onFinished = vi.fn();
-  render(<SetupTour onb={onb} preview={false} onFinished={onFinished} />);
+  render(<SetupTour onb={fakeOnb({ current_step: "voice" })} preview={false} onFinished={vi.fn()} />);
   await waitFor(() => expect(screen.getByTestId("setup-voice-wake").textContent).toContain("Hey Nova"));
   await screen.findByTestId("onboarding-autostart");
   expect(screen.getByTestId("setup-voice-keys").textContent).toBe("CtrlAltJ");
+});
+
+it("ends the window on the summary and walks the app, then finishes", async () => {
+  firstRun = firstRunState({ applied: true });
+  const onb = fakeOnb({ current_step: "summary" });
+  const onFinished = vi.fn();
+  render(<SetupTour onb={onb} preview={false} onFinished={onFinished} />);
+  await screen.findByTestId("setup-summary");
   await act(async () => {
     fireEvent.click(screen.getByTestId("onboarding-start"));
   });
@@ -259,7 +313,7 @@ it("lets the walk be skipped", async () => {
 
 it("goes back to a finished step from its pill", async () => {
   render(<SetupTour onb={fakeOnb({ current_step: "voice" })} preview={false} onFinished={vi.fn()} />);
-  await screen.findByTestId("onboarding-start");
+  await screen.findByTestId("setup-voice-keys");
   fireEvent.click(screen.getByTestId("setup-pill-name"));
   await waitFor(() => expect(step()).toBe("name"));
 });
@@ -273,6 +327,118 @@ it("never writes the onboarding state in a replay", async () => {
   await act(async () => {
     fireEvent.click(screen.getByTestId("onboarding-primary"));
   });
-  await waitFor(() => expect(step()).toBe("connect"));
+  await waitFor(() => expect(step()).toBe("voice"));
   expect(onb.saveStep).not.toHaveBeenCalled();
+});
+
+it("sends nothing to the first-run endpoints in a replay, so an installed app's settings stay as they are", async () => {
+  firstRun = firstRunState();
+  render(<SetupTour onb={fakeOnb({ completed: true })} preview onFinished={vi.fn()} />);
+  fireEvent.click(await screen.findByTestId("setup-interaction-voice"));
+  expect(calls.filter((c) => c.url.startsWith("/api/onboarding/first-run") && c.method !== "GET")).toHaveLength(0);
+});
+
+it("offers text, voice or both, defaults to text and shows the voice settings only when voice is chosen", async () => {
+  firstRun = firstRunState();
+  render(<SetupTour onb={fakeOnb({ current_step: "voice" })} preview={false} onFinished={vi.fn()} />);
+  const text = (await screen.findByTestId("setup-interaction-text")) as HTMLInputElement;
+  expect(text.checked).toBe(true);
+  expect(screen.queryByTestId("setup-voice-keys")).toBeNull();
+  fireEvent.click(screen.getByTestId("setup-interaction-voice"));
+  await screen.findByTestId("setup-voice-keys");
+  const put = calls.find((c) => c.url === "/api/onboarding/first-run" && c.method === "PUT");
+  expect(JSON.parse(put!.body!)).toMatchObject({ interaction: "voice" });
+});
+
+it("saves a personality choice, and skipping it is recorded and keeps the product default", async () => {
+  firstRun = firstRunState();
+  const onb = fakeOnb({ current_step: "personality" });
+  render(<SetupTour onb={onb} preview={false} onFinished={vi.fn()} />);
+  fireEvent.click(await screen.findByTestId("setup-personality-ironic"));
+  fireEvent.click(screen.getByTestId("setup-personality-tone-keep"));
+  await waitFor(() => {
+    const last = calls.filter((c) => c.url === "/api/onboarding/first-run" && c.method === "PUT").pop();
+    expect(JSON.parse(last!.body!)).toMatchObject({
+      personality_preset: "ironic", personality_tone: "keep", personality_skip: false,
+    });
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByTestId("setup-personality-skip"));
+  });
+  await waitFor(() => expect(step()).toBe("connect"));
+  expect(onb.saveStep).toHaveBeenLastCalledWith("connect", ["personality"]);
+  const last = calls.filter((c) => c.url === "/api/onboarding/first-run" && c.method === "PUT").pop();
+  expect(JSON.parse(last!.body!)).toMatchObject({ personality_skip: true });
+});
+
+it("Work shows local engines only: no provider rows and no cloud sign-in", async () => {
+  firstRun = firstRunState({ product: "work", presets: ["professional", "collaborative", "essential"] });
+  render(<SetupTour onb={fakeOnb({ current_step: "connect" })} preview={false} onFinished={vi.fn()} />);
+  await screen.findByTestId("setup-work-engine");
+  expect(screen.queryByTestId("setup-sub-openai")).toBeNull();
+  expect(screen.queryByTestId("setup-engine-notes")).toBeNull();
+});
+
+it("Consumer explains the three kinds of engine under the connect step", async () => {
+  firstRun = firstRunState();
+  render(<SetupTour onb={fakeOnb({ current_step: "connect" })} preview={false} onFinished={vi.fn()} />);
+  await screen.findByTestId("setup-engine-notes");
+});
+
+it("privacy: memory is off by default, and a failed write keeps the owner on the step with the reason", async () => {
+  firstRun = firstRunState();
+  applyReply = { status: 500, body: { detail: { error: "first_run_not_applied", step: "approval", written: [] } } };
+  const onb = fakeOnb({ current_step: "privacy" });
+  render(<SetupTour onb={onb} preview={false} onFinished={vi.fn()} />);
+  const memory = await screen.findByTestId("setup-memory-switch");
+  expect(memory.getAttribute("aria-checked")).toBe("false");
+  await act(async () => {
+    fireEvent.click(screen.getByTestId("onboarding-primary"));
+  });
+  expect((await screen.findByTestId("setup-apply-error")).textContent).toContain("approval");
+  expect(step()).toBe("privacy");
+  expect(onb.saveStep).not.toHaveBeenCalledWith("summary", expect.anything());
+});
+
+it("privacy: applying moves on to the summary", async () => {
+  firstRun = firstRunState();
+  const onb = fakeOnb({ current_step: "privacy" });
+  render(<SetupTour onb={onb} preview={false} onFinished={vi.fn()} />);
+  await screen.findByTestId("setup-memory-switch");
+  await act(async () => {
+    fireEvent.click(screen.getByTestId("onboarding-primary"));
+  });
+  await waitFor(() => expect(step()).toBe("summary"));
+  expect(calls.some((c) => c.url === "/api/onboarding/first-run/apply" && c.method === "POST")).toBe(true);
+});
+
+it("the summary says the engine is not verified and offers to explore when no engine is ready", async () => {
+  const state = firstRunState();
+  (state.summary as Record<string, unknown>).start = "explore";
+  (state.summary as { engine: Record<string, unknown> }).engine = {
+    provider: "claude-api", kind: "api", local: false, installed: true, allowed: true,
+    authenticated: false, ready: false, verified: false, reason: "not_connected",
+  };
+  firstRun = state;
+  render(<SetupTour onb={fakeOnb({ current_step: "summary" })} preview={false} onFinished={vi.fn()} />);
+  const start = await screen.findByTestId("onboarding-start");
+  expect(start.textContent).toContain(en.first_run.summary.explore);
+  expect(screen.getByTestId("setup-summary").textContent).toContain(en.first_run.summary.engine_state_not_connected);
+  expect(screen.getByTestId("setup-summary-ready").textContent).toBe(en.first_run.summary.not_ready);
+});
+
+it("the summary of a ready engine says it is not verified with a request", async () => {
+  firstRun = firstRunState();
+  render(<SetupTour onb={fakeOnb({ current_step: "summary" })} preview={false} onFinished={vi.fn()} />);
+  const text = (await screen.findByTestId("setup-summary")).textContent ?? "";
+  expect(text).toContain(en.first_run.summary.engine_state_local_server_not_checked);
+  expect((await screen.findByTestId("onboarding-start")).textContent).toContain(en.first_run.summary.start);
+});
+
+it("Modify choices goes back to the first step without losing them", async () => {
+  firstRun = firstRunState({}, { owner_name: "Dax" });
+  render(<SetupTour onb={fakeOnb({ current_step: "summary" })} preview={false} onFinished={vi.fn()} />);
+  fireEvent.click(await screen.findByTestId("setup-edit"));
+  await waitFor(() => expect(step()).toBe("name"));
+  expect((await screen.findByTestId("setup-owner-name") as HTMLInputElement).value).toBe("Dax");
 });
