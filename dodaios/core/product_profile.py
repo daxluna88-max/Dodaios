@@ -32,6 +32,7 @@ from filelock import FileLock, Timeout
 PRODUCTS = ("work", "consumer")
 MARKER_NAME = ".product"
 LAUNCH_LOCK_NAME = ".launch.lock"
+CONFIG_FILE_NAME = "dodaios.toml"
 SERVICE_PREFIX = "dodaios-"
 PRODUCT_ENV = "JARVIS_PRODUCT"
 #: Set by the launch that selected the product; children inherit it and so stay in the same
@@ -84,7 +85,7 @@ def paths_for(product: str, shared_data_dir: Path) -> ProductPaths:
     name = validate_product(product)
     shared = Path(shared_data_dir)
     data_dir = shared.parent / f"{shared.name}-{name}"
-    return ProductPaths(name, data_dir, data_dir / "dodaios.toml", f"{SERVICE_PREFIX}{name}")
+    return ProductPaths(name, data_dir, data_dir / CONFIG_FILE_NAME, f"{SERVICE_PREFIX}{name}")
 
 
 def _overlaps(a: Path, b: Path) -> bool:
@@ -221,6 +222,8 @@ def activate_from_argv(
     env = os.environ if environ is None else environ
     requested, rest = extract_product_flag(argv)
     active = (env.get(ACTIVE_ENV) or "").strip().lower() or None
+    if active is None:
+        _refuse_stray_scope(env)
     if requested is None and active is None:
         return None, rest, None
     if active is not None:
@@ -229,12 +232,10 @@ def activate_from_argv(
     if active is not None and product != active:
         raise ProductError(f"--product {product} contradicts the running {active} product")
     service = f"{SERVICE_PREFIX}{product}"
-    if active is not None:  # a child: the environment must already be the product's
-        data_dir, config = env.get(DATA_DIR_ENV), env.get(CONFIG_ENV)
-        if not data_dir or not config or env.get(KEYRING_SERVICE_ENV) != service:
-            raise ProductError(f"the inherited {product} environment is incomplete")
+    if active is not None:  # a child: the environment must already be the product's, consistently
+        paths = validate_inherited(product, env)
         _pin_credential_service(service, env)
-        return ProductPaths(product, Path(data_dir), Path(config), service), rest, None
+        return paths, rest, None
     _pin_credential_service(service, env)
     from dodaios.core.paths import user_data_dir  # after the service is pinned (branding)
 
@@ -242,6 +243,96 @@ def activate_from_argv(
     env.update(environment(paths, env))
     env[ACTIVE_ENV] = product
     return paths, rest, lock
+
+
+def _refuse_stray_scope(env: Mapping[str, str]) -> None:
+    """A product credential service with no announced product is a half-inherited environment.
+
+    ``dodaios.core.branding`` would bind that vault while the data directory stayed the shared
+    one: a product's keys next to the shared app's data. Refused, never repaired.
+    """
+    if scoped_service(env) is not None:
+        raise ProductError(
+            f"{KEYRING_SERVICE_ENV} names a product credential service but {ACTIVE_ENV} is not "
+            "set: the inherited environment is inconsistent"
+        )
+
+
+def validate_inherited(product: str, env: Mapping[str, str] | None = None) -> ProductPaths:
+    """Accept the environment a product's parent exported, or refuse it. Reads, never writes.
+
+    A child of a product process does not claim or lock again (the parent holds the launch lock),
+    so everything the parent promised is checked here, before ANY read or write of the vault or
+    the data directory: the announced product, the data directory (named ``<root>-<product>``,
+    outside the shared directory, claimed by THIS product through its ``.product`` marker), the
+    config file (the product's own ``dodaios.toml`` inside that directory) and the credential
+    service. Any mismatch raises :class:`ProductError` (:class:`ProductConflict` for ownership).
+    """
+    source = os.environ if env is None else env
+    name = validate_product(product)
+    service = f"{SERVICE_PREFIX}{name}"
+    raw_dir = (source.get(DATA_DIR_ENV) or "").strip()
+    raw_config = (source.get(CONFIG_ENV) or "").strip()
+    raw_service = (source.get(KEYRING_SERVICE_ENV) or "").strip()
+    declared = (source.get(PRODUCT_ENV) or "").strip().lower()
+    if not raw_dir or not raw_config or not raw_service or not declared:
+        raise ProductError(f"the inherited {name} environment is incomplete")
+    if declared != name or raw_service != service:
+        raise ProductError(
+            f"the inherited {name} environment is inconsistent: {PRODUCT_ENV}={declared!r}, "
+            f"{KEYRING_SERVICE_ENV}={raw_service!r}"
+        )
+    data_dir, config = Path(raw_dir), Path(raw_config)
+    suffix = f"-{name}"
+    if not data_dir.is_absolute() or not config.is_absolute():
+        raise ProductError(f"the inherited {name} paths must be absolute")
+    if not data_dir.name.endswith(suffix) or len(data_dir.name) == len(suffix):
+        raise ProductError(f"{data_dir} is not a {name} product directory (<root>{suffix})")
+    if config.name != CONFIG_FILE_NAME or config.parent.resolve() != data_dir.resolve():
+        raise ProductError(f"{config} is not the {name} product's config inside {data_dir}")
+    from dodaios.core.identity_boot import resolve_pair, user_data_dir_pair
+
+    pair = user_data_dir_pair()
+    for shared in {pair.current, resolve_pair(pair)}:
+        if _overlaps(data_dir, shared):
+            raise ProductConflict(f"{data_dir} overlaps the shared directory {shared}")
+    owner = _read_owner(data_dir / MARKER_NAME)
+    if owner is None:
+        raise ProductError(f"{data_dir} was never claimed by the {name} product")
+    if owner != name:
+        raise ProductConflict(f"{data_dir} belongs to the {owner} product, not {name}")
+    return ProductPaths(name, data_dir, config, service)
+
+
+def validate_entry(
+    argv: list[str], environ: Mapping[str, str] | None = None, *, allow_flag: bool = True
+) -> list[str]:
+    """Identity check for an entry that dispatches BEFORE :func:`activate_from_argv`.
+
+    Update, relauncher, background-service and turn-host entries start early and must not touch a
+    data directory or a vault on an unchecked identity. This reads only: it never claims, locks or
+    imports the config module. An inherited product environment is validated whole
+    (:func:`validate_inherited`); ``--product`` (either spelling, in any position) is checked
+    against it. With ``allow_flag=False`` the flag is refused: a helper takes the product from
+    its parent's environment, never from its own argv. Returns ``argv`` without the flag.
+    """
+    env = os.environ if environ is None else environ
+    requested, rest = extract_product_flag(argv)
+    if requested is not None:
+        if not allow_flag:
+            raise ProductError(
+                "--product is not accepted here: the product comes from the environment"
+            )
+        requested = validate_product(requested)
+    active = (env.get(ACTIVE_ENV) or "").strip().lower() or None
+    if active is None:
+        _refuse_stray_scope(env)
+        return rest
+    active = validate_product(active)
+    if requested is not None and requested != active:
+        raise ProductError(f"--product {requested} contradicts the running {active} product")
+    validate_inherited(active, env)
+    return rest
 
 
 def _pin_credential_service(service: str, env: dict[str, str]) -> None:
@@ -304,5 +395,7 @@ __all__ = [
     "paths_for",
     "prepare_launch",
     "scoped_service",
+    "validate_entry",
+    "validate_inherited",
     "validate_product",
 ]
