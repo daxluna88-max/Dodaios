@@ -3083,6 +3083,9 @@ class CodexAppServerClient:
         self,
         binary_path: str,
     ) -> None:
+        from dodaios.core import egress_guard
+
+        egress_guard.require_child("the Codex app server", [binary_path])
         command = [binary_path, "app-server", "--strict-config"]
         command.extend(
             (

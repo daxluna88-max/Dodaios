@@ -198,6 +198,11 @@ class RunShellTool:
         return {"level": impact.level, "commands": commands}
 
     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:
+        from dodaios.core import egress_guard
+
+        offline = egress_guard.child_refusal("a shell command")
+        if offline is not None:
+            return ToolResult(success=False, output=None, error=offline)
         command = (args.get("command") or "").strip()
         timeout_s = float(args.get("timeout_s", 30))
         cwd = args.get("cwd") or None
