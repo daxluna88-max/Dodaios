@@ -36,7 +36,7 @@ def cfg_obj(approval="ask", learning=False):
 
 
 def test_reset_clears_the_real_applied_mark(env):
-    """Regression: the applied key was missing from the onboarding reset (a replay skipped writes)."""
+    """Regression: the applied key was missing from the onboarding reset (replay skipped writes)."""
     choices = fr.FirstRunChoices()
     fr.apply("consumer", choices, state_path=env.state, config_path=env.cfg)
     assert fr.is_applied("consumer", choices, env.state)
