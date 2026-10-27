@@ -57,11 +57,16 @@ class ApprovalTicket:
         workflow: ApprovalWorkflow,
         trace_id: UUID,
         future: asyncio.Future[tuple[bool, str]],
+        *,
+        tool_name: str = "",
+        fingerprint: str = "",
     ) -> None:
         self._workflow = workflow
         self.trace_id = trace_id
         self._future = future
         self._closed = False
+        self.tool_name = tool_name
+        self.fingerprint = fingerprint
 
     def _verified(self, answer: tuple[bool, str]) -> tuple[bool, str]:
         """An approval is only good for the STOP generation it was requested under: after STOP
@@ -117,6 +122,8 @@ class ApprovalWorkflow:
         self._pending: dict[UUID, asyncio.Future[tuple[bool, str]]] = {}
         # trace_id -> STOP generation taken when the approval was armed (its creation).
         self._stop_tickets: dict[UUID, int] = {}
+        # trace_id -> (tool name, call fingerprint) the approval was requested for (block 7).
+        self._bound: dict[UUID, tuple[str, str]] = {}
         bus.subscribe(ActionApproved, self._on_approved)
         bus.subscribe(ActionDenied, self._on_denied)
 
@@ -125,12 +132,16 @@ class ApprovalWorkflow:
         if fut is not None and not fut.done():
             fut.set_result((approved, who_or_reason))
 
-    def arm(self, trace_id: UUID) -> ApprovalTicket:
+    def arm(self, trace_id: UUID, *, tool_name: str = "", fingerprint: str = "") -> ApprovalTicket:
         """Register the decision future before an approval request is published.
 
         An approval received before this call is deliberately ignored. A trace
         may have only one active ticket, which keeps first-wins semantics and
         prevents unrelated events from pre-authorizing a future action.
+
+        ``tool_name`` and ``fingerprint`` bind the ticket to the exact call: an approval that
+        names another tool, or carries a different argument fingerprint, is ignored (a denial is
+        always honoured). An approval with neither field is a legacy answer and still counts.
         """
         if trace_id in self._pending:
             raise RuntimeError(f"approval trace {trace_id} is already armed")
@@ -139,7 +150,8 @@ class ApprovalWorkflow:
         )
         self._pending[trace_id] = future
         self._stop_tickets[trace_id] = _door_ticket()
-        return ApprovalTicket(self, trace_id, future)
+        self._bound[trace_id] = (tool_name, fingerprint)
+        return ApprovalTicket(self, trace_id, future, tool_name=tool_name, fingerprint=fingerprint)
 
     def _discard(
         self,
@@ -149,10 +161,17 @@ class ApprovalWorkflow:
         if self._pending.get(trace_id) is future:
             self._pending.pop(trace_id, None)
             self._stop_tickets.pop(trace_id, None)
+            self._bound.pop(trace_id, None)
         if not future.done():
             future.cancel()
 
     async def _on_approved(self, event: ActionApproved) -> None:
+        armed_tool, armed_fp = self._bound.get(event.trace_id, ("", ""))
+        if (armed_tool and event.tool_name and event.tool_name != armed_tool) or (
+            armed_fp and event.call_fingerprint and event.call_fingerprint != armed_fp
+        ):
+            # An approval for another call (changed arguments, other tool): it does not apply.
+            return
         self._resolve(event.trace_id, True, event.approved_by or "user")
 
     async def _on_denied(self, event: ActionDenied) -> None:

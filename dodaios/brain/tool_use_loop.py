@@ -1575,6 +1575,9 @@ class ToolUseLoop:
                             "voice_confirm": voice_confirm,
                         },
                         trace_id=tid,
+                        # The provider's call id names this call within the turn: the effect
+                        # ledger refuses to run the same id (a replay) a second time.
+                        effect_key=call_id or None,
                         # Session-Decision-Log: the model's natural-language text
                         # emitted alongside this tool call IS the "why". Captured
                         # for free (no extra call); the executor redacts + caps it.
@@ -1612,6 +1615,7 @@ class ToolUseLoop:
                         final_agg.voice_confirm = {
                             "trace_id": result.output.get("trace_id"),
                             "tool_name": result.output.get("tool_name", tool_name),
+                            "call_fingerprint": result.output.get("call_fingerprint"),
                         }
                         if text_consumer is not None and question:
                             try:

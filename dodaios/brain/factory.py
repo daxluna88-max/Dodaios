@@ -948,6 +948,16 @@ def _phase2_full_brain(
         bus, evaluator, approval,
         default_timeout_s=config.safety.tool_approval_timeout_s,
     )
+    # Block 7: the effect ledger survives a restart, so a redelivered turn cannot repeat a
+    # side effect (best effort: without the file it stays per-process, and says so in the log).
+    if "PYTEST_CURRENT_TEST" not in os.environ:
+        try:
+            from dodaios.core.paths import user_data_dir
+            from dodaios.safety.effects import configure_default_ledger
+
+            configure_default_ledger(user_data_dir() / "effects.sqlite3")
+        except Exception:  # noqa: BLE001 - protection degrades, start-up must not
+            log.warning("effect ledger not persistent", exc_info=True)
 
     # HarnessManager for the internal harness fast path (computer-use /
     # local-action). NB: dispatch-to-harness is no longer an

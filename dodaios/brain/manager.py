@@ -651,9 +651,17 @@ _SCREEN_CONFIRM_TTL_S = 20.0
 class _PendingVoiceConfirm:
     """A deferred consequential action awaiting the user's next yes/no."""
 
-    __slots__ = ("trace_id", "lang", "tool_name", "reasks")
+    __slots__ = ("trace_id", "lang", "tool_name", "reasks", "fingerprint")
 
-    def __init__(self, trace_id: UUID, lang: str, tool_name: str, reasks: int = 0) -> None:
+    def __init__(
+        self,
+        trace_id: UUID,
+        lang: str,
+        tool_name: str,
+        reasks: int = 0,
+        fingerprint: str = "",
+    ) -> None:
+        self.fingerprint = fingerprint
         self.trace_id = trace_id
         self.lang = lang
         self.tool_name = tool_name
@@ -9828,6 +9836,7 @@ class BrainManager:
         lang = _turn_phrase_language(self, user_text)
         self._pending_voice_confirm = _PendingVoiceConfirm(
             trace_id=tid, lang=lang, tool_name=str(descriptor.get("tool_name", "")),
+            fingerprint=str(descriptor.get("call_fingerprint") or ""),
         )
         log.info(
             "voice-confirm armed: tool=%s trace=%s lang=%s",
@@ -9858,6 +9867,7 @@ class BrainManager:
             try:
                 result = await self._tool_executor.execute_confirmed(
                     pending.trace_id, user_utterance=user_text,
+                    expected_fingerprint=pending.fingerprint or None,
                 )
             except Exception as exc:  # noqa: BLE001
                 log.warning("voice-confirm execute failed: %s", exc)

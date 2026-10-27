@@ -147,7 +147,18 @@ class ChatApprovalBridge:
             if grant is None:
                 return
             args = self._args.get(event.trace_id) or {}
-            decision = self._decide_inline(grant, event.tool_name, args)
+            if event.call_fingerprint and args:
+                from dodaios.safety.effects import call_fingerprint  # noqa: PLC0415
+
+                if call_fingerprint(event.tool_name, args) != event.call_fingerprint:
+                    # The cached arguments belong to another proposal: never show them on the
+                    # card of this call (the approval is for the call that was asked about).
+                    args = {}
+                    self._args.pop(event.trace_id, None)
+            # A confirmation the gate or the effect ledger forced is never settled by a stance
+            # (bypass, always-allowed, accept-edits): it always asks the person (ADR-0044).
+            forced = event.reason not in ("risk_tier", "plausibility")
+            decision = None if forced else self._decide_inline(grant, event.tool_name, args)
             if decision is not None:
                 self._args.pop(event.trace_id, None)
                 await self._bus.publish(
@@ -155,6 +166,7 @@ class ChatApprovalBridge:
                         trace_id=event.trace_id,
                         tool_name=event.tool_name,
                         approved_by=decision,
+                        call_fingerprint=event.call_fingerprint,
                     )
                 )
                 return
@@ -228,7 +240,10 @@ class ChatApprovalBridge:
                 grant.always_allowed.add(_bare(event.tool_name))
             await self._bus.publish(
                 ActionApproved(
-                    trace_id=event.trace_id, tool_name=event.tool_name, approved_by="user"
+                    trace_id=event.trace_id,
+                    tool_name=event.tool_name,
+                    approved_by="user",
+                    call_fingerprint=event.call_fingerprint,
                 )
             )
             return
