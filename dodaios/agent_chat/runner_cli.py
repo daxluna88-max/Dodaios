@@ -3626,6 +3626,9 @@ async def _run_cli_once(
                 )
                 await asyncio.to_thread(_carry_thread_conversation, runner, resume, plan.env)
             apply_child_env_drops(session.session_id, plan.env)
+            from dodaios.core.child_identity import forward_identity  # noqa: PLC0415
+
+            forward_identity(plan.env)  # F4: conflict raises; absent identity comes from parent
             if getattr(handle, "tools_disabled", False):
                 from .native_control import disable_cli_tools
 

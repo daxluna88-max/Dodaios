@@ -283,19 +283,76 @@ def tool_class(tool_name: str) -> str | None:
 
 
 #: Tools POSITIVELY classified as "starts no child process and opens no network connection of
-#: its own": first-party local UI-input and read-only local tools (names as the tools declare
-#: them). Checked by reading their modules for network/process imports, NOT by running them.
-#: Everything that is neither here, nor declared, nor in a refusal class above is UNAVAILABLE
-#: under the profile (default deny, R7).
-OFFLINE_SAFE_TOOLS: frozenset[str] = frozenset({
-    "click", "click_element", "drag", "hotkey", "move_mouse", "scroll", "type_text",
-    "switch_window", "wait_for_element", "wait_for_ui_state", "read_visible_ui_state",
-    "inspect-pointer", "reset_orb_position", "show_on_screen", "whoami",
-    "wiki-list", "wiki-page-read", "product_help",
-})
+#: its own": first-party local UI-input and read-only local tools. Checked by reading their
+#: modules for network/process imports, NOT by running them. Block 9 (F2): bound to the
+#: IMPLEMENTATION ("module:qualname" of the class, verified against ``sys.modules``), never to the
+#: name alone: a third-party object called ``whoami`` gets no credit. Everything that is neither
+#: here, nor declared, nor in a refusal class is UNAVAILABLE under the profile (default deny, R7).
+_PT = "dodaios.plugins.tool."
+_AS = "dodaios.agent_screen.tools:"
+OFFLINE_SAFE_IMPLEMENTATIONS: dict[str, frozenset[str]] = {
+    "click": frozenset({_PT + "click:ClickTool", _AS + "ScreenClickTool"}),
+    "click_element": frozenset({_PT + "click_element:ClickElementTool",
+                                _AS + "ScreenClickElementTool"}),
+    "drag": frozenset({_PT + "drag:DragTool", _AS + "ScreenDragTool"}),
+    "hotkey": frozenset({_PT + "hotkey:HotkeyTool", _AS + "ScreenHotkeyTool"}),
+    "move_mouse": frozenset({_PT + "move_mouse:MoveMouseTool"}),
+    "scroll": frozenset({_PT + "scroll:ScrollTool", _AS + "ScreenScrollTool"}),
+    "type_text": frozenset({_PT + "type_text:TypeTextTool", _AS + "ScreenTypeTextTool"}),
+    "switch_window": frozenset({_PT + "switch_window:SwitchWindowTool",
+                                _AS + "ScreenSwitchWindowTool"}),
+    "wait_for_element": frozenset({_PT + "wait_for_element:WaitForElementTool"}),
+    "wait_for_ui_state": frozenset({_PT + "wait_for_ui_state:WaitForUIStateTool"}),
+    "read_visible_ui_state": frozenset({_PT + "read_visible_ui_state:ReadVisibleUIStateTool"}),
+    "inspect-pointer": frozenset({_PT + "inspect_pointer:InspectPointerTool"}),
+    "reset_orb_position": frozenset({_PT + "reset_orb_position:ResetOrbPositionTool"}),
+    "show_on_screen": frozenset({_PT + "show_on_screen:ShowOnScreenTool"}),
+    "whoami": frozenset({_PT + "whoami:WhoAmITool"}),
+    "wiki-list": frozenset({_PT + "wiki_list:WikiListTool"}),
+    "wiki-page-read": frozenset({_PT + "wiki_page_read:WikiPageReadTool"}),
+    "product_help": frozenset({_PT + "product_help:ProductHelpTool"}),
+}
+#: The names alone (kept for documentation/listing; they grant NOTHING by themselves).
+OFFLINE_SAFE_TOOLS: frozenset[str] = frozenset(OFFLINE_SAFE_IMPLEMENTATIONS)
+
+
+def _first_party_identity(tool: Any) -> str | None:
+    """"module:qualname" of ``tool``'s class when it is a first-party class, else None.
+
+    Not a string compare of ``__module__`` (a plugin can set that): the class object must be the
+    very object found at that qualname in ``sys.modules[module]`` and the module file must live
+    inside this package directory.
+    """
+    import sys  # noqa: PLC0415
+
+    if tool is None:
+        return None
+    cls = tool if isinstance(tool, type) else type(tool)
+    module = str(getattr(cls, "__module__", ""))
+    qualname = str(getattr(cls, "__qualname__", ""))
+    if not module.startswith("dodaios.") or not qualname or "<locals>" in qualname:
+        return None
+    mod = sys.modules.get(module)
+    if mod is None:
+        return None
+    found: Any = mod
+    for part in qualname.split("."):
+        found = getattr(found, part, None)
+        if found is None:
+            return None
+    if found is not cls:
+        return None
+    root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    path = os.path.realpath(str(getattr(mod, "__file__", "") or ""))
+    if not path.startswith(root + os.sep):
+        return None
+    return f"{module}:{qualname}"
+
 
 #: Coverage declared at registration time by the tool/plugin registry (it vets the plugin first).
 _DECLARED: dict[str, str] = {}
+#: name -> class identity the registry vetted for a ``none`` declaration (F2).
+_DECLARED_IMPL: dict[str, str] = {}
 
 CAPABILITY_NONE = "none"  # no network, no child process: the only value that passes the profile
 CAPABILITY_NETWORK = "network"
@@ -304,34 +361,69 @@ CAPABILITY_UNKNOWN = "unknown"
 _CAPABILITIES = frozenset({CAPABILITY_NONE, CAPABILITY_NETWORK, CAPABILITY_CHILD})
 
 
-def declare_tool_coverage(tool_name: str, capability: str) -> None:
+def declare_tool_coverage(tool_name: str, capability: str, tool: Any = None) -> None:
     """Called by the tool/plugin registry for a tool it has vetted. An unknown value is recorded
-    as UNKNOWN (so it is refused): a typo must not open a tool."""
+    as UNKNOWN (so it is refused): a typo must not open a tool.
+
+    Block 9 (F2): a ``none`` (offline-safe) declaration is bound to the implementation: pass the
+    ``tool`` and its class identity is recorded; without ``tool`` it is stored as UNKNOWN (a name
+    alone can never open a tool). A restrictive declaration (network/child_process) needs no tool.
+    """
     name = (tool_name or "").strip().lower()
-    if name:
-        _DECLARED[name] = capability if capability in _CAPABILITIES else CAPABILITY_UNKNOWN
+    if not name:
+        return
+    value = capability if capability in _CAPABILITIES else CAPABILITY_UNKNOWN
+    if value == CAPABILITY_NONE:
+        ident = _impl_identity(tool)
+        if ident is None:
+            _DECLARED[name] = CAPABILITY_UNKNOWN
+            return
+        _DECLARED_IMPL[name] = ident
+    else:
+        _DECLARED_IMPL.pop(name, None)
+    _DECLARED[name] = value
+
+
+def _impl_identity(tool: Any) -> str | None:
+    """Stable identity of any tool class (first-party verified form, else module:qualname)."""
+    if tool is None:
+        return None
+    first = _first_party_identity(tool)
+    if first is not None:
+        return first
+    cls = type(tool)
+    qual = getattr(cls, "__qualname__", "")
+    mod = getattr(cls, "__module__", "")
+    return f"{mod}:{qual}" if mod and qual and "<locals>" not in qual else None
 
 
 def tool_capability(tool_name: str, tool: Any = None) -> str:
-    """``none`` only when positively classified; everything else is ``network``/``child_process``
-    (declared or by refusal class) or ``unknown`` (refused under the profile).
+    """``none`` only when positively classified FOR THIS IMPLEMENTATION; everything else is
+    ``network``/``child_process`` (declared or by refusal class) or ``unknown`` (refused).
 
     A refusal class by NAME always wins: a tool cannot declare itself offline-safe to leave one.
-    The ``network_capability`` attribute (or ``offline_safe is True``) on a tool object is honoured
-    only for first-party classes (module under ``dodaios.``); a third-party plugin must be declared
-    through :func:`declare_tool_coverage` by the registry.
+    Block 9 (F2): a name never earns ``none``. The allowlist and a registry ``none`` declaration
+    both require the tool object whose verified class identity matches; a caller that passes only
+    a name gets no credit. The ``network_capability`` / ``offline_safe`` attributes are honoured
+    only for verified first-party classes.
     """
     name = (tool_name or "").strip().lower()
     if tool_class(name) is not None:
         return CAPABILITY_CHILD
-    if name in _DECLARED:
-        return _DECLARED[name]
-    if name in OFFLINE_SAFE_TOOLS:
-        return CAPABILITY_NONE
-    if tool is not None and str(getattr(type(tool), "__module__", "")).startswith("dodaios."):
-        declared = getattr(tool, "network_capability", None)
-        if declared in _CAPABILITIES:
-            return str(declared)
+    declared = _DECLARED.get(name)
+    if declared is not None and declared != CAPABILITY_NONE:
+        return declared
+    ident = _first_party_identity(tool)
+    if declared == CAPABILITY_NONE:
+        # only for the very implementation the registry vetted
+        return CAPABILITY_NONE if _impl_identity(tool) == _DECLARED_IMPL.get(name) else (
+            CAPABILITY_UNKNOWN)
+    if ident is not None:
+        if ident in OFFLINE_SAFE_IMPLEMENTATIONS.get(name, frozenset()):
+            return CAPABILITY_NONE
+        attr = getattr(tool, "network_capability", None)
+        if attr in _CAPABILITIES:
+            return str(attr)
         if getattr(tool, "offline_safe", None) is True:
             return CAPABILITY_NONE
     return CAPABILITY_UNKNOWN

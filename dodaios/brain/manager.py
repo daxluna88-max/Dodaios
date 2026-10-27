@@ -9658,8 +9658,7 @@ class BrainManager:
         lang = self._phrase_language(user_text)
         from dodaios.brain import provenance  # noqa: PLC0415
 
-        # Fail closed while the engines run and if anything below raises (R6).
-        provenance.set_turn_provenance(provenance.Provenance.UNAVAILABLE)
+        # R6 (block 9): the turn starts UNAVAILABLE (no positive claim); nothing to pre-set here.
         try:
             outcome = await multi_engine_chat.ask(
                 task, await self._multi_engine_config(), BrainProviderRegistry(),
@@ -9674,7 +9673,7 @@ class BrainManager:
                 "no_answer", reason=f"internal error ({type(exc).__name__})")
         # The outcome's typed label replaces the pessimistic one (the label only ever rides on the
         # turn channel and the returned LabelledText, never on the text content).
-        provenance.begin_turn()
+        # No begin_turn() here: the turn state is per turn and must not be reset mid-turn.
         provenance.set_turn_provenance(outcome.provenance)
         if outcome.status == "ok":
             return provenance.label(outcome.text, outcome.provenance)
@@ -9697,7 +9696,7 @@ class BrainManager:
 
         # R6: the typed label (own + turn channel) decides; the text match is an extra signal.
         # UNAVAILABLE is treated as restricted: no curator note, no replay to a remote engine.
-        withheld = provenance.remote_speech_blocked(response_text)
+        withheld = provenance.withheld_from_remote_store(response_text)
         if use_history and not _turn_is_stale():
             self._history.append(BrainMessage(role="user", content=user_text, restricted=withheld))
             self._history.append(
@@ -10774,10 +10773,11 @@ class BrainManager:
         self._last_turn_all_failed = False
         self._last_turn_suppressed = False
         self._last_turn_executed_action_tool = False
-        # R6: typed provenance is per turn; a new turn starts unrestricted until a path says more.
+        # R6 (block 9): typed provenance is per turn (ContextVar); a new turn starts UNAVAILABLE
+        # (remote speech blocked) until a path positively attaches UNRESTRICTED.
         from dodaios.brain import provenance as _provenance  # noqa: PLC0415
 
-        _provenance.begin_turn()
+        _provenance.begin_turn(str(trace_id) if trace_id else None)
         # Clear last turn's provider identity so a helper prompt build before the
         # fallback loop (wiki-delta base) does not carry a stale provider name.
         self._active_turn_identity = None

@@ -21,6 +21,8 @@ ADR-0050, block 7).
 
 from __future__ import annotations
 
+import contextvars
+import dataclasses
 import enum
 import threading
 import time
@@ -132,36 +134,94 @@ def label(text: str, provenance: Provenance) -> LabelledText:
     return LabelledText(text, provenance)
 
 
-_turn_lock = threading.Lock()
-_turn_label: Provenance = Provenance.UNRESTRICTED
+@dataclasses.dataclass
+class _TurnState:
+    """One turn's label. ``declared`` is a POSITIVE claim; absence of any claim is UNAVAILABLE."""
+
+    turn_id: str
+    declared: bool = False  # a path positively attached UNRESTRICTED
+    unavailable: bool = False  # a path said "cannot tell" (sticky)
+    restricted: bool = False  # a path said "local-only material" (sticky)
+
+    def label(self) -> Provenance:
+        if self.restricted:
+            return Provenance.RESTRICTED
+        if self.declared and not self.unavailable:
+            return Provenance.UNRESTRICTED
+        return Provenance.UNAVAILABLE
 
 
-def begin_turn() -> None:
-    """A new turn starts: nothing restricted has been produced in it yet."""
-    global _turn_label
-    with _turn_lock:
-        _turn_label = Provenance.UNRESTRICTED
+# Per-turn context (R6, block 9): a ContextVar, never a process-global. A concurrent turn runs in
+# its own task/context and cannot reset or relax this turn's state. No state at all (code that is
+# not inside a turn, e.g. memory/wiki/tool/screen speech) reads as UNAVAILABLE.
+_turn_var: contextvars.ContextVar[_TurnState | None] = contextvars.ContextVar(
+    "dodaios_turn_provenance", default=None)
+
+
+def begin_turn(turn_id: str | None = None) -> None:
+    """A new turn starts in THIS context. Block 9: it starts UNAVAILABLE, not UNRESTRICTED; a
+    path must positively attach UNRESTRICTED (:func:`attach_unrestricted`) to unlock remote
+    speech."""
+    _turn_var.set(_TurnState(turn_id=turn_id or ""))
 
 
 def set_turn_provenance(provenance: Provenance) -> None:
-    """Merge ``provenance`` into this turn's label (it only ever gets more restrictive)."""
-    global _turn_label
-    with _turn_lock:
-        _turn_label = combine(_turn_label, provenance)
+    """Merge ``provenance`` into this turn. RESTRICTED and UNAVAILABLE are sticky; UNRESTRICTED
+    is a positive declaration that can never lift either of them."""
+    state = _turn_var.get()
+    if state is None:
+        state = _TurnState(turn_id="")
+        _turn_var.set(state)
+    if provenance is Provenance.RESTRICTED:
+        state.restricted = True
+    elif provenance is Provenance.UNAVAILABLE:
+        state.unavailable = True
+    else:
+        state.declared = True
+
+
+def attach_unrestricted() -> None:
+    """Positively declare that this turn's output derives only from non-local-only material
+    (e.g. a typed local-origin prompt answered by a fully local engine). Never overrides
+    RESTRICTED/UNAVAILABLE."""
+    set_turn_provenance(Provenance.UNRESTRICTED)
 
 
 def turn_provenance() -> Provenance:
-    """The label of the turn in flight, independent of any text. Process-wide and conservative:
-    a restricted turn keeps remote speech off until the next turn begins."""
-    with _turn_lock:
-        return _turn_label
+    """The label of THIS context's turn, independent of any text. No turn state = UNAVAILABLE."""
+    state = _turn_var.get()
+    return Provenance.UNAVAILABLE if state is None else state.label()
+
+
+def label_like(text: str, source: Any) -> LabelledText:
+    """Carry ``source``'s label (None -> UNAVAILABLE) over to ``text`` after a transformation
+    (normalisation, chunking, translation), so the label travels per chunk."""
+    return LabelledText(text, combine(label_of(source)))
 
 
 def remote_speech_blocked(text: str) -> bool:
-    """Whether ``text`` must NOT go to a remote synthesizer. Typed label first, text match last."""
-    own = label_of(text)
-    if own in (Provenance.RESTRICTED, Provenance.UNAVAILABLE):
+    """Whether ``text`` must NOT go to a remote synthesizer. Fail closed (block 9): a plain
+    ``str`` has no provenance and is refused; only a text object that positively carries
+    UNRESTRICTED, in a turn not marked restricted/unavailable, and not matching a restricted
+    answer, may go remote."""
+    if label_of(text) is not Provenance.UNRESTRICTED:
         return True
-    if turn_provenance() is not Provenance.UNRESTRICTED:
+    state = _turn_var.get()
+    if state is not None and state.label() is not Provenance.UNRESTRICTED:
+        return True
+    return is_restricted(text)
+
+
+def withheld_from_remote_store(text: str) -> bool:
+    """Whether ``text`` must stay out of a remote engine's replay / the curator (history, notes).
+
+    Different question from :func:`remote_speech_blocked`: speech is fail-closed on ABSENCE of a
+    label; storage keeps the block-8 meaning (blocked only on a POSITIVE restricted/unavailable
+    signal) so that ordinary chat history and memory curation are not silently disabled. Residual
+    limit: an unlabelled answer of an unmarked path is still stored (ADR-0050, block 9)."""
+    if label_of(text) in (Provenance.RESTRICTED, Provenance.UNAVAILABLE):
+        return True
+    state = _turn_var.get()
+    if state is not None and (state.restricted or state.unavailable):
         return True
     return is_restricted(text)
