@@ -641,6 +641,8 @@ async def _generate(
     }
     if output_language:
         kwargs["force_output_language"] = output_language
+    if handle.stop_ticket is not None:
+        kwargs["stop_ticket"] = handle.stop_ticket
     from dodaios.agent_chat.delegation_wait import CONTINUE_TURN
 
     if text == CONTINUE_TURN:

@@ -1166,6 +1166,11 @@ class AgentChatService:
         picture and pressing Enter is a complete gesture — but an empty message
         with nothing attached is still refused.
         """
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
+        # The turn's STOP ticket is taken here, when the message is sent, not when the brain
+        # starts: a STOP that lands while the turn is being prepared makes it stale (ADR-0058).
+        stop_ticket = get_stop_controller().ticket()
         session = self.store.get_session(session_id)
         if session is None:
             raise NoSuchSession(session_id)
@@ -1482,6 +1487,7 @@ class AgentChatService:
                 output_language=output_language,
                 goal_turn=native_goal,
                 control_service=self,
+                stop_ticket=stop_ticket,
             )
         except BaseException as exc:
             try:
