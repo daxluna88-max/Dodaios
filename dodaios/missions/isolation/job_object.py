@@ -28,6 +28,8 @@ from ctypes import wintypes
 from types import TracebackType
 from typing import Any
 
+from dodaios.missions.isolation import worker_registry
+
 logger = logging.getLogger(__name__)
 
 # SIGTERM exists on every platform; SIGKILL is POSIX-only, so fall back to its
@@ -151,6 +153,7 @@ class _Win32JobObjectImpl:
             self._win32job.AssignProcessToJobObject(self._handle, proc_handle)
         finally:
             win32api.CloseHandle(proc_handle)
+        worker_registry.register(pid)
 
     async def close(self) -> None:
         """Close the job handle — kills all assigned processes atomically.
@@ -312,6 +315,7 @@ class _Win32CtypesJobObjectImpl:
                 raise ctypes.WinError(ctypes.get_last_error())
         finally:
             self._kernel32.CloseHandle(process)
+        worker_registry.register(pid)
 
     async def close(self) -> None:
         if self._closed:
@@ -398,6 +402,7 @@ class _PosixProcessGroupJobObject:
             # its own group (true when spawned with start_new_session=True).
             pgid = pid
         self._pgids.add(pgid)
+        worker_registry.register(pid)
 
     def release(self, pid: int) -> None:
         """Forget a fully reaped short-lived group before its id can be reused.

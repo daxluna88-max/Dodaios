@@ -42,8 +42,6 @@ router = APIRouter(prefix="/api", tags=["control"])
 
 _BG_PREFIX = "jarvis-agent-"
 _INSTALLED_ATTR = "stop_subsystems_installed"
-#: Missions whose worker was NOT confirmed killed by the last STOP (state flipped only).
-_UNCONFIRMED_WORKERS_ATTR = "stop_unconfirmed_workers"
 
 
 def _background_tasks() -> list[asyncio.Task[Any]]:
@@ -120,10 +118,13 @@ def _approvals_part(ref: Any) -> Subsystem:
 
 
 def _missions_part(ref: Any) -> Subsystem:
-    """Cancel every non-terminal mission through the existing cancel route's own logic.
+    """Cancel every non-terminal mission through the existing cancel route's own logic, then ask
+    the system whether anything is still running.
 
-    The state flip alone is not an arrest: only a mission whose worker the cancel path reports
-    killed counts. A mission with no confirmation keeps this part ``unknown``.
+    ``worker_killed`` from the cancel route only means a cancel request reached the run task, so it
+    is NOT used as a confirmation. A mission counts as stopped only when no mission is left
+    non-terminal, no run task is in flight AND the operating system reports none of the tracked
+    worker processes alive. If the processes cannot be asked, the answer is ``unknown``.
     """
     state = ref.app.state
 
@@ -131,26 +132,31 @@ def _missions_part(ref: Any) -> Subsystem:
         from dodaios.ui.web import missions_routes  # noqa: PLC0415
 
         mgr = getattr(state, "mission_manager", None)
-        setattr(state, _UNCONFIRMED_WORKERS_ATTR, set())
         if mgr is None:
             return
         for mission_id, _prompt, _state in await mgr.store.list_non_terminal_missions():
             try:
-                result = await missions_routes.cancel_mission(mission_id, ref)
+                await missions_routes.cancel_mission(mission_id, ref)
             except HTTPException:
-                continue  # already terminal / gone: nothing to stop
-            if not result.get("worker_killed"):
-                getattr(state, _UNCONFIRMED_WORKERS_ATTR).add(mission_id)
+                log.debug("stop: mission %s was already terminal or gone", mission_id)
 
     async def probe() -> Any:
+        from dodaios.missions.isolation import worker_registry  # noqa: PLC0415
+
         mgr = getattr(state, "mission_manager", None)
-        if mgr is None:
-            return "confirmed"
-        if await mgr.store.list_non_terminal_missions():
+        if mgr is not None and await mgr.store.list_non_terminal_missions():
             return "still_active"
-        if getattr(state, _UNCONFIRMED_WORKERS_ATTR, set()):
+        kontrollierer = getattr(state, "kontrollierer", None)
+        if kontrollierer is not None:
+            running = getattr(kontrollierer, "running_mission_ids", None)
+            if not callable(running):
+                return "unknown"
+            if running():
+                return "still_active"
+        live = await asyncio.to_thread(worker_registry.live_worker_pids)
+        if live is None:
             return "unknown"
-        return "confirmed"
+        return "still_active" if live else "confirmed"
 
     return Subsystem("missions", request, probe)
 
