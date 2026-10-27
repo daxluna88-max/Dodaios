@@ -13,7 +13,8 @@ What each channel gets, and what it honestly cannot get:
   is neutral, never a guess;
 * voice: only parameters the chosen TTS provider accepts PER TURN. No shipped provider does today
   (``TTSProvider.synthesize`` takes text, voice and language only; speed is fixed when the
-  provider is built), so the voice part is reported as unavailable. Nothing here promises an emotional voice.
+  provider is built), so the voice part is reported as unavailable. Nothing here promises an
+  emotional voice.
 
 Pure: no I/O, no audio, no clock.
 """
