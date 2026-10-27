@@ -9379,6 +9379,18 @@ class BrainManager:
         except Exception:  # noqa: BLE001
             log.debug("Background completion history mirror failed", exc_info=True)
 
+    async def _multi_engine_config(self) -> Any:
+        """``[brain.multi_engine]`` as saved NOW (the Settings screen writes the file, no restart);
+        the config this manager started with when the file cannot be read."""
+        from dodaios.core.config import load_config  # noqa: PLC0415
+
+        try:
+            return (await asyncio.to_thread(load_config)).brain.multi_engine
+        except Exception:  # noqa: BLE001 - an unreadable file must not end the question
+            log.warning("multi-engine settings could not be re-read; using the startup copy",
+                        exc_info=True)
+            return self._config.brain.multi_engine
+
     async def _run_multi_engine_turn(self, user_text: str, *, trace_id: UUID) -> str | None:
         """The one answer of an explicit "ask several engines" request, else None (normal turn)."""
         from dodaios.brain import multi_engine_chat  # noqa: PLC0415
@@ -9391,7 +9403,7 @@ class BrainManager:
         lang = self._phrase_language(user_text)
         try:
             outcome = await multi_engine_chat.ask(
-                task, self._config.brain.multi_engine, BrainProviderRegistry(),
+                task, await self._multi_engine_config(), BrainProviderRegistry(),
                 turn_id=str(trace_id),
             )
         except Exception as exc:  # noqa: BLE001 - the person gets a reason, never a crashed turn

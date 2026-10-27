@@ -27,6 +27,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import tomlkit
 from tomlkit import TOMLDocument
@@ -1595,6 +1596,53 @@ def set_network_policy(policy: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None
     if value not in ("off", "local-only"):
         raise ValueError(f"unknown network policy {policy!r}; expected 'off' or 'local-only'")
     _patch_table(path, "network", "policy", value)
+
+
+def set_multi_engine(
+    settings: dict[str, Any], *, path: Path = DEFAULT_CONFIG_FILE
+) -> dict[str, Any]:
+    """Persist ``[brain.multi_engine]`` (ADR-0055): "ask several engines" from the chat.
+
+    The whole block is validated by ``MultiEngineConfig`` first (a bad value raises
+    ``ValueError`` and nothing is written) and then replaces the block in one atomic write, so a
+    list of engines never lands half-edited. TOML-only, read per request by the chat turn: no
+    restart. Returns the validated block as stored.
+    """
+    from .config import MultiEngineConfig  # noqa: PLC0415
+
+    stored = MultiEngineConfig.model_validate(settings).model_dump(exclude_none=True)
+    path = _ensure_writable_config_path(path)
+    with _WRITE_LOCK:
+        raw = path.read_text(encoding="utf-8")
+        had_bom = raw.startswith(_BOM)
+        if had_bom:
+            raw = raw[len(_BOM) :]
+        doc: TOMLDocument = tomlkit.parse(raw)
+        brain = doc.get("brain")
+        if brain is None:
+            brain = tomlkit.table()
+            doc["brain"] = brain
+        block = tomlkit.table()
+        for key, value in stored.items():
+            if key == "engines":
+                engines = tomlkit.aot()
+                for engine in value:
+                    row = tomlkit.table()
+                    row.update(engine)
+                    engines.append(row)
+                block["engines"] = engines
+            elif key == "synthesizer":
+                synthesizer = tomlkit.table()
+                synthesizer.update(value)
+                block["synthesizer"] = synthesizer
+            else:
+                block[key] = value
+        brain["multi_engine"] = block
+        out = tomlkit.dumps(doc)
+        if had_bom:
+            out = _BOM + out
+        _atomic_write(path, out)
+    return stored
 
 
 def set_silence_window_ms(ms: int, *, path: Path = DEFAULT_CONFIG_FILE) -> None:

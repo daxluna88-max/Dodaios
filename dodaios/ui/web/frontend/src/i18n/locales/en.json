@@ -3624,6 +3624,22 @@
       "land_warning": "A listed repository's code changes without you looking at the pull request first. Only add repositories you trust the tests of.",
       "land_add": "Add repository",
       "land_remove": "Remove {repo}"
+    },
+    "multi_engine": {
+      "section_title": "Ask several engines in the chat",
+      "section_desc": "Type \"ask several engines:\" and your question in the chat: the engines you pick answer in parallel and you get ONE final answer, spoken once. Only your question leaves this computer. It never runs on its own.",
+      "enable_label": "Allow it in the chat",
+      "enable_hint": "Off: that phrase gets a notice and no engine is called.",
+      "engines_label": "Engines that answer",
+      "no_engines": "No engines are installed or connected yet. Connect one under API Keys.",
+      "synth_label": "Who writes the final answer",
+      "synth_first": "The first engine that answered",
+      "budget_hint": "One ceiling for all engines and the final answer together, in the unit of your estimates. It starts at 0: nothing remote runs until you set one. An engine without an estimate is skipped unless you allow it. Engines on this computer cost nothing.",
+      "save": "Save",
+      "saved": "Saved. It applies to the next question.",
+      "error": "Could not save: {detail}",
+      "bad_budget": "Enter a budget of 0 or more.",
+      "need_engine": "Pick at least one engine, or switch it off."
     }
   },
   "telephony_view": {

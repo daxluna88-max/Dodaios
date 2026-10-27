@@ -163,6 +163,8 @@ async def _turn(monkeypatch, registry, text, **multi):
     bus.subscribe(ResponseGenerated, capture)
     cfg = JarvisConfig()
     cfg.brain.multi_engine = conf("claude-api", "openai", **multi)
+    # the chat turn reads the saved settings per request: serve this config instead of a file
+    monkeypatch.setattr("dodaios.core.config.load_config", lambda *a, **k: cfg)
     reply = await BrainManager(config=cfg, bus=bus, tools={}).generate(text, use_history=False)
     return reply, seen
 

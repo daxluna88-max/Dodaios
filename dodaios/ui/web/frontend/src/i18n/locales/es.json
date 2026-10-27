@@ -3624,6 +3624,22 @@
       "land_warning": "El código de un repositorio de la lista cambia sin que mires antes el pull request. Añade solo repositorios en cuyas pruebas confíes.",
       "land_add": "Añadir repositorio",
       "land_remove": "Quitar {repo}"
+    },
+    "multi_engine": {
+      "section_title": "Preguntar a varios motores en el chat",
+      "section_desc": "Escribe «pregunta a varios modelos:» y tu pregunta en el chat: los motores que elijas responden en paralelo y recibes UNA respuesta final, dicha una sola vez. Solo tu pregunta sale de este ordenador. Nunca se ejecuta por sí solo.",
+      "enable_label": "Permitirlo en el chat",
+      "enable_hint": "Desactivado: esa frase recibe un aviso y no se llama a ningún motor.",
+      "engines_label": "Motores que responden",
+      "no_engines": "Todavía no hay motores instalados ni conectados. Conecta uno en Claves de API.",
+      "synth_label": "Quién escribe la respuesta final",
+      "synth_first": "El primer motor que respondió",
+      "budget_hint": "Un único límite para todos los motores y la respuesta final juntos, en la unidad de tus estimaciones. Empieza en 0: nada externo se ejecuta hasta que fijes uno. Un motor sin estimación se omite salvo que lo permitas. Los motores de este ordenador no cuestan nada.",
+      "save": "Guardar",
+      "saved": "Guardado. Se aplica a la próxima pregunta.",
+      "error": "No se pudo guardar: {detail}",
+      "bad_budget": "Introduce un presupuesto de 0 o más.",
+      "need_engine": "Elige al menos un motor o desactívalo."
     }
   },
   "telephony_view": {
