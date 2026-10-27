@@ -25,7 +25,8 @@ Hypothesis, to be checked without paid tests (none of it is demonstrated):
 
 VAT, payment fees, support, security work and real consumption go into a future profit-and-loss. **No margin is
 guaranteed.** Preliminary target: hosting + AI within **25-30 EUR per customer per month on average**, a goal and not
-a result.
+a result. **The 60 EUR is not economically validated**: unit prices, real usage, support load and
+margin are all still to be measured or documented.
 
 ## 2. What depends on the desktop today, and what hosting needs
 

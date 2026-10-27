@@ -28,9 +28,10 @@ def _start_time(pid: int) -> float | None:
         import psutil  # noqa: PLC0415
 
         return float(psutil.Process(pid).create_time())
-    except ImportError:
+    except ImportError:  # psutil is optional: the start time is then simply unknown
         return None
     except Exception:  # noqa: BLE001 - gone, or not readable: the caller decides what that means
+        log.debug("worker registry: start time unreadable", exc_info=True)
         return None
 
 
@@ -53,7 +54,7 @@ def live_worker_pids() -> list[int] | None:
     """
     try:
         import psutil  # noqa: PLC0415
-    except ImportError:
+    except ImportError:  # psutil is optional: "cannot tell" is the honest answer, as None
         return None
     alive: list[int] = []
     with _LOCK:
@@ -62,7 +63,7 @@ def live_worker_pids() -> list[int] | None:
                 proc = psutil.Process(pid)
                 current = float(proc.create_time())
                 zombie = proc.status() == psutil.STATUS_ZOMBIE
-            except psutil.NoSuchProcess:
+            except psutil.NoSuchProcess:  # the process is gone: dropping it is the answer
                 _TRACKED.pop(pid, None)
                 continue
             except Exception:  # noqa: BLE001 - unreadable: cannot say it is gone

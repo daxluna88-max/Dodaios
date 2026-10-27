@@ -162,3 +162,29 @@ in the 5 interface languages (no raw keys), reduced-motion respected. Italian is
 - **Not done.** Per-session ticket in the voice pipeline; verified stop of playback / realtime / worker processes;
   a spoken "stop" does not close the door (the existing background-task cancel still answers it); the new routes'
   Origin/CSRF behaviour is covered by the existing middleware by default and by a written test, not by a run.
+
+### Corrections after the second review (2026-10-27, local, not run)
+
+- **Races between STOP, resume and starting work.** `resume` is refused (`409 stopping`) while a STOP is still
+  shutting parts down, so new work can never be started only to be cancelled by the shutdown still running.
+  Gates that must move with the door (today: the mission tool-approval coordinator) register as *door listeners* and
+  are flipped in the same synchronous step; the coordinator then refuses approvals and denies requests that arrive
+  while closed (`stopped_by_owner`). `dispatch` and `rerun` take a ticket before creating the mission and re-check it
+  afterwards: a mission created while STOP landed is cancelled and the call answers `409`.
+- **Late replies of turns already started.** Every turn carries the STOP generation it started under (a context
+  variable). If STOP, or STOP and a resume, happened since, its response event, streamed text and history entry are
+  dropped and `generate` returns an empty reply. The refusal reply and a stop phrase are exempt. Not covered: tools a
+  stale turn already invoked in the brain's own dispatcher (only background agents, computer-use runs and missions are
+  cancelled); concurrent turns share `_last_turn_all_failed`.
+- **Stale state after a lost connection.** The screen treats a failed read, no read, or one older than 9 s as stale:
+  the summary shows *Unknown* with the time of the last reading, indicators and decisions are not shown as current,
+  Approve / Deny / Resume are not offered from stale data. STOP stays available.
+- **Worker stop is confirmed from the operating system.** Job objects register the pid of every worker they take; the
+  missions part is `confirmed` only if no mission is non-terminal, no run task is in flight and none of the tracked
+  pids is alive (zombies and reused pids do not count). Without `psutil` the answer is `unknown`. A cancel request
+  (`worker_killed`) is no longer treated as a confirmation. Limit: a process never assigned to a job object is not
+  tracked.
+- **Effective engine.** The turn record starts `running` with the engine chosen, then is finished with the engine of
+  the last attempt: a fallback is flagged (`fell_back`, `requested`), a turn where nothing answered is `failed`, and a
+  turn answered by a fast path shows no engine. It is per turn (carried in the turn state), but the engine identity is
+  still read from the manager's per-instance attribute set during the attempt.
