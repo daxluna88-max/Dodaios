@@ -35,6 +35,7 @@ from dodaios.control.stop import (
     get_stop_controller,
 )
 from dodaios.control.strip_state import Observed, Reading, derive
+from dodaios.speech.stop_parts import voice_subsystems
 
 log = logging.getLogger(__name__)
 
@@ -165,9 +166,18 @@ async def _no_op() -> None:
     return None
 
 
+def _speech_pipeline() -> Any:
+    try:
+        from dodaios.core.runtime_refs import get_speech_pipeline  # noqa: PLC0415
+
+        return get_speech_pipeline()
+    except Exception:  # noqa: BLE001 - no pipeline means the voice parts answer "unknown"
+        return None
+
+
 def _install(request: Request) -> StopController:
-    """Register the parts once per app (idempotent). Voice playback and realtime have no verified
-    stop, so they are present with NO probe: their outcome is always ``unknown``."""
+    """Register the parts once per app (idempotent). Voice playback and realtime probe the speech
+    pipeline's own state (``speech/stop_parts``); with no pipeline their outcome is ``unknown``."""
     controller = get_stop_controller()
     state = request.app.state
     if getattr(state, _INSTALLED_ATTR, False):
@@ -180,8 +190,7 @@ def _install(request: Request) -> StopController:
         _background_part(ref),
         _approvals_part(ref),
         _missions_part(ref),
-        Subsystem("voice_playback", _no_op, None),
-        Subsystem("realtime_session", _no_op, None),
+        *voice_subsystems(_speech_pipeline),
     ):
         controller.add(part)
     # The approvals gate moves with the door, in the same synchronous step.

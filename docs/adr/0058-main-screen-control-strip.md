@@ -237,3 +237,32 @@ real app or Windows):
 - paths that start work without going through these doors (other `asyncio.create_task` background jobs not listed
   above, phone companion STOP/approval) are not covered; the re-probe in a repeated STOP is what catches them;
 - a spoken "stop" still does not close the door.
+
+### STOP reaches the voice output paths (2026-10-27, local, block 4)
+
+- **Per-turn ticket in the voice pipeline** (`speech/stop_gate.py`). `_handle_utterance` takes the STOP generation when
+  the turn is created and keeps it in a context variable, so look-ahead synthesis, playback and the completion-buffer
+  / continuation timers scheduled from inside the turn inherit it. It is checked before: a streamed sentence is
+  scrubbed and queued, each synthesized chunk, each chunk handed to the player, the on-screen reply delta, `_speak`,
+  and the `SpeechSpoken` event (`_emit_spoken`). The brain stream is wrapped in `guard_stream` (the existing
+  engine_policy pattern), so a late delta of a stopped or resumed generation ends the stream and closes the source.
+  A turn created while the door is closed is exempt (only the refusal and a stop phrase can come out of it).
+- **Spoken stop phrase.** Before the brain is called, a stop phrase (the kill-intent regex or the voice-command gate's
+  `cancel`) starts `StopController.stop()`: the door closes before the turn goes on, then the parts run. The voice
+  parts are registered by the pipeline itself, so this works even if the strip was never opened; the other parts are
+  those `_install` has registered (strip opened at least once).
+- **Probes** (`speech/stop_parts.py`). `voice_playback`: request = `AudioPlayer.stop()`; probe = new
+  `AudioPlayer.playback_in_flight` (open output stream or a `play_chunks` call holding the play lock). A player
+  without it, or no pipeline, stays `unknown`. `realtime_session`: request = the existing voice hangup, only while a
+  duplex handle exists; probe = that handle (cleared after the lifecycle unwound), no pipeline = `unknown`.
+- **Realtime audio.** `DesktopRealtimePlayback` takes a `stale` predicate (the session's ticket) and drops provider
+  PCM after STOP / resume.
+- **Multi-engine / final answer / expressions.** The turn-level drop in `BrainManager.generate` (response event,
+  history, returned text) already covers the multi-engine synthesis result. The avatar is not wired to the runtime
+  (ADR-0056), so there is no expression emit to guard; `ExpressionGate.cancel(generation)` is unchanged.
+- **Not verified (simulated only).** All tests use fakes: no real audio device, TTS provider, realtime provider or
+  browser call was run. `confirmed` means this process holds no output stream / no session handle, not that sound
+  stopped at the speaker or that the provider closed its side. A browser-held call (`run_browser_call`) and the
+  `DesktopRealtimeBargeInDetector` are not ticketed. Realtime relies on the hangup to end the session; only provider
+  PCM delivered through `DesktopRealtimePlayback` is gated. `control/wiring.wire_voice_kill_switch` is not wired in
+  the app and was not changed. No lip sync or voice modulation exists or is claimed.

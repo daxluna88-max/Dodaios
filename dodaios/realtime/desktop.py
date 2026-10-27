@@ -483,8 +483,11 @@ class DesktopRealtimePlayback:
         prebuffer_ms: int = DEFAULT_PREBUFFER_MS,
         prebuffer_timeout_ms: int = DEFAULT_PREBUFFER_TIMEOUT_MS,
         resume_without_prebuffer_s: float = RESUME_WITHOUT_PREBUFFER_S,
+        stale: Callable[[], bool] | None = None,
     ) -> None:
         self._player = player
+        #: STOP ticket of the session (ADR-0058): once it is stale, provider audio is dropped.
+        self._stale = stale
         self._sample_rate = int(sample_rate)
         self._max_queue_chunks = max(1, int(max_queue_chunks))
         self._finish_timeout_s = max(1.0, float(finish_timeout_s))
@@ -500,6 +503,8 @@ class DesktopRealtimePlayback:
 
     async def send_binary(self, pcm: bytes) -> None:
         if not pcm or self._closed or getattr(self._player, "output_muted", False):
+            return
+        if self._stale is not None and self._stale():
             return
         if self._task is None or self._task.done():
             prebuffer_s = self._prebuffer_s

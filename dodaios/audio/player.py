@@ -719,6 +719,17 @@ class AudioPlayer:
         return min(latency, _MAX_REPORTED_OUTPUT_LATENCY_S)
 
     @property
+    def playback_in_flight(self) -> bool:
+        """True while this player holds an open output stream or a ``play_chunks`` call runs.
+
+        What STOP's playback probe reads. It is the process's own state: it does not know
+        whether the OS or the device is still draining a buffer."""
+        lock = getattr(self, "_play_lock", None)
+        return getattr(self, "_active_stream", None) is not None or bool(
+            lock is not None and lock.locked()
+        )
+
+    @property
     def audio_backend_busy(self) -> bool:
         """Whether a topology refresh must wait for this player's output."""
         lock = getattr(self, "_play_lock", None)

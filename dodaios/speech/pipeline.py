@@ -50,6 +50,7 @@ from dodaios.audio.effects import bind_shared_audio_player
 from dodaios.audio.player import AudioPlayer
 from dodaios.audio.vad import SileroEndpointer
 from dodaios.audio.vad_reasons import FORCED_CUT_REASONS
+from dodaios.brain.engine_policy import guard_stream
 from dodaios.brain.output_filter import FALLBACK_PHRASES, ScrubResult, scrub_for_voice
 from dodaios.brain.scrub_verdict import is_harmless_scrub_residue
 from dodaios.brain.turn_planner import plan_turn
@@ -128,7 +129,7 @@ from dodaios.sessions.constants import (
 from dodaios.skills.schema import SkillDirectTriggered
 from dodaios.skills.skill_context import try_get_skill_context
 from dodaios.skills.trigger_matcher import TriggerMatcher
-from dodaios.speech import start_refusal
+from dodaios.speech import start_refusal, stop_gate
 from dodaios.speech.completeness import (
     Completeness,
     classify_completeness,
@@ -7714,6 +7715,30 @@ class SpeechPipeline:
             log.warning("request_voice_hangup failed", exc_info=True)
             return False
 
+    async def _close_door_on_stop_phrase(self, text: str) -> bool:
+        """A spoken stop phrase closes the STOP door exactly like the button (ADR-0058).
+
+        The door closes before this returns (the controller's first lines run before any await);
+        the parts are then stopped in the background. The current turn becomes exempt so the
+        brain's own acknowledgement of the stop is still heard. Returns whether it was a stop.
+        """
+        from dodaios.brain.voice_command_gate import match_voice_command  # noqa: PLC0415
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+        from dodaios.control.wiring import voice_matches_kill_intent  # noqa: PLC0415
+        from dodaios.speech.stop_parts import voice_subsystems  # noqa: PLC0415
+
+        match = match_voice_command(text)
+        if not (voice_matches_kill_intent(text) or (match is not None and match.kind == "cancel")):
+            return False
+        controller = get_stop_controller()
+        for part in voice_subsystems(lambda: self):
+            controller.add(part)
+        self._stop_phrase_task = asyncio.ensure_future(controller.stop())
+        await asyncio.sleep(0)  # lets stop() run its synchronous door-closing lines
+        if (turn := stop_gate.current_turn()) is not None:
+            turn.exempt = True
+        return True
+
     def _arm_call_event(self) -> bool:
         """Set the call edge on its owning asyncio loop.
 
@@ -9889,7 +9914,10 @@ class SpeechPipeline:
             return None
 
         session_id = getattr(self, "_current_voice_session_id", None) or str(uuid4())
-        playback = DesktopRealtimePlayback(self._player)
+        # The session's STOP ticket: provider audio after STOP / resume is dropped (ADR-0058).
+        playback = DesktopRealtimePlayback(
+            self._player, stale=stop_gate.new_ticket().stale
+        )
         barge_detector = DesktopRealtimeBargeInDetector(
             output_active=level_tap.playback_active
         )
@@ -15522,9 +15550,11 @@ class SpeechPipeline:
         self._latency_tracker = None
         try:
             self._continuation_dispatched_this_turn = False
-            return await self._handle_utterance_turn(
-                pcm, skip_completion=skip_completion
-            )
+            # STOP ticket (ADR-0058): taken when the turn is created, checked before every emit.
+            with stop_gate.voice_turn():
+                return await self._handle_utterance_turn(
+                    pcm, skip_completion=skip_completion
+                )
         finally:
             if getattr(self, "_continuation_dispatched_this_turn", False):
                 win = getattr(self, "_continuation_window", None)
@@ -16040,6 +16070,8 @@ class SpeechPipeline:
         from dodaios.brain.factory import prepare_society_context
         from dodaios.society.intent import is_inventory_question
 
+        # A spoken stop phrase closes the STOP door like the button does (ADR-0058).
+        await self._close_door_on_stop_phrase(text)
         await prepare_society_context()
         if getattr(self, "_ack_brain", None) is not None and not is_inventory_question(text):
             asyncio.create_task(  # noqa: RUF006 — intentional fire-and-forget
@@ -17118,6 +17150,8 @@ class SpeechPipeline:
         # TimeoutError`` reads it to decide whether a canned fallback phrase
         # would overlap the real answer. Reset so every streaming turn is clean.
         self._spoke_this_turn = False
+        # The turn's STOP ticket; a streaming call outside a turn (tests, tools) takes its own.
+        stop_turn = stop_gate.current_turn() or stop_gate.new_ticket()
         paraphrase_stripped = False
         brain_first_token_marked = False
         barged = False
@@ -17187,6 +17221,8 @@ class SpeechPipeline:
                 except TypeError:
                     gen = self._tts.synthesize(sentence)
                 async for chunk in gen:
+                    if stop_turn.stale():
+                        break  # STOP landed mid-sentence: no further audio of this turn
                     if tracker is not None and not tts_first_chunk_marked:
                         tts_first_chunk_marked = True
                         tracker.mark(LatencyPhase.TTS_FIRST_CHUNK)
@@ -17210,7 +17246,7 @@ class SpeechPipeline:
             ) -> AsyncIterator[AudioChunk]:
                 while True:
                     chunk = await source.get()
-                    if chunk is None:
+                    if chunk is None or stop_turn.stale():
                         return
                     self._brain_first_frame_played = True
                     yield chunk
@@ -17255,6 +17291,8 @@ class SpeechPipeline:
             fallback is dropped here and the phrase is re-raised ONCE for the
             completed turn, and only if nothing at all reached TTS.
             """
+            if stop_turn.stale():
+                return  # nothing of a turn that started before STOP is shown or voiced
             scrubbed = scrub_for_voice(sentence, language=lang)
             if scrubbed.actions:
                 log.info(
@@ -17324,7 +17362,9 @@ class SpeechPipeline:
                             )
                         except TypeError:
                             stream = self._brain.generate_stream(text)
-                async for chunk in stream:
+                # A delta that arrives after STOP (or STOP and resume) is dropped and the source
+                # closed, so a slow cancelled provider cannot speak afterwards (ADR-0058).
+                async for chunk in guard_stream(stream, stop_gate.not_stale(stop_turn)):
                     if not chunk:
                         continue
                     # Any streamed text is also progress — reset the deadline.
@@ -18319,6 +18359,8 @@ class SpeechPipeline:
         """
         if not text or not text.strip():
             return
+        if stop_gate.current_turn_stale():
+            return  # a phrase of a stopped turn is not logged as spoken
         bus = getattr(self, "_bus", None)
         if bus is None:
             return
@@ -18459,6 +18501,9 @@ class SpeechPipeline:
         call, no playback. We return ``False`` (no barge-in occurred) so
         callers that branch on ``barged`` behave consistently.
         """
+        if stop_gate.current_turn_stale():
+            log.info("_speak dropped — the turn started before STOP (kind=%s)", kind)
+            return False
         if getattr(self, "_muted", False):
             # INFO, not debug: a muted drop makes the whole turn inaudible
             # while the transcript claims Jarvis spoke — forensics must see
@@ -18501,6 +18546,7 @@ class SpeechPipeline:
         except TypeError:
             chunks = self._tts.synthesize(text)
 
+        chunks = guard_stream(chunks, stop_gate.not_stale())
         play_task = asyncio.create_task(self._player.play_chunks(chunks), name="tts-play")
         barge_task = asyncio.create_task(self._barge_monitor(), name="barge-monitor")
         # Hangup is the hard kill-switch ("auflegen"): a hangup mid-phrase must
