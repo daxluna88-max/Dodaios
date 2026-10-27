@@ -223,6 +223,12 @@ class MoodReducer:
                 return Applied(self._state, True)
             case OwnerAdaptation(enabled):
                 self._adaptation_on = bool(enabled)
+                if not self._adaptation_on and current.origin in ("rule", "activity"):
+                    # «Stop adapting» also drops what adaptation already did; an owner request,
+                    # a hold and the owner's pin are not adaptation and stay.
+                    self._state = self._pinned(now)
+                    self._last_adapt_at = now
+                    return Applied(self._state, True)
                 return Applied(current, True)
             case Activity(kind):
                 return self._driven(ACTIVITY_MOODS.get(kind), ACTIVITY, f"activity_{kind}", now)
@@ -282,6 +288,25 @@ class MoodReducer:
         return Applied(self._state, True)
 
 
+def limits(profile: EffectiveProfile) -> dict[str, object]:
+    """What the profile lets each source do, for the settings screen and the audit (ADR-0056).
+
+    Two different things, never one number:
+
+    * ``adaptation_max_intensity``: the RANGE OF AUTOMATIC ADAPTATION (rules, activity). 0 in
+      ``manual`` mode or with ``expressive_range`` 0.
+    * ``owner_max_intensity``: what an EXPLICIT owner request may reach. It ignores
+      ``expressive_range`` (the owner is asking, not the app guessing) but is always bound by
+      ``moods_allowed`` and by ``MAX_INTENSITY``.
+    """
+    return {
+        "adaptation_max_intensity": 0 if profile.mode == "manual" else profile.expressive_range,
+        "owner_max_intensity": MAX_INTENSITY,
+        "moods_allowed": [m for m in profile.moods_allowed if m != NEUTRAL],
+        "locked_mood": profile.locked_mood,
+    }
+
+
 __all__ = [
     "ACTIVITY_MOODS",
     "ADAPT_TTL_S",
@@ -291,6 +316,7 @@ __all__ = [
     "DECAY_S",
     "DIALOGUE_MOODS",
     "Dialogue",
+    "MAX_INTENSITY",
     "MoodReducer",
     "MoodState",
     "NEUTRAL",
@@ -299,4 +325,5 @@ __all__ = [
     "OwnerHold",
     "OwnerMood",
     "OwnerNeutral",
+    "limits",
 ]

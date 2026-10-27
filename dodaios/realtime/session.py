@@ -1846,6 +1846,24 @@ def _proactivity_level(config: Any) -> str | None:
         return None
 
 
+def _style_block(*, compact: bool = False) -> str:
+    """The owner's personality profile + simulated mood as a session-instructions block.
+
+    Enumerations only (``dodaios.brain.style``), read fresh at each update and empty while STOP
+    has the door closed. It shapes WORDING only: no voice parameter, lip sync or avatar is driven
+    from it (ADR-0056). Degrades to ``""`` so it never blocks the handshake.
+    """
+    try:
+        from dodaios.core.runtime_refs import get_brain_manager
+
+        manager = get_brain_manager()
+        build = getattr(manager, "realtime_style_block", None)
+        return str(build(compact=compact) or "") if callable(build) else ""
+    except Exception:  # noqa: BLE001 — never break the voice session on a style fault
+        log.warning("realtime: personality style unavailable")
+        return ""
+
+
 def _identity_block(config: Any, *, compact: bool = False) -> str:
     """Name directive and SOUL.md character (``dodaios.brain.identity``).
 
@@ -1879,6 +1897,7 @@ def _session_instructions(
     compact: bool = False,
     history_lost: bool = False,
     proactivity_level: str | None = None,
+    style: str = "",
 ) -> str:
     """Assemble the session instructions, static first and dynamic last.
 
@@ -1962,6 +1981,10 @@ def _session_instructions(
         clock_line,
         # Dated plans from the notebooks, relative to the clock line above.
         upcoming,
+        # The owner's speaking style + simulated mood: dynamic (the mood can change), so it sits
+        # in the tail, AFTER the voice contract and every operational rule, which it never
+        # overrides (its own text says so).
+        style,
         turn_mode_line,
         # Last, so it wins by recency.
         language_directive,
@@ -3353,6 +3376,9 @@ class RealtimeVoiceSession:
                 instructions=_session_instructions(
                     self._language,
                     proactivity_level=_proactivity_level(self._config),
+                    style=_style_block(
+                        compact=bool(getattr(provider, "prefers_compact_instructions", False))
+                    ),
                     identity=_identity_block(
                         self._config,
                         compact=bool(
@@ -4968,6 +4994,9 @@ class RealtimeVoiceSession:
                             "instructions": _session_instructions(
                                 new_language,
                                 proactivity_level=_proactivity_level(self._config),
+                                style=_style_block(
+                        compact=getattr(self, "_compact_instructions", False)
+                    ),
                                 identity=_identity_block(
                                     self._config,
                                     compact=getattr(
@@ -6856,6 +6885,9 @@ class RealtimeVoiceSession:
                 instructions=_session_instructions(
                     self._language,
                     proactivity_level=_proactivity_level(self._config),
+                    style=_style_block(
+                        compact=getattr(self, "_compact_instructions", False)
+                    ),
                     identity=_identity_block(
                         self._config,
                         compact=getattr(self, "_compact_instructions", False),

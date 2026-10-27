@@ -1,0 +1,28 @@
+{
+  "personality_limits": {
+    "title": "Limits of adaptation",
+    "auto_title": "Automatic adaptation (range)",
+    "auto_body": "On its own the assistant may shift its way of speaking at most to this intensity, and only to the moods you allow. This is the range of automatic adaptation.",
+    "auto_value": "Automatic: up to {n} of {max}",
+    "auto_off": "Automatic adaptation is off: manual mode or range 0.",
+    "owner_title": "Your explicit request",
+    "owner_body": "When you ask for a mood yourself («more serious», or a button below), it may go beyond that range, up to {max}. It is still limited to the moods you allow, never above {max}, and it lasts this session only.",
+    "owner_value": "Your request: up to {max} of {max}",
+    "moods_title": "Moods allowed",
+    "moods_body": "Both limits apply only to these moods. A mood that is not allowed is refused, whoever asks.",
+    "pinned": "Pinned mood: {mood}",
+    "never_title": "What style never changes",
+    "never_body": "Facts, accuracy, privacy, approvals, tools, budgets and stopping. A mood is simulated: a way of speaking, not a feeling.",
+    "channels_title": "Where the style reaches",
+    "ch_text": "Written chat: the style is part of the instructions the assistant receives.",
+    "ch_realtime": "Voice conversations (realtime): the style is sent as wording instructions. It changes how the assistant words things, not how the voice sounds.",
+    "ch_voice": "Voice: no speech provider can change tone per turn, so the voice itself is not modulated.",
+    "ch_avatar": "Avatar: not connected to the app yet; there is no lip sync.",
+    "delivery_title": "When a voice engine picks up a change",
+    "delivery_every_turn": "on each turn",
+    "delivery_connect_only": "only when a call starts (a change applies to the next call)",
+    "delivery_unknown": "not known",
+    "stop_note": "After STOP nothing from the earlier turn is applied; the style is read again for the next one.",
+    "_status": "source text (English)"
+  }
+}

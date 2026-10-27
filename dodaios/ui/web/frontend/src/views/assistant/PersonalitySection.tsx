@@ -23,6 +23,7 @@ import {
   type PersonalityMode,
   type PersonalityProfile,
 } from "@/views/assistant/personalityApi";
+import { PersonalityLimits } from "@/views/assistant/PersonalityLimits";
 import { Section, SpecRow, TextAction } from "@/views/assistant/Section";
 
 const MODES: readonly PersonalityMode[] = ["manual", "adaptive", "mixed"];
@@ -236,6 +237,8 @@ export function PersonalitySection() {
         </div>
         <p className="mt-2 text-sm text-muted-foreground">{t("assistant_view.personality_session_only")}</p>
       </div>
+
+      <PersonalityLimits data={data} />
     </Section>
   );
 }

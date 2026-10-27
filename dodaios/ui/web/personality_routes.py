@@ -21,7 +21,7 @@ from typing import Any, Literal, get_args
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from dodaios.brain import engine_policy, personality, style
+from dodaios.brain import engine_policy, expression, personality, style
 from dodaios.brain import mood as mood_mod
 from dodaios.core import config as cfg_mod
 from dodaios.core import config_writer
@@ -95,6 +95,12 @@ def _payload(request: Request) -> dict[str, Any]:
         },
         "default_preset": personality.default_preset(product),
         "mood": _mood_payload(state, adaptation_on),
+        # Two different things (ADR-0056, block 12): the range of AUTOMATIC adaptation versus what
+        # an explicit owner request may reach; moods_allowed binds both.
+        "limits": mood_mod.limits(profile),
+        # What each channel really carries; no voice modulation, avatar runtime or lip sync.
+        "channels": dict(expression.CHANNELS),
+        "realtime_delivery": dict(expression.REALTIME_STYLE_DELIVERY),
         "mood_available": brain is not None,
         "simulated": True,
         "tones": list(get_args(Tone)),
