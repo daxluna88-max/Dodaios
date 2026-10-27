@@ -18,6 +18,7 @@ Not here: the settings screen, an always-on mode, voice interruption of an engin
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import re
 from dataclasses import dataclass, field
@@ -117,11 +118,16 @@ def _build(registry: Any, spec: Any, branch_id: str, refusals: list[str]) -> Bra
     )
 
 
-async def ask(task: str, config: Any, registry: Any, *, turn_id: str) -> MultiEngineOutcome:
+async def ask(
+    task: str, config: Any, registry: Any, *, turn_id: str, style_instruction: str = ""
+) -> MultiEngineOutcome:
     """Run the configured engines on ``task`` and write one final answer.
 
-    ``config`` is ``[brain.multi_engine]``. Never raises for an engine's failure: the outcome
-    says what happened. Cancelling the awaiting task cancels every engine still running.
+    ``config`` is ``[brain.multi_engine]``. ``style_instruction`` (enumerated style attributes from
+    ``dodaios.brain.style``, never free text) is given to the synthesizer only, so the owner's
+    personality shapes the one final answer while the branches stay neutral and precise.
+    Never raises for an engine's failure: the outcome says what happened. Cancelling the
+    awaiting task cancels every engine still running.
     """
     if engine_policy.current_product() == "work":
         return MultiEngineOutcome("work")
@@ -154,6 +160,8 @@ async def ask(task: str, config: Any, registry: Any, *, turn_id: str) -> MultiEn
         for r in results if r.status == "ok" and r.text.strip()
     )
     synthesizer = _build(registry, synth_spec, "synthesis", refusals)
+    if synthesizer is not None and style_instruction:
+        synthesizer = dataclasses.replace(synthesizer, instruction=style_instruction)
     if synthesizer is None:
         return MultiEngineOutcome("synthesis_failed", reason="; ".join(refusals), report=report)
 

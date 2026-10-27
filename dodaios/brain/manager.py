@@ -3831,6 +3831,29 @@ class BrainManager:
             return target_prefix + raw_output[len(de_prefix):]
         return raw_output
 
+    def _style_runtime(self) -> Any:
+        from dodaios.brain.style import StyleRuntime  # noqa: PLC0415
+
+        runtime = getattr(self, "_style_runtime_obj", None)
+        if runtime is None:
+            runtime = self._style_runtime_obj = StyleRuntime()
+        return runtime
+
+    def _style_instruction(self, *, compact: bool = False) -> str:
+        """The personality + mood text for this turn; empty when no profile is configured."""
+        from dodaios.brain import engine_policy, style  # noqa: PLC0415
+
+        cfg = getattr(getattr(getattr(self, "_config", None), "brain", None), "personality", None)
+        if cfg is None:
+            return ""
+        try:
+            profile, state = self._style_runtime().sync(cfg, engine_policy.current_product())
+            return style.instruction(profile, state, compact=compact)
+        except Exception:  # noqa: BLE001 - a style fault must never break the prompt
+            log.warning("personality style could not be built; turn continues without it",
+                        exc_info=True)
+            return ""
+
     def _build_system_prompt(self) -> str:
         """Builds the system prompt with Jarvis-Agent-style workspace injection.
 
@@ -3888,6 +3911,12 @@ class BrainManager:
         persona_block = load_effective_persona_prompt()
         if persona_block:
             parts.append(persona_block)
+
+        # The owner's stable personality plus the current simulated mood (issue 17): enumerated
+        # values only, so no free text and no mood history ever reaches the engine.
+        style_text = self._style_instruction()
+        if style_text:
+            parts.append(style_text)
 
         # User's own standing-instructions file (CLAUDE.md equivalent),
         # named after the assistant (e.g. Assistant.md). Distinct from the persona: the
@@ -9405,6 +9434,8 @@ class BrainManager:
             outcome = await multi_engine_chat.ask(
                 task, await self._multi_engine_config(), BrainProviderRegistry(),
                 turn_id=str(trace_id),
+                # The owner's style applies to the FINAL answer only: reviewers stay neutral.
+                style_instruction=self._style_instruction(compact=True),
             )
         except Exception as exc:  # noqa: BLE001 - the person gets a reason, never a crashed turn
             log.warning("multi-engine turn failed: %s", type(exc).__name__)
