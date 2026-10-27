@@ -640,6 +640,23 @@ def _is_stt_hallucinated(tool_name: str, args: Any) -> tuple[bool, str]:
     return False, ""
 
 
+def _turn_stopped() -> bool:
+    """True when the owner pressed STOP (or STOP and a resume) after this turn started.
+
+    The turn's STOP ticket lives in the brain manager (ADR-0058). A loop that runs outside any
+    manager turn has no ticket and is never "stopped" here; a manager that was never imported
+    cannot have opened a turn.
+    """
+    import sys  # noqa: PLC0415
+
+    manager = sys.modules.get("dodaios.brain.manager")
+    check = getattr(manager, "_turn_is_stale", None)
+    try:
+        return bool(check()) if callable(check) else False
+    except Exception:  # noqa: BLE001 - a broken check must not become "stopped" by accident
+        return False
+
+
 class ToolUseLoop:
     """Loop until no more tool calls are pending or the budget is exhausted."""
 
@@ -1010,6 +1027,10 @@ class ToolUseLoop:
             if pending:
                 self._append_steer(current_messages, pending)
                 log.info("tool_use_loop: %d steer message(s) folded in", len(pending))
+            if _turn_stopped():
+                # STOP landed: no further model round (it would only plan more tool calls).
+                final_agg.finish_reason = "stopped_by_owner"
+                return final_agg
             round_no += 1
             await self._phase(PHASE_GATHER, f"round {round_no}")
             if self._surface_changed:
@@ -1240,6 +1261,12 @@ class ToolUseLoop:
             meta_debug_ack: str | None = None
             unknown_tool_requested = False
             for tc in agg.tool_calls:
+                if _turn_stopped():
+                    # Re-verified before EVERY call: a tool the model asked for under the old
+                    # generation never runs after STOP, nor after STOP and a resume.
+                    log.info("tool_use_loop: a call was not run, the owner pressed STOP")
+                    final_agg.finish_reason = "stopped_by_owner"
+                    return final_agg
                 tool_name = tc.get("name", "")
                 tool_args = tc.get("input", {})
                 call_id = tc.get("id", "")

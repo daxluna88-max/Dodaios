@@ -210,6 +210,18 @@ class _StopTurn:
 _STOP_TURN: ContextVar[_StopTurn | None] = ContextVar("jarvis_brain_stop_turn", default=None)
 
 
+class _TurnFlags:
+    """Outcome flags of ONE turn (``generate``), so concurrent turns never share them."""
+
+    __slots__ = ("all_failed",)
+
+    def __init__(self) -> None:
+        self.all_failed = False
+
+
+_TURN_FLAGS: ContextVar[_TurnFlags | None] = ContextVar("jarvis_brain_turn_flags", default=None)
+
+
 def _turn_is_stale() -> bool:
     turn = _STOP_TURN.get()
     return turn is not None and turn.stale()
@@ -2475,7 +2487,9 @@ class BrainManager:
         # whether to speak a spoken "all providers are down" fallback instead
         # of returning silently to LISTENING. A legitimate empty turn
         # (suppress_response fire-and-forget) leaves this False.
-        self._last_turn_all_failed: bool = False
+        # Per turn while a turn runs (``_TURN_FLAGS``); this is the value of the last turn that
+        # finished, which is what a caller reading it after ``generate()`` returns sees.
+        self._last_turn_all_failed_done: bool = False
         # AD-OE6 companion signal. True for exactly one turn when the winning
         # provider finished with ``suppress_response`` (a fire-and-forget
         # ``spawn_worker`` background mission that reports back over the bus).
@@ -3934,6 +3948,20 @@ class BrainManager:
             )
         except Exception:  # noqa: BLE001 - the screen's record never breaks a turn
             log.debug("turn record could not be finished", exc_info=True)
+
+    @property
+    def _last_turn_all_failed(self) -> bool:
+        """The running turn's own flag; outside a turn, the last finished turn's."""
+        flags = _TURN_FLAGS.get()
+        return flags.all_failed if flags is not None else self._last_turn_all_failed_done
+
+    @_last_turn_all_failed.setter
+    def _last_turn_all_failed(self, value: bool) -> None:
+        flags = _TURN_FLAGS.get()
+        if flags is not None:
+            flags.all_failed = bool(value)
+        else:
+            self._last_turn_all_failed_done = bool(value)
 
     def personality_snapshot(self) -> tuple[Any, Any, bool]:
         """(effective profile, mood state now, adaptation on) for the settings screen."""
@@ -10577,6 +10605,8 @@ class BrainManager:
         stop_turn = _StopTurn(
             stop_ticket if stop_ticket is not None else get_stop_controller().ticket())
         stop_turn_token = _STOP_TURN.set(stop_turn)
+        turn_flags = _TurnFlags()
+        turn_flags_token = _TURN_FLAGS.set(turn_flags)
         text_consumer = _guard_text_consumer(text_consumer, stop_turn)
         crashed = True
         try:
@@ -10607,6 +10637,8 @@ class BrainManager:
         finally:
             self._finish_engine_record(stop_turn, crashed=crashed)
             _STOP_TURN.reset(stop_turn_token)
+            self._last_turn_all_failed_done = turn_flags.all_failed
+            _TURN_FLAGS.reset(turn_flags_token)
             # Keep the last completed turn inspectable for diagnostics/tests,
             # while active concurrent turns continue reading their own
             # ContextVar-backed state.
@@ -13313,23 +13345,44 @@ class BrainManager:
         model_tier: str = "auto",
         trace_id: UUID | None = None,
         prefer_api: bool = False,
+        stop_ticket: int | None = None,
     ) -> str:
-        """Keep the selected agent and billing account for the entire scheduled turn."""
+        """Keep the selected agent and billing account for the entire scheduled turn.
+
+        ``stop_ticket`` is the STOP generation the task was created under (ADR-0058): a task
+        whose ticket is stale does not start, and its tools stop at the next call after STOP.
+        """
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
         from dodaios.core.model_selection import (
             operation_model,
             use_operation_model,
             worker_selection,
         )
 
+        outer = _STOP_TURN.get()
+        if stop_ticket is None and outer is not None:
+            ticket = outer.ticket  # called from inside a turn: it keeps that turn's generation
+        else:
+            ticket = stop_ticket if stop_ticket is not None else get_stop_controller().ticket()
+        if not get_stop_controller().admit(ticket).allowed:
+            log.info("a scheduled task was not started: the owner pressed STOP")
+            return ""
+        stop_turn = _StopTurn(ticket)
+        stop_token = _STOP_TURN.set(stop_turn)
         selected = operation_model.get() or worker_selection(self._config)
-        with use_operation_model(selected):
-            return await self._run_task_with_selection(
-                prompt=prompt,
-                allowed_tools=allowed_tools,
-                model_tier=model_tier,
-                trace_id=trace_id,
-                prefer_api=prefer_api,
-            )
+        try:
+            with use_operation_model(selected):
+                result = await self._run_task_with_selection(
+                    prompt=prompt,
+                    allowed_tools=allowed_tools,
+                    model_tier=model_tier,
+                    trace_id=trace_id,
+                    prefer_api=prefer_api,
+                )
+            # A reply that finished after STOP is not delivered.
+            return "" if stop_turn.stale() else result
+        finally:
+            _STOP_TURN.reset(stop_token)
 
     async def _run_task_with_selection(
         self,
