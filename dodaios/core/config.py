@@ -935,6 +935,35 @@ class BrainProviderConfig(BaseModel):
         self.tool_model = value
 
 
+class MultiEngineEngineConfig(BaseModel):
+    """One engine that may take part in a multi-engine chat answer (ADR-0055)."""
+
+    provider: str = Field(max_length=60)
+    model: str | None = Field(default=None, max_length=200)
+    #: Estimated cost of one answer in the unit of ``MultiEngineConfig.budget``; None = unknown.
+    est_cost: float | None = None
+    timeout_s: float = Field(default=60.0, gt=0, le=300)
+    #: The work needs API access: refused on an app-subscription connection.
+    needs_api: bool = False
+
+
+class MultiEngineConfig(BaseModel):
+    """``[brain.multi_engine]``: "ask several engines" from the chat. Off by default.
+
+    Nothing runs unless ``enabled`` is true AND the person asks for it in the message
+    (``dodaios.brain.multi_engine_chat``). Consumer only; the Work product refuses it.
+    """
+
+    enabled: bool = False
+    engines: list[MultiEngineEngineConfig] = Field(default_factory=list, max_length=6)
+    #: Writes the ONE final answer. Unset: the first engine that answered does.
+    synthesizer: MultiEngineEngineConfig | None = None
+    #: Ceiling for the whole question (all engines plus the synthesis), in the unit of est_cost.
+    budget: float = Field(default=0.0, ge=0)
+    allow_unknown_cost: bool = False
+    max_concurrent: int = Field(default=3, ge=1, le=6)
+
+
 class BrainPolicyConfig(BaseModel):
     use_routing_model_for_intent: bool = True
     prompt_cache_heartbeat_seconds: int = 240
@@ -1620,6 +1649,7 @@ class BrainConfig(BaseModel):
     local_fallback_model: str = "claude-haiku-4-5-20251001"
     providers: dict[str, BrainProviderConfig] = Field(default_factory=dict)
     policy: BrainPolicyConfig = Field(default_factory=BrainPolicyConfig)
+    multi_engine: MultiEngineConfig = Field(default_factory=MultiEngineConfig)
     # Per-response output ceiling (tokens) for every spoken/chat reply. This is
     # a SAFETY CEILING, not a target: the model still stops on its own
     # (``finish_reason == "stop"``), so a short question keeps its short answer.

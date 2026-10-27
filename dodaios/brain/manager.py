@@ -9379,6 +9379,33 @@ class BrainManager:
         except Exception:  # noqa: BLE001
             log.debug("Background completion history mirror failed", exc_info=True)
 
+    async def _run_multi_engine_turn(self, user_text: str, *, trace_id: UUID) -> str | None:
+        """The one answer of an explicit "ask several engines" request, else None (normal turn)."""
+        from dodaios.brain import multi_engine_chat  # noqa: PLC0415
+
+        task = multi_engine_chat.extract_task(user_text)
+        if task is None:
+            return None
+        from dodaios.brain.provider_registry import BrainProviderRegistry  # noqa: PLC0415
+
+        lang = self._phrase_language(user_text)
+        try:
+            outcome = await multi_engine_chat.ask(
+                task, self._config.brain.multi_engine, BrainProviderRegistry(),
+                turn_id=str(trace_id),
+            )
+        except Exception as exc:  # noqa: BLE001 - the person gets a reason, never a crashed turn
+            log.warning("multi-engine turn failed: %s", type(exc).__name__)
+            outcome = multi_engine_chat.MultiEngineOutcome(
+                "no_answer", reason=f"internal error ({type(exc).__name__})")
+        if outcome.status == "ok":
+            return outcome.text
+        key = {"work": "work", "off": "off", "no_engines": "no_engines",
+               "no_answer": "no_answer", "synthesis_failed": "synthesis_failed"}[outcome.status]
+        return i18n_catalog.t(
+            f"brain.multi_engine.{key}", lang, reasons=outcome.reason, reason=outcome.reason,
+        ).strip()
+
     async def _record_response_side_effects(
         self,
         *,
@@ -10534,6 +10561,16 @@ class BrainManager:
                 trace_id=turn_trace_id,
             )
             return confirmation
+
+        # "Ask several engines: ..." (ADR-0055). One final answer, published once through the
+        # normal response path, so the voice speaks it once; branch answers never leave the module.
+        multi_reply = await self._run_multi_engine_turn(user_text, trace_id=turn_trace_id)
+        if multi_reply is not None:
+            await self._record_response_side_effects(
+                user_text=user_text, response_text=multi_reply,
+                use_history=use_history, trace_id=turn_trace_id,
+            )
+            return multi_reply
 
         society_reply = await self._run_society_inventory_fast_path(
             user_text, trace_id=turn_trace_id,

@@ -61,6 +61,13 @@
     },
     "mid_answer_error": "I ran the steps, but something went wrong while composing the answer. Please ask me again in a moment.",
     "action_failed": "I recognized the action but couldn't execute it.",
+    "multi_engine": {
+      "work": "Asking several engines is not available in the Work product: it only uses local models.",
+      "off": "Asking several engines is switched off. Turn it on and pick the engines in the settings first.",
+      "no_engines": "No engines are chosen for asking several at once. Pick them in the settings first.",
+      "no_answer": "None of the chosen engines answered, so I have no answer to give. {reasons}",
+      "synthesis_failed": "The engines answered but I could not write one final answer from them, so I am not giving you pieces that may disagree. {reason}"
+    },
     "lang_switch_confirm": "Done — I'll reply in English from now on.",
     "lang_switch_confirm_auto": "Done — from now on I'll match the language you use.",
     "ack": {
