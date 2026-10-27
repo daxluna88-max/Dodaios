@@ -1701,6 +1701,48 @@ def reset_personality(*, path: Path = DEFAULT_CONFIG_FILE) -> None:
         _atomic_write(path, out)
 
 
+def _patch_nested(path: Path, tables: tuple[str, ...], key: str, value: Any) -> None:
+    """Set ``[a.b.c] key = value`` (tables nested to any depth), creating what is missing.
+
+    Comments and formatting survive (tomlkit); one atomic write under the writer lock.
+    """
+    path = _ensure_writable_config_path(path)
+    with _WRITE_LOCK:
+        raw = path.read_text(encoding="utf-8")
+        had_bom = raw.startswith(_BOM)
+        if had_bom:
+            raw = raw[len(_BOM) :]
+        doc: TOMLDocument = tomlkit.parse(raw)
+        node: Any = doc
+        for name in tables:
+            child = node.get(name)
+            if child is None:
+                child = tomlkit.table()
+                node[name] = child
+            node = child
+        node[key] = value
+        out = tomlkit.dumps(doc)
+        if had_bom:
+            out = _BOM + out
+        _atomic_write(path, out)
+
+
+def set_safety_approval_mode(mode: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
+    """Persist ``[safety] approval_mode`` (``ask`` | ``bypass``).
+
+    Only the first-run setup uses this, and only to write ``ask``: asking is the stricter
+    direction, and ``[safety]`` is never reachable through self-modification or the Control API.
+    """
+    if mode not in ("ask", "bypass"):
+        raise ValueError(f"unknown approval mode {mode!r}; expected 'ask' or 'bypass'")
+    _patch_nested(path, ("safety",), "approval_mode", mode)
+
+
+def set_learning_enabled(enabled: bool, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
+    """Persist ``[memory.learning] enabled``: the self-learning loop's master switch."""
+    _patch_nested(path, ("memory", "learning"), "enabled", bool(enabled))
+
+
 def set_silence_window_ms(ms: int, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
     """Persist the voice silence window to ``[speech] vad_silence_ms`` in jarvis.toml.
 
