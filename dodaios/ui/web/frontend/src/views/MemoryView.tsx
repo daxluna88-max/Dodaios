@@ -30,6 +30,7 @@ import { KNOWLEDGE_AREAS, SYSTEM_AREA, type MemoryArea } from "@/lib/memoryModel
 import { EmptyState } from "@/components/ui/empty-state";
 import { MemoryNav, type NavTarget } from "@/components/memory/MemoryNav";
 import { MemoryHome } from "@/components/memory/MemoryHome";
+import { MemoryControlPanel } from "@/components/memory/MemoryControl";
 import { PageList } from "@/components/memory/PageList";
 import { AgentDirectory } from "@/components/memory/AgentDirectory";
 import { PageReader } from "@/components/memory/PageReader";
@@ -268,6 +269,8 @@ export function MemoryView(): JSX.Element {
           ) : (
             <div className="min-h-0 flex-1 overflow-y-auto">
               {route.view === "home" ? (
+                <>
+                <MemoryControlPanel onChanged={() => void queryClient.invalidateQueries({ queryKey: MEMORY_KEYS.all })} />
                 <MemoryHome
                   index={index}
                   language={language}
@@ -275,6 +278,7 @@ export function MemoryView(): JSX.Element {
                   onNewPage={() => setCreating({ title: "", kind: "entity" })}
                   onShowAgents={() => go({ view: "area", area: "agents" })}
                 />
+                </>
               ) : route.area === "agents" ? (
                 <AgentDirectory index={index} language={language} onOpen={openPage} onTidy={() => void startTidy()} />
               ) : (

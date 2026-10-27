@@ -97,8 +97,12 @@ class JarvisLearningLoop:
         review_every_turns: int = 30,
         idle_review_seconds: float = 300.0,
         compactor: Reviewer | None = None,
+        proposals: Any = None,
     ) -> None:
         self.notebook = notebook
+        #: ADR-0061: a ``ProposalStore`` turns the reviewer's changes into proposals the owner
+        #: approves one by one; ``None`` keeps the direct write (explicit requests always write).
+        self.proposals = proposals
         self._reviewer = reviewer
         self._compactor = compactor
         self._every = max(1, int(review_every_turns))
@@ -424,6 +428,8 @@ class JarvisLearningLoop:
         return written, True
 
     def _apply_proposal(self, proposal: Proposal, reason: str, seat: dict[str, str]) -> int:
+        if self.proposals is not None:
+            return self._hold_proposal(proposal, reason, seat)
         return self._write(
             seat=seat,
             target=proposal.target,
@@ -436,6 +442,28 @@ class JarvisLearningLoop:
             source=f"review: {reason}",
             expected=proposal.before if proposal.operation != "add" else None,
         )
+
+    def _hold_proposal(self, proposal: Proposal, reason: str, seat: dict[str, str]) -> int:
+        """Keep a reviewer change as a PROPOSED note: not written, not recalled, not sent."""
+        from dodaios.memory.control.proposals import provenance_of
+
+        try:
+            held = self.proposals.propose(
+                target=proposal.target,
+                operation=proposal.operation,
+                text=proposal.text,
+                entry_id=proposal.entry_id,
+                before=proposal.before,
+                evidence=proposal.evidence,
+                importance=proposal.importance,
+                source=f"review: {reason}",
+                seat=seat,
+                provenance=provenance_of([proposal.evidence, proposal.text]),
+            )
+        except OSError as exc:
+            log.info("learning: could not store a proposal — %s", exc)
+            return 0
+        return 1 if held is not None else 0
 
     def _write(self, **change: Any) -> int:
         try:
@@ -606,12 +634,24 @@ def start_learning(config: Any, bus: Any) -> JarvisLearningLoop | None:
     if _loop is not None:
         return _loop
     book = notebook_module.notebook_from_config(config)
+    # ADR-0061: reviews become proposals the owner approves one by one, unless the owner
+    # set ``require_approval = false``. Compaction rewrites approved notes without asking, so
+    # it does not run while approval is required.
+    gated = bool(getattr(cfg, "require_approval", True))
+    store = None
+    if gated:
+        from dodaios.memory.control.proposals import ProposalStore
+
+        store = ProposalStore(book.folder)
     _loop = JarvisLearningLoop(
         book,
         ModelReviewer(config),
+        proposals=store,
         review_every_turns=cfg.review_every_turns,
         idle_review_seconds=cfg.idle_review_seconds,
-        compactor=ModelReviewer(
+        compactor=None
+        if gated
+        else ModelReviewer(
             config,
             system=compact.system_prompt,
             parser=compact.parse,

@@ -123,6 +123,7 @@ export type LocaleChunk =
   | "providers"
   | "pane_review"
   | "memory"
+  | "memory_control"
   | "ship"
   | "self_build";
 
@@ -222,6 +223,14 @@ const CHUNK_LOADERS: Record<LocaleChunk, Record<UiLanguage, () => Promise<unknow
     es: () => import("./locales/memory/es.json"),
     zh: () => import("./locales/memory/zh.json"),
     pt: () => import("./locales/memory/pt.json"),
+  },
+  // Controllable memory: proposals, delete and export (ADR-0061). de/es/pt/zh are unreviewed drafts.
+  memory_control: {
+    en: () => import("./locales/memory_control/en.json"),
+    de: () => import("./locales/memory_control/de.json"),
+    es: () => import("./locales/memory_control/es.json"),
+    zh: () => import("./locales/memory_control/zh.json"),
+    pt: () => import("./locales/memory_control/pt.json"),
   },
   // "Built for you": what the self-building loop made, opened from its nav row.
   self_build: {

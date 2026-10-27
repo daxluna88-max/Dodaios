@@ -555,6 +555,7 @@ class WebServer:
         from .marketplace_publish_routes import router as marketplace_publish_router
         from .marketplace_routes import router as marketplace_router
         from .mcp_routes import router as mcp_router
+        from .memory_control_routes import router as memory_control_router
         from .memory_vault_routes import router as memory_vault_router
         from .mission_billing_routes import router as mission_billing_router
         from .missions_auth import router as missions_auth_router
@@ -641,6 +642,7 @@ class WebServer:
         app.include_router(network_policy_router)
         app.include_router(personality_router)
         app.include_router(control_strip_router)
+        app.include_router(memory_control_router)
         app.include_router(live_router)
         from dodaios.agent_chat.tasks import run_subscription_task
         from dodaios.core.task_agent import register_runner

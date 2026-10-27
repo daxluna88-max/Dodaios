@@ -23,6 +23,7 @@ import {
   FileQuestion,
   Network,
   PencilLine,
+  Trash2,
   TextCursorInput,
 } from "lucide-react";
 import { fill, useT } from "@/i18n";
@@ -57,6 +58,7 @@ import { KindIcon } from "./KindIcon";
 import { MarkdownBody } from "./MarkdownBody";
 import { PageEditor } from "./PageEditor";
 import { ConfirmDialog, RenameDialog } from "./MemoryDialogs";
+import { DeletePageDialog } from "./MemoryControl";
 
 export function PageReader({
   path,
@@ -86,6 +88,7 @@ export function PageReader({
   const [editing, setEditing] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [archiving, setArchiving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const refresh = useCallback(
     () => queryClient.invalidateQueries({ queryKey: MEMORY_KEYS.all }),
@@ -138,6 +141,7 @@ export function PageReader({
                 onEdit={() => setEditing(true)}
                 onRename={() => setRenaming(true)}
                 onArchive={() => setArchiving(true)}
+                onDelete={() => setDeleting(true)}
                 onShowOnMap={() => onShowOnMap(page.path)}
                 notify={notify}
               />
@@ -209,6 +213,16 @@ export function PageReader({
           if (result.path !== page.path) onOpen(result.path);
         }}
       />
+      <DeletePageDialog
+        open={deleting}
+        path={page.path}
+        title={page.title}
+        onClose={() => setDeleting(false)}
+        onDeleted={() => {
+          void refresh();
+          onArchived();
+        }}
+      />
       <ConfirmDialog
         open={archiving}
         title={fill(t("memory_view.archive_title"), { title: page.title })}
@@ -268,6 +282,7 @@ function PageActions({
   onEdit,
   onRename,
   onArchive,
+  onDelete,
   onShowOnMap,
   notify,
 }: {
@@ -277,6 +292,7 @@ function PageActions({
   onEdit: () => void;
   onRename: () => void;
   onArchive: () => void;
+  onDelete: () => void;
   onShowOnMap: () => void;
   notify: (message: string) => void;
 }) {
@@ -313,6 +329,9 @@ function PageActions({
         <IconAction label={t("memory_view.rename")} icon={<TextCursorInput />} onClick={onRename} />
       )}
       {page.archivable && writable && <IconAction label={t("memory_view.archive")} icon={<Archive />} onClick={onArchive} />}
+      {page.editable && writable && (
+        <IconAction label={t("memory_control.delete_action")} icon={<Trash2 />} onClick={onDelete} />
+      )}
     </div>
   );
 }
