@@ -335,11 +335,62 @@ def _limits_payload(record: Any, last: Any) -> dict[str, Any]:
     }
 
 
-async def _snapshot(request: Request, client_seq: int | None = None) -> dict[str, Any]:
-    from dodaios.harness import cu_run_registry  # noqa: PLC0415
+class _EpochMoved(Exception):
+    """STOP / resume moved the door while a snapshot was being assembled."""
 
+
+_SNAPSHOT_ATTEMPTS = 3
+
+
+def _epoch(controller: StopController) -> tuple[int, bool, int]:
+    """(generation, door_open, transition counter) read in one synchronous step."""
+    return (controller.generation, controller.door_open, getattr(controller, "transitions", 0))
+
+
+async def _snapshot(request: Request, client_seq: int | None = None) -> dict[str, Any]:
+    """ONE coherent epoch: the epoch is captured before assembling and revalidated after every
+    await. If STOP / resume moved it, assemble again (bounded); if it keeps moving, answer
+    ``unknown`` with the reason rather than label old observations with the new generation."""
     seq = next(_SEQ)  # taken at the START: a reply built from older reads has the lower number
     controller = _install(request)
+    for _attempt in range(_SNAPSHOT_ATTEMPTS):
+        try:
+            return await _assemble(request, controller, seq, client_seq)
+        except _EpochMoved:
+            log.debug("control strip: the stop epoch moved during assembly, retrying")
+    return _unknown_snapshot(controller, seq, client_seq, "epoch_changed")
+
+
+def _unknown_snapshot(controller: StopController, seq: int, client_seq: int | None,
+                      reason: str) -> dict[str, Any]:
+    generation, door_open, _t = _epoch(controller)  # read together, no await in between
+    return {
+        "boot_id": _BOOT_ID, "seq": seq,
+        "etag": f"{_BOOT_ID[:8]}-{generation}-{seq}",
+        "server_time": int(time.time() * 1000), "client_seq": client_seq,
+        "state": "unknown", "unknown_reason": reason, "not_confirmed": [],
+        "door_open": door_open, "generation": generation,
+        "indicators": {"audio": "unknown", "jobs": None, "approvals": None},
+        "engine": _engine_payload(None),
+        "jobs": {"missions": [], "computer_use_runs": 0, "background_agents": 0},
+        "approvals": [],
+        "memory": {"learning_enabled": None, "count": None, "archive_is_deletion": False,
+                   "per_note_approval": False, "backups_and_indexes_covered": False},
+        "limits": _limits_payload(None, None),
+        "stop": None,
+    }
+
+
+async def _assemble(request: Request, controller: StopController, seq: int,
+                    client_seq: int | None) -> dict[str, Any]:
+    from dodaios.harness import cu_run_registry  # noqa: PLC0415
+
+    epoch0 = _epoch(controller)
+
+    def still() -> None:
+        if _epoch(controller) != epoch0:
+            raise _EpochMoved
+
     app_state = request.app.state
     mgr = getattr(app_state, "mission_manager", None)
     missions: list[tuple[str, str, str]] = []
@@ -350,40 +401,51 @@ async def _snapshot(request: Request, client_seq: int | None = None) -> dict[str
         except Exception:  # noqa: BLE001 - an unreadable store is unknown, not zero
             log.warning("control strip: the missions could not be listed", exc_info=True)
             missions_ok = False
+        still()
     decisions = await _pending_decisions(request, [m[0] for m in missions]) if missions_ok else []
+    still()
     coord = getattr(app_state, "mission_tool_approvals", None)
     approvals_n: int | None = await coord.pending_count() if coord is not None else None
+    still()
     cu_n = cu_run_registry.active_run_count()
     bg_n = len(_background_tasks())
     orb, audio = await _voice_reading(request)
-    jobs = Reading(len(missions) + cu_n + bg_n, 0.0) if missions_ok else Reading()
-    last = controller.last_report
-    strip = derive(
-        Observed(
-            orb=orb, audio_playing=audio, jobs_running=jobs,
-            approvals_pending=Reading(approvals_n, 0.0) if approvals_n is not None else Reading(),
-        ),
-        controller.state,
-        last.results if last is not None and controller.state != "running" else (),
-    )
-    brain = _brain(request)
-    ledger = getattr(brain, "_turn_ledger_obj", None)
-    record = ledger.last() if ledger is not None else None
+    still()
     tool_by_mission: dict[str, str] = {}
     for d in decisions:
         tool_by_mission.setdefault(str(d.get("mission_id")), str(d.get("tool_name")))
     mission_rows = (await _mission_rows(mgr, missions, tool_by_mission)
                     if missions_ok and mgr is not None else [])
+    still()
+    memory = await _memory_payload(request)
+    still()
+    # No await below: controller state, generation and door are read in the same step as the last
+    # check, so they belong to the epoch every observation above was made in.
+    jobs = Reading(len(missions) + cu_n + bg_n, 0.0) if missions_ok else Reading()
+    last = controller.last_report
+    cstate = controller.state
+    generation, door_open, _t = _epoch(controller)
+    strip = derive(
+        Observed(
+            orb=orb, audio_playing=audio, jobs_running=jobs,
+            approvals_pending=Reading(approvals_n, 0.0) if approvals_n is not None else Reading(),
+        ),
+        cstate,
+        last.results if last is not None and cstate != "running" else (),
+    )
+    brain = _brain(request)
+    ledger = getattr(brain, "_turn_ledger_obj", None)
+    record = ledger.last() if ledger is not None else None
     return {
         "boot_id": _BOOT_ID,
         "seq": seq,
-        "etag": f"{_BOOT_ID[:8]}-{controller.generation}-{seq}",
+        "etag": f"{_BOOT_ID[:8]}-{generation}-{seq}",
         "server_time": int(time.time() * 1000),
         "client_seq": client_seq,
         "state": strip.summary,
         "not_confirmed": list(strip.not_confirmed),
-        "door_open": controller.door_open,
-        "generation": controller.generation,
+        "door_open": door_open,
+        "generation": generation,
         "indicators": {
             "audio": strip.indicators.audio,
             "jobs": strip.indicators.jobs,
@@ -396,9 +458,9 @@ async def _snapshot(request: Request, client_seq: int | None = None) -> dict[str
             "background_agents": bg_n,
         },
         "approvals": decisions,
-        "memory": await _memory_payload(request),
+        "memory": memory,
         "limits": _limits_payload(record, last),
-        "stop": _report_payload(last) if controller.state != "running" else None,
+        "stop": _report_payload(last) if cstate != "running" else None,
     }
 
 
@@ -455,15 +517,21 @@ async def get_control_strip(
 
 
 @router.post("/stop", summary="Stop this product: door first, then every part on its own")
-async def post_stop(request: Request) -> dict[str, Any]:
+async def post_stop(
+    request: Request,
+    client_seq: int | None = Query(default=None, ge=0),
+) -> dict[str, Any]:
     report = await _install(request).stop()
-    payload = await _snapshot(request)
+    payload = await _snapshot(request, client_seq)
     payload["stop"] = _report_payload(report)
     return payload
 
 
 @router.post("/stop/resume", summary="The owner lets work start again (a new generation)")
-async def post_resume(request: Request) -> dict[str, Any]:
+async def post_resume(
+    request: Request,
+    client_seq: int | None = Query(default=None, ge=0),
+) -> dict[str, Any]:
     controller = _install(request)
     try:
         controller.resume()
@@ -471,4 +539,4 @@ async def post_resume(request: Request) -> dict[str, Any]:
         raise HTTPException(
             status_code=409, detail={"code": "stopping", "reason": "stop_in_progress"}
         ) from None
-    return await _snapshot(request)
+    return await _snapshot(request, client_seq)

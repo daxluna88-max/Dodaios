@@ -365,3 +365,45 @@ was not run. PC checklist still owed: kill the server while the page is open (st
 slow GET across a STOP; approve with a stale tab; screen reader behaviour of the two live regions; read the five
 translations.
 
+
+## Block 13: GPT round 3 (G4, G5)
+
+Nothing was run: no pytest, no vitest, no tsc / eslint / vite, no app. TypeScript is not type-checked and `dist` is not
+rebuilt, so the UI change is NOT live. Only `py_compile` and `ruff check` on the Python files. No new i18n keys.
+
+### G4 (MEDIUM) epoch fencing and write ordering: fixed in code, not run
+
+- **Files.** `frontend/src/lib/controlStrip.ts`: `StripOrderer.accept`, `resync`, `beginWriteRequest`, `isCurrentWrite`,
+  `sendWrite` (replaces `beginWrite` / `applyWrite`); `control_strip_routes.py`: `post_stop`, `post_resume` echo `client_seq`.
+- **Choice.** No new endpoint. The session is the `boot_id` the client holds, set only by the first reply of a request sent
+  while no session is held (connect) or after an explicit client `resync()`. An unknown `boot_id` is never newer: it is
+  dropped and triggers `resync()`, which raises `epochFloor`; replies of requests sent before the resync are refused by
+  client sequence, so only a request the client sends afterwards can set a new session. Every STOP / resume gets a client
+  sequence number (also sent as `?client_seq=`), raises the barrier to it, and its reply is applied only if it is still the
+  newest write and passes `accept` (same session, above barrier). A delayed older write reply, or one from another boot,
+  repaints nothing.
+- **Residual.** At the very first connect the first reply defines the session (one request in flight, so no older one
+  exists to race). After a stray unseen-boot reply the screen goes to history/unknown until the next poll (about 3 s). Two
+  server processes behind one address are still unsupported. Approve / deny / cancel do not paint state (they only
+  invalidate the query), so they need no sequence; the server still checks fingerprint and generation for them.
+
+### G5 (MEDIUM) one coherent epoch per snapshot: fixed in code, not run
+
+- **Files.** `control/stop.py`: read-only `StopController.transitions` counter (bumped on STOP entry, resume, STOP finishing);
+  `control_strip_routes.py`: `_snapshot` (bounded retry, 3 attempts), `_assemble` (epoch captured first, `still()` after every
+  await), `_unknown_snapshot`, `_epoch`.
+- **Choice.** Epoch = (generation, door_open, transitions). Controller state, last report, generation and door_open are read
+  after the last await in one synchronous step, never later than the final check. If the epoch moved, assemble again; after 3
+  attempts return `state: "unknown"` with `unknown_reason: "epoch_changed"`, empty jobs / approvals and null counts.
+- **Residual.** The check detects STOP / resume of this controller only; sources outside it (a mission ending during the
+  await) can still differ by milliseconds inside one epoch, which the 3 s poll corrects. The new `unknown_reason` is not yet
+  in the TypeScript `ControlStrip` type or shown; the screen treats `unknown` as it already does.
+
+### Controls prepared, NOT RUN
+
+- Python `tests/unit/ui/web/test_control_strip_block13_c.py`: transitions counter; resume during the store await retries
+  and returns the new generation wholly; a permanently moving epoch returns `unknown` / `epoch_changed`; write routes echo
+  `client_seq`.
+- Vitest `src/lib/controlStrip.test.ts` (the old "restart starts a new epoch" test was replaced): unseen old boot after the
+  new boot is dropped; only a request sent after resync sets the new session; new boot first then old unseen boot last; a
+  delayed older STOP reply after a resume and a foreign-boot write reply are refused.

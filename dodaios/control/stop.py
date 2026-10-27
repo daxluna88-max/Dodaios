@@ -100,6 +100,7 @@ class StopController:
         self._probe_timeout_s = probe_timeout_s
         self._settle_s = settle_s
         self._generation = 0
+        self._transitions = 0
         self._open = True
         self._state: StopState = "running"
         self._last: StopReport | None = None
@@ -117,6 +118,13 @@ class StopController:
     @property
     def door_open(self) -> bool:
         return self._open
+
+    @property
+    def transitions(self) -> int:
+        """Monotonic count of every change of door / state (STOP, resume, STOP finishing).
+
+        Read-only: the same value before and after an await means nothing moved."""
+        return self._transitions
 
     @property
     def state(self) -> StopState:
@@ -150,6 +158,7 @@ class StopController:
         if self.stopping:
             raise StopInProgress("stop is still in progress")
         self._generation += 1
+        self._transitions += 1
         self._open = True
         self._state = "running"
         for _on_close, on_open in self._listeners:
@@ -183,6 +192,7 @@ class StopController:
     async def stop(self) -> StopReport:
         """STOP. The first lines run before any await: that is the 'door closes first' rule."""
         repeated = not self._open
+        self._transitions += 1
         if self._open:
             self._generation += 1
             self._open = False
@@ -230,6 +240,7 @@ class StopController:
         report = StopReport(generation, state, results, repeated)
         if self._generation == generation and not self._open:
             self._state = state
+        self._transitions += 1
         self._last = report
         return report
 

@@ -66,12 +66,50 @@ describe("StripOrderer", () => {
     expect(o.accept(strip({ seq: 3, generation: 2 }), 120)).toBe(true);
   });
 
-  it("a server restart starts a new epoch; a late reply of the old process is dropped", () => {
+  it("an unseen boot is not newer by itself: it is dropped and a resync is needed (G4)", () => {
     const o = new StripOrderer();
-    o.accept(strip({ boot_id: "A", seq: 50, generation: 3 }), 100);
-    expect(o.accept(strip({ boot_id: "B", seq: 1, generation: 0 }), 200)).toBe(true);
-    expect(o.accept(strip({ boot_id: "A", seq: 51, generation: 3 }), 210)).toBe(false);
+    o.accept(strip({ boot_id: "NEW", seq: 3, generation: 1 }), 100);
+    // A delayed reply of an OLD server whose boot id was never seen arrives last.
+    expect(o.accept(strip({ boot_id: "OLD-unseen", seq: 999, generation: 9 }), 200)).toBe(false);
+    expect(o.sessionId).toBeNull();
+    expect(o.current).toBeUndefined();
+  });
+
+  it("only a request sent after the resync can set the new session", () => {
+    const o = new StripOrderer();
+    const first = o.nextRequest();
+    o.accept(strip({ boot_id: "A", seq: 50, generation: 3 }), 100, first.clientSeq);
+    const inFlight = o.nextRequest(); // sent before the server changed
+    const stray = strip({ boot_id: "B", seq: 1, generation: 0 });
+    expect(o.accept(stray, 200, inFlight.clientSeq)).toBe(false); // starts the resync
+    // the same stray reply, or any reply of a request sent before the resync, stays refused
+    expect(o.accept(strip({ boot_id: "A", seq: 51, generation: 3 }), 210, inFlight.clientSeq)).toBe(false);
+    const fresh = o.nextRequest();
+    expect(o.accept(strip({ boot_id: "B", seq: 2, generation: 0 }), 220, fresh.clientSeq)).toBe(true);
+    expect(o.sessionId).toBe("B");
     expect(o.current?.boot_id).toBe("B");
+  });
+
+  it("new boot first, then a late reply of an old unseen boot: the new state stays", () => {
+    const o = new StripOrderer();
+    const a = o.nextRequest();
+    const b = o.nextRequest();
+    expect(o.accept(strip({ boot_id: "NEW", seq: 4, generation: 2, state: "stopped" }), 100, b.clientSeq)).toBe(true);
+    expect(o.accept(strip({ boot_id: "OLD", seq: 400, generation: 7, state: "working" }), 110, a.clientSeq)).toBe(false);
+    expect(o.current).toBeUndefined(); // dropped and resynced: never the old state
+  });
+
+  it("a delayed older write reply does not repaint; neither does a stale-session write", () => {
+    const o = new StripOrderer();
+    o.accept(strip({ boot_id: "A", seq: 1, generation: 0 }), 50);
+    const stopSeq = o.beginWriteRequest();
+    const resumeSeq = o.beginWriteRequest();
+    expect(o.isCurrentWrite(stopSeq)).toBe(false);
+    expect(o.accept(strip({ boot_id: "A", seq: 3, generation: 2, state: "idle" }), 100, resumeSeq)).toBe(true);
+    expect(o.accept(strip({ boot_id: "A", seq: 2, generation: 1, state: "stopped" }), 110, stopSeq)).toBe(false);
+    expect(o.current?.state).toBe("idle");
+    const w = o.beginWriteRequest();
+    expect(o.accept(strip({ boot_id: "OLD", seq: 9, generation: 9 }), 120, w)).toBe(false);
   });
 
   it("sends the known STOP generation with the next poll and numbers polls upward", () => {

@@ -147,18 +147,26 @@ export function isStale(input: {
 const POLL_MS = 3000;
 
 /**
- * Orders the replies of the control strip. A reply is applied only if it is newer than the last
- * one applied: same server process, `seq` higher, STOP `generation` not lower. A reply of an
- * earlier process (restart) is dropped; the first of a new process starts a new epoch. A
- * reply whose request was sent before a STOP / resume began (below the barrier) is dropped, so a
- * GET that was in flight cannot repaint the state that STOP just replaced.
+ * Orders the replies of the control strip and fences server epochs (G4).
+ *
+ * The session is the `boot_id` the client holds. It is taken from the first reply of the first
+ * request ever sent, or from the first reply of a request sent AFTER an explicit {@link resync}.
+ * A reply carrying any other `boot_id` is NEVER newer by itself: it is dropped and it starts a
+ * resync, so a late reply of an old server that was never seen cannot become a new epoch; only
+ * a request the client sends after the resync can (requests sent before it are below
+ * `epochFloor`). Inside the session a reply is applied only if `seq` is higher and the STOP
+ * `generation` not lower. A reply whose request was sent before a STOP / resume began (below the
+ * barrier) is dropped, so neither a GET in flight nor an older write's reply can repaint.
  */
 export class StripOrderer {
-  private boots: string[] = [];
+  private session: string | null = null;
   private lastSeq = -1;
   private lastGeneration = -1;
   private nextClientSeq = 1;
   private barrier = 0;
+  private epochFloor = 0;
+  /** Number of the newest write (STOP / resume) sent; 0 = none. */
+  private latestWrite = 0;
   current: ControlStrip | undefined;
   /** Browser time of the last reply that was APPLIED (0 = none yet). */
   lastOkAt = 0;
@@ -178,19 +186,50 @@ export class StripOrderer {
     return clientSeq >= this.barrier;
   }
 
+  /**
+   * A write (STOP / resume) is about to be sent: it gets its own client sequence number, raises the
+   * barrier to it (older polls and older writes are dropped from now on) and becomes the newest.
+   */
+  beginWriteRequest(): number {
+    const seq = this.nextClientSeq++;
+    this.barrier = seq;
+    this.latestWrite = seq;
+    return seq;
+  }
+
+  /** Whether the write numbered `seq` is still the newest one sent. */
+  isCurrentWrite(seq: number): boolean {
+    return seq === this.latestWrite;
+  }
+
+  /** The server may have changed: forget the session; only requests sent from now can set it. */
+  resync(): void {
+    this.session = null;
+    this.lastSeq = -1;
+    this.lastGeneration = -1;
+    this.epochFloor = this.nextClientSeq;
+    this.current = undefined;
+    this.lastOkAt = 0;
+  }
+
+  /** The `boot_id` of the server this client currently trusts (null = none yet). */
+  get sessionId(): string | null {
+    return this.session;
+  }
+
   /** Apply `next` if it is newer than what is applied; returns whether it was. */
   accept(next: ControlStrip, now: number = Date.now(), clientSeq?: number): boolean {
-    if (clientSeq !== undefined && !this.isAfterBarrier(clientSeq)) return false;
+    if (clientSeq !== undefined && (!this.isAfterBarrier(clientSeq) || clientSeq < this.epochFloor)) {
+      return false;
+    }
     const boot = next.boot_id;
     const seq = next.seq;
     if (boot !== undefined && seq !== undefined) {
-      const known = this.boots.indexOf(boot);
-      if (known === -1) {
-        this.boots.push(boot);
-        this.lastSeq = -1;
-        this.lastGeneration = -1;
-      } else if (known !== this.boots.length - 1) {
-        return false; // a late reply of an earlier server process
+      if (this.session === null) {
+        this.session = boot;
+      } else if (boot !== this.session) {
+        this.resync(); // an unknown boot is not newer by itself: the next request decides
+        return false;
       }
       if (seq <= this.lastSeq) return false;
       if (next.generation < this.lastGeneration) return false;
@@ -282,36 +321,35 @@ export function useControlStrip(): StripView & { isFetching: boolean } {
   return { ...view, isFetching: query.isFetching };
 }
 
-/** Before STOP / resume is sent: abort polls in flight and refuse their replies. */
-function beginWrite(client: QueryClient): void {
-  stripOrderer(client).raiseBarrier();
+/**
+ * Send one write (STOP / resume) with its own client sequence number. The barrier is raised and
+ * polls in flight are aborted first. The reply is applied only if this write is still the newest
+ * one sent and it passes the orderer (same server session, newer than what is on screen); a
+ * delayed reply never repaints older state. A dropped reply returns what is on screen.
+ */
+async function sendWrite(client: QueryClient, path: string): Promise<ControlStrip> {
+  const orderer = stripOrderer(client);
+  const seq = orderer.beginWriteRequest();
   void client.cancelQueries({ queryKey: CONTROL_STRIP_QUERY_KEY });
-}
-
-/** Apply the reply of a write only if it is newer than what is on screen. */
-function applyWrite(client: QueryClient, state: ControlStrip): void {
-  if (stripOrderer(client).accept(state)) client.setQueryData(CONTROL_STRIP_QUERY_KEY, state);
+  const state = await request<ControlStrip>(`${path}?client_seq=${seq}`, { method: "POST" });
+  if (orderer.isCurrentWrite(seq) && orderer.accept(state, Date.now(), seq)) {
+    client.setQueryData(CONTROL_STRIP_QUERY_KEY, state);
+    return state;
+  }
+  return orderer.current ?? state;
 }
 
 export function useStop() {
   const client = useQueryClient();
   return useMutation<ControlStrip, Error, void>({
-    mutationFn: () => {
-      beginWrite(client);
-      return request<ControlStrip>("/api/stop", { method: "POST" });
-    },
-    onSuccess: (state) => applyWrite(client, state),
+    mutationFn: () => sendWrite(client, "/api/stop"),
   });
 }
 
 export function useResume() {
   const client = useQueryClient();
   return useMutation<ControlStrip, Error, void>({
-    mutationFn: () => {
-      beginWrite(client);
-      return request<ControlStrip>("/api/stop/resume", { method: "POST" });
-    },
-    onSuccess: (state) => applyWrite(client, state),
+    mutationFn: () => sendWrite(client, "/api/stop/resume"),
   });
 }
 
