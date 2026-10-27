@@ -55,6 +55,17 @@ from dodaios.core.branding import DEFAULT_INSTALL_DIR_NAME, LEGACY_DEFAULT_INSTA
 from dodaios.core.identity_boot import resolve_config_file
 from dodaios.core.identity_migration import LegacyState, inspect_legacy, is_directory_link
 from dodaios.core.process_utils import wait_procs
+from dodaios.core.product_profile import (
+    ACTIVE_ENV,
+    DATA_DIR_ENV,
+    MARKER_NAME,
+    PRODUCTS,
+    SERVICE_PREFIX,
+    ProductError,
+    _read_owner,
+    paths_for,
+    validate_product,
+)
 from dodaios.setup.wizard import SECRETS
 
 # Same Charcoal + Gold palette as install/installer.py and the first-run wizard,
@@ -85,6 +96,11 @@ class UninstallPlan:
     #: Links that lead to the install folder from another path (the earlier
     #: folder name a move left behind). Removed with the folder, as links.
     install_links: tuple[Path, ...] = ()
+    #: Data directories of the Work / Consumer products that exist on this machine. They share
+    #: this install's runtime, so a full uninstall refuses while any is left (ADR-0054, block 5).
+    product_dirs: tuple[Path, ...] = ()
+    #: True when the products could not be looked up: unsure, so a full uninstall refuses.
+    product_scan_failed: bool = False
 
     @property
     def config_file(self) -> Path:
@@ -416,6 +432,23 @@ def _autostart_state() -> tuple[bool, str | None]:
         return False, None
 
 
+def _product_dirs_present() -> tuple[tuple[Path, ...], bool]:
+    """(existing product data dirs, scan failed). Looks only; never creates or follows a link."""
+    from dodaios.core.identity_boot import user_data_dir_pair
+
+    try:
+        pair = user_data_dir_pair()
+        found: list[Path] = []
+        for shared in (pair.current, *pair.legacy):
+            for name in PRODUCTS:
+                candidate = paths_for(name, shared).data_dir
+                if os.path.lexists(candidate):
+                    found.append(candidate)
+        return tuple(dict.fromkeys(found)), False
+    except Exception:  # noqa: BLE001 — cannot tell: the caller refuses
+        return (), True
+
+
 def build_plan() -> UninstallPlan:
     """Inspect the machine and report what an uninstall would remove. Pure."""
     install_dir = Path(cfg.PROJECT_ROOT).resolve()
@@ -424,6 +457,7 @@ def build_plan() -> UninstallPlan:
         running = [p.pid for p in _find_running_instances(install_dir)]
     except Exception:  # noqa: BLE001 — a scan failure must not block the uninstall
         running = []
+    product_dirs, product_scan_failed = _product_dirs_present()
     return UninstallPlan(
         install_dir=install_dir,
         is_jarvis_install=_looks_like_jarvis_install(install_dir),
@@ -432,6 +466,8 @@ def build_plan() -> UninstallPlan:
         keyring_keys=_keyring_keys_present(),
         running_pids=running,
         install_links=_install_links(install_dir),
+        product_dirs=product_dirs,
+        product_scan_failed=product_scan_failed,
     )
 
 
@@ -666,18 +702,147 @@ def _remove_folder(install_dir: Path) -> bool:
 
 
 # ---------------------------------------------------------------- orchestrator
+def _refuse(message: str) -> int:
+    _console.print(f"[bad]Refusing:[/] {escape(message)}\n[muted]Nothing was changed.[/]\n")
+    return 3
+
+
+def _product_data_dir(product: str, install_dir: Path) -> Path | str:
+    """The product's data dir, or the reason it may not be removed. Never follows a link."""
+    raw = os.environ.get(DATA_DIR_ENV, "")
+    if not raw:
+        return f"{DATA_DIR_ENV} is not set: cannot tell which directory is the {product} product's."
+    data_dir = Path(raw)
+    if is_directory_link(data_dir):
+        return f"{data_dir} is a link; a link is never followed or removed as data."
+    if not data_dir.is_dir():
+        return f"{data_dir} does not exist."
+    if not data_dir.name.endswith(f"-{product}"):
+        return f"{data_dir} is not named like the {product} product's directory."
+    try:
+        owner = _read_owner(data_dir / MARKER_NAME)
+    except ProductError as exc:
+        return str(exc)
+    if owner != product:
+        return f"{data_dir} has no {product} ownership marker (owner: {owner or 'none'})."
+    a, b = os.path.realpath(data_dir), os.path.realpath(install_dir)
+    if a == b or a.startswith(b + os.sep) or b.startswith(a + os.sep):
+        return f"{data_dir} overlaps the shared install folder {install_dir}."
+    return data_dir
+
+
+def _run_product_uninstall(
+    product: str, *, assume_yes: bool, keep_keys: bool, keep_folder: bool, dry_run: bool
+) -> int:
+    """Remove ONE product's data and credentials; never the shared runtime or the other product.
+
+    Only runs inside that product's own launch (``--product <p> --uninstall``): the process then
+    holds the product's launch lock (so the product is not running twice) and its credential
+    service is already ``dodaios-<p>``. Removed: the product's data directory (verified by its
+    ownership marker) and its keys. NOT removed, because the other product shares them: the install
+    folder and venv, the desktop registration, the login autostart entry, the terminal commands,
+    the earlier-name links, and any running process found by install folder.
+    ``keep_folder`` keeps the product's data directory.
+    Returns: 0 success, 1 declined, 3 refused.
+    """
+    try:
+        product = validate_product(product)
+    except ProductError as exc:
+        return _refuse(str(exc))
+    if cfg.KEYRING_SERVICE != f"{SERVICE_PREFIX}{product}":
+        return _refuse(
+            f"this process uses the credential service {cfg.KEYRING_SERVICE!r}, not "
+            f"{SERVICE_PREFIX}{product!r}. Run: python -m dodaios --product {product} --uninstall"
+        )
+    install_dir = Path(cfg.PROJECT_ROOT).resolve()
+    if not _looks_like_jarvis_install(install_dir):
+        return _refuse(f"{install_dir} does not look like a Dodaios install.")
+    data_dir = _product_data_dir(product, install_dir)
+    if isinstance(data_dir, str):
+        return _refuse(data_dir)
+    keys = [] if keep_keys else _keyring_keys_present()
+    _console.print()
+    _console.print(f" [brand.bold]Uninstall the {product} product[/]")
+    lines = [
+        f"[bad]This removes the {product} product's own data and keys only.[/]\n",
+        "[brand]•[/] Delete its data directory:\n"
+        f"    [muted]{escape(str(data_dir))}[/]"
+        if not keep_folder
+        else "[brand]•[/] Its data directory: [muted]kept (--keep-folder)[/]",
+        f"[brand]•[/] Delete [brand.bold]{len(keys)}[/] saved API key(s) of the service "
+        f"{escape(cfg.KEYRING_SERVICE)}"
+        if not keep_keys
+        else "[brand]•[/] Saved API keys: [muted]kept[/]",
+        "[muted]Left alone (shared with the other product): the install folder and Python "
+        "environment, app registration, login autostart, terminal commands. Remove those "
+        "with a full uninstall once no product data is left.[/]",
+    ]
+    _console.print(Panel("\n".join(lines), border_style="brand", padding=(1, 2)))
+    if dry_run:
+        _console.print("  [muted](dry run — nothing was changed.)[/]\n")
+        return 0
+    if not assume_yes and not _confirm():
+        _console.print("  [muted]Cancelled — nothing was changed.[/]\n")
+        return 1
+    if not keep_keys:
+        _remove_keys(keys)
+    if not keep_folder:
+        try:
+            shutil.rmtree(data_dir)
+            _console.print("    [ok]→ product data directory deleted.[/]")
+        except Exception as exc:  # noqa: BLE001
+            _console.print(
+                f"    [bad]⚠ could not delete {escape(str(data_dir))}: {escape(str(exc))}[/]"
+            )
+            return 3
+    _console.print(f"  [ok]Done.[/] [muted]The {product} product's data is removed.[/]\n")
+    return 0
+
+
 def run_uninstall(
     *,
     assume_yes: bool = False,
     keep_keys: bool = False,
     keep_folder: bool = False,
     dry_run: bool = False,
+    product: str | None = None,
 ) -> int:
-    """Uninstall Dodaios from this machine.
+    """Uninstall Dodaios from this machine, or ONE product's data (``--product``).
 
-    Returns: 0 success, 1 aborted by the user, 2 not a Jarvis install.
+    Inside a product launch (``JARVIS_PRODUCT_ACTIVE``) only that product's data and keys are
+    ever removed (see ``_run_product_uninstall``); the shared runtime is never touched. Unscoped,
+    the full uninstall refuses while a Work/Consumer data directory exists or cannot be ruled out:
+    it would remove the runtime they both run from.
+
+    Returns: 0 success, 1 aborted by the user, 2 not a Jarvis install, 3 refused (unsure or
+    another product's data is in the way).
     """
+    active = (os.environ.get(ACTIVE_ENV) or "").strip().lower() or None
+    if product is not None and active is not None and product.strip().lower() != active:
+        return _refuse(f"--product {product} contradicts the running {active} product.")
+    scoped = product or active
+    if scoped is not None:
+        return _run_product_uninstall(
+            scoped,
+            assume_yes=assume_yes,
+            keep_keys=keep_keys,
+            keep_folder=keep_folder,
+            dry_run=dry_run,
+        )
+
     plan = build_plan()
+    if plan.product_scan_failed:
+        return _refuse(
+            "could not check for Work/Consumer product data, so it is not safe to remove "
+            "the shared install."
+        )
+    if plan.product_dirs:
+        listed = ", ".join(str(d) for d in plan.product_dirs)
+        return _refuse(
+            "the shared install is used by the products whose data exists here: "
+            f"{listed}. Remove each first with `python -m dodaios --product <work|consumer> "
+            "--uninstall`, then run the full uninstall again."
+        )
 
     if not plan.is_jarvis_install:
         _console.print(
