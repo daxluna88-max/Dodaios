@@ -94,6 +94,9 @@ class MultiEngineOutcome:
     sources: tuple[str, ...] = ()
     #: The text derives from material a remote destination may not see (provenance).
     tainted: bool = False
+    #: Typed label of ``text`` (R6). Fails closed: only an explicit UNRESTRICTED lets the text go
+    #: to a remote destination; an outcome nobody labelled is UNAVAILABLE.
+    provenance: provenance.Provenance = provenance.Provenance.UNAVAILABLE
     report: dict[str, Any] = field(default_factory=dict)
 
 
@@ -184,11 +187,11 @@ async def ask(
     awaiting task cancels every engine still running.
     """
     if engine_policy.current_product() == "work":
-        return MultiEngineOutcome("work")
+        return MultiEngineOutcome("work", provenance=provenance.Provenance.UNRESTRICTED)
     if not config.enabled:
-        return MultiEngineOutcome("off")
+        return MultiEngineOutcome("off", provenance=provenance.Provenance.UNRESTRICTED)
     if not config.engines:
-        return MultiEngineOutcome("no_engines")
+        return MultiEngineOutcome("no_engines", provenance=provenance.Provenance.UNRESTRICTED)
 
     refusals: list[str] = []
     # branch ids are b1..bN in the order of ``config.engines`` (an unbuildable one keeps its number)
@@ -231,8 +234,10 @@ async def ask(
     text = synth.text.strip()
     if synth.tainted:  # the label must outlive this module: a cloud TTS or the curator check it
         provenance.mark_restricted(text)
+    label = (provenance.Provenance.RESTRICTED if synth.tainted
+             else provenance.Provenance.UNRESTRICTED)
     return MultiEngineOutcome("ok", text=text, sources=synth.sources, tainted=synth.tainted,
-                              report=report)
+                              provenance=label, report=report)
 
 
 __all__ = [

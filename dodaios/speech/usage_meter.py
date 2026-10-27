@@ -316,8 +316,10 @@ class MeteredTTS(_MeteredProvider):
         # sent to a remote TTS. The text stays on screen; only the remote speech is skipped.
         from dodaios.brain import provenance  # noqa: PLC0415
 
-        if provenance.is_restricted(text) and not provenance.tts_is_local(self._inner):
-            log.info("TTS %s skipped: the text derives from local-only material", self.name)
+        # R6: the typed label (own label + the turn's label, independent of the text) decides;
+        # the text-match registry is only an extra signal. UNAVAILABLE fails closed for remote.
+        if provenance.remote_speech_blocked(text) and not provenance.tts_is_local(self._inner):
+            log.info("TTS %s skipped: local-only or unlabelled provenance", self.name)
             return
         chars = len(text or "")
         kwargs: dict[str, Any] = dict(extra)

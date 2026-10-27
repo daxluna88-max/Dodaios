@@ -483,6 +483,9 @@ def child_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if k.upper() in _ENV_ALLOWLIST}
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
+    from dodaios.core.child_identity import forward_identity
+
+    forward_identity(env)  # R7: product identity + offline policy survive the allowlist
     if extra:
         env.update(extra)
     return env

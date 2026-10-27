@@ -6,13 +6,22 @@ by a cloud TTS, written to memory by the curator) only see a string. This regist
 next to the text: ``mark_restricted(text)`` when a result is tainted, ``is_restricted(text)`` at
 each door.
 
-Best-effort by construction: matching is on whitespace/case-normalised text, so a sentence cut out
-of a marked answer is still recognised, but a paraphrase or a number-spelled rewrite is not. It is
-bounded in size and time and never raises. It is a floor, not a proof (see ADR-0050, block 7).
+R6 (block 8): the text registry is NOT the boundary. Text matching is not a privacy label (it
+ignores short text, expires, evicts, vanishes on restart and fails after any rewrite). The boundary
+is a TYPED label: :class:`Provenance` carried by :class:`LabelledText` and by the per-turn channel
+(``begin_turn`` / ``set_turn_provenance`` / ``turn_provenance``), which does not look at the text at
+all. ``remote_speech_blocked`` fails closed: RESTRICTED and UNAVAILABLE both keep text away from a
+remote synthesizer; only a local one is unaffected. The registry remains an extra signal.
+
+Best-effort by construction (registry): matching is on whitespace/case-normalised text, so a
+sentence cut out of a marked answer is still recognised, but a paraphrase or a number-spelled
+rewrite is not. It is bounded in size and time and never raises. It is a floor, not a proof (see
+ADR-0050, block 7).
 """
 
 from __future__ import annotations
 
+import enum
 import threading
 import time
 from collections import deque
@@ -74,3 +83,85 @@ def tts_is_local(provider: Any) -> bool:
         provider, seen = inner, seen + 1
     name = getattr(provider, "name", "")
     return bool(name) and name in engine_policy.LOCAL_SERVICES["tts"]
+
+
+# --- Typed provenance (R6, block 8) -------------------------------------------------------------
+
+
+class Provenance(enum.StrEnum):
+    """What a piece of text is allowed to do. Ordered by severity in :func:`combine`."""
+
+    UNRESTRICTED = "unrestricted"  # known not to derive from local-only material
+    RESTRICTED = "restricted"  # derives from local-only material: never to a remote destination
+    UNAVAILABLE = "unavailable"  # nobody could say: treated like RESTRICTED for remote doors
+
+
+def combine(*labels: Provenance | None) -> Provenance:
+    """RESTRICTED beats UNAVAILABLE beats UNRESTRICTED; ``None`` (no label) is UNAVAILABLE."""
+    seen = {Provenance.UNAVAILABLE if label is None else label for label in labels}
+    if Provenance.RESTRICTED in seen:
+        return Provenance.RESTRICTED
+    if Provenance.UNAVAILABLE in seen or not seen:
+        return Provenance.UNAVAILABLE
+    return Provenance.UNRESTRICTED
+
+
+class LabelledText(str):
+    """A ``str`` that carries its :class:`Provenance`.
+
+    Store ``provenance.value`` next to it to keep it across a restart. Any string operation
+    returns a plain ``str``: the label is NOT kept by slicing or rewriting, so a path that
+    transforms text must pass the label on in parallel (the turn channel below), never rely on
+    this object surviving.
+    """
+
+    provenance: Provenance
+
+    def __new__(cls, text: str, provenance: Provenance) -> LabelledText:
+        obj = super().__new__(cls, text)
+        obj.provenance = provenance
+        return obj
+
+
+def label_of(text: Any) -> Provenance | None:
+    """The label ``text`` carries, or None when it is a plain string (no label)."""
+    return text.provenance if isinstance(text, LabelledText) else None
+
+
+def label(text: str, provenance: Provenance) -> LabelledText:
+    return LabelledText(text, provenance)
+
+
+_turn_lock = threading.Lock()
+_turn_label: Provenance = Provenance.UNRESTRICTED
+
+
+def begin_turn() -> None:
+    """A new turn starts: nothing restricted has been produced in it yet."""
+    global _turn_label
+    with _turn_lock:
+        _turn_label = Provenance.UNRESTRICTED
+
+
+def set_turn_provenance(provenance: Provenance) -> None:
+    """Merge ``provenance`` into this turn's label (it only ever gets more restrictive)."""
+    global _turn_label
+    with _turn_lock:
+        _turn_label = combine(_turn_label, provenance)
+
+
+def turn_provenance() -> Provenance:
+    """The label of the turn in flight, independent of any text. Process-wide and conservative:
+    a restricted turn keeps remote speech off until the next turn begins."""
+    with _turn_lock:
+        return _turn_label
+
+
+def remote_speech_blocked(text: str) -> bool:
+    """Whether ``text`` must NOT go to a remote synthesizer. Typed label first, text match last."""
+    own = label_of(text)
+    if own in (Provenance.RESTRICTED, Provenance.UNAVAILABLE):
+        return True
+    if turn_provenance() is not Provenance.UNRESTRICTED:
+        return True
+    return is_restricted(text)

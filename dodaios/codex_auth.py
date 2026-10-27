@@ -826,6 +826,10 @@ class CodexAuthService:
             }
         else:
             environment = dict(os.environ)
+        if self._isolate_openai_environment:
+            from dodaios.core.child_identity import forward_identity  # R7
+
+            forward_identity(environment, untrusted=True)
         if self._codex_home is not None:
             environment["CODEX_HOME"] = str(self._codex_home)
         if self._force_file_auth_store:

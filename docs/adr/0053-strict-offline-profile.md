@@ -42,3 +42,29 @@ OS-level enforcement, which is not built.
 
 With the guard on, a representative Work turn (refused remote engine, local engine answering) makes zero outbound
 attempts, and any path that would leak fails loudly. Proven with real sockets and the real entry point.
+
+## Block 8: review fixes R7
+
+Review finding (high): under the profile an unclassified tool name returned "allowed", and replaced child environments
+dropped product identity and policy. Written, not run: no test, build or service was executed in this block.
+
+1. **Default deny.** `egress_guard.tool_refusal(name, tool=None)` now refuses anything that is not positively
+   classified as no-network. A tool passes only when it is in `OFFLINE_SAFE_TOOLS` (first-party local UI/read tools,
+   read by hand for network/process imports, not run) or the registry declared it with
+   `declare_tool_coverage(name, "none")`, or (first-party class only, module under `dodaios.`) it has
+   `network_capability = "none"` / `offline_safe = True`. A name in a refusal class is refused whatever it declares; an
+   unknown capability value counts as unknown (refused). `tool_capability()` exposes the verdict.
+2. **Harness and skill runner call sites (other agent).** `plugins/harness/mcp_remote.py`, `skills/runner.py` and
+   `safety/tool_executor.py` still call `tool_refusal(name)` with the name only: they must pass the tool object
+   (`tool_refusal(name, tool)`) so its declared capability is consulted, and the plugin/marketplace registry must call
+   `declare_tool_coverage` for tools it vetted. Until then a third-party tool is simply refused under the profile.
+3. **Child identity.** New `dodaios/core/child_identity.py` (`forward_identity`) copies `JARVIS_PRODUCT`,
+   `JARVIS_PRODUCT_ACTIVE`, `JARVIS_DATA_DIR`, `JARVIS_CONFIG`, `JARVIS_KEYRING_SERVICE`, `JARVIS_NETWORK_POLICY` and
+   `JARVIS_LOCAL_ALLOWED_HOSTS` into a replaced environment. Applied in `build_worker_env` (mission workers),
+   `agent_runtimes.base.child_env` (agent runtimes, openclaw, hermes), `codex_auth` isolated environment and
+   `mcp.env_isolation.isolated_environment` (untrusted servers get product and policy only, not the data layout).
+   Environments that copy all of `os.environ` already carry them. Not audited one by one: `agent_chat` CLI runners,
+   `voice_engine` worker, terminal/PTY and `agentic_ide` spawns (they inherit or overlay `os.environ`).
+
+Not claimed: this is NOT full offline. A forwarded `JARVIS_NETWORK_POLICY` only helps a child that installs the guard
+(`GUARDED_CHILD_MODULES` is still empty); there is still no OS enforcement (ADR-0060 is design only).

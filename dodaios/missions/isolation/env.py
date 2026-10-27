@@ -156,6 +156,12 @@ def build_worker_env(
         if user:
             env["USER"] = user
 
+    # R7: the env REPLACES os.environ, so the product identity and the offline policy are
+    # forwarded explicitly (a worker must not fall back to the default product / shared data).
+    from dodaios.core.child_identity import forward_identity
+
+    forward_identity(env)
+
     # Fixed defaults — non-negotiable
     env["NO_COLOR"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"

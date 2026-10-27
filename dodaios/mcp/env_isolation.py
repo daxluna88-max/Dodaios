@@ -117,6 +117,10 @@ def isolated_environment(overrides: dict[str, str] | None = None) -> dict[str, s
         env = {key: value for key, value in os.environ.items() if key.upper() in wanted}
     else:
         env = {key: os.environ[key] for key in keep if key in os.environ}
+    # R7: an untrusted server still learns the product and the offline policy (not the data layout).
+    from dodaios.core.child_identity import forward_identity
+
+    forward_identity(env, untrusted=True)
     if overrides:
         env.update({str(k): str(v) for k, v in overrides.items()})
     return env
