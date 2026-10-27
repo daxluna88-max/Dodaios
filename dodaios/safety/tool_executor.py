@@ -272,7 +272,7 @@ class ToolExecutor:
             return await refuse(stopped, f"stopped ({stopped})")
         from dodaios.core import egress_guard
 
-        offline = egress_guard.tool_refusal(tool.name)
+        offline = egress_guard.tool_refusal(tool.name, tool)
         if offline is not None:
             return await refuse(offline, offline)
         if call_fingerprint(tool.name, args) != fingerprint:
@@ -575,7 +575,7 @@ class ToolExecutor:
 
         from dodaios.core import egress_guard
 
-        offline = egress_guard.tool_refusal(tool.name)
+        offline = egress_guard.tool_refusal(tool.name, tool)
         if offline is not None:
             await self._bus.publish(ActionDenied(trace_id=tid, tool_name=tool.name, reason=offline))
             return ToolResult(False, None, offline)
@@ -999,7 +999,7 @@ class ToolExecutor:
                 return await refuse("Plan mode permits reads only", "Plan mode permits reads only")
         from dodaios.core import egress_guard
 
-        offline = egress_guard.tool_refusal(tool.name)
+        offline = egress_guard.tool_refusal(tool.name, tool)
         if offline is not None:
             return await refuse(offline, offline)
         try:
