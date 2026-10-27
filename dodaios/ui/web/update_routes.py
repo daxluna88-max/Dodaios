@@ -1082,6 +1082,29 @@ def _refuse_if_missions_run(request: Request | None, *, force: bool) -> None:
         )
 
 
+def _refuse_if_other_product_runs() -> None:
+    """409 when another product (Work/Consumer) may be running from the shared install.
+
+    Not overridable by ``force``: the update replaces files that product runs from, and only
+    the caller's own app is quit by the handover. Unknown counts as running (ADR-0064).
+    """
+    from dodaios.core import product_profile  # noqa: PLC0415
+
+    try:
+        running, unknown = product_profile.running_products(
+            exclude=product_profile.active_product()
+        )
+    except product_profile.ProductError as exc:
+        raise HTTPException(
+            status_code=409, detail={"error": "product_identity", "message": str(exc)}
+        ) from exc
+    if running or unknown:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "other_product_running", "products": list(running + unknown)},
+        )
+
+
 def _desktop_can_quit(request: Request | None) -> bool:
     """True when a desktop window exists that ``_quit_for_update`` can close."""
     if request is None:
@@ -1412,6 +1435,7 @@ async def update_apply(request: Request, force: bool = False) -> dict[str, objec
         raise HTTPException(status_code=409, detail="an update is already being applied")
     async with _apply_lock:
         try:
+            _refuse_if_other_product_runs()
             if is_frozen():
                 return await _apply_frozen(request, force=force)
             return await _apply_managed()

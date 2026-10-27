@@ -771,6 +771,23 @@ WINDOWS_RELAUNCH_PARAM = "/RELAUNCH=1"
 # The Inno Setup parameter naming the process the installer must outlive (see
 # InitializeSetup in packaging/windows/Dodaios.iss).
 WINDOWS_WAIT_PID_PARAM = "/WAITPID"
+# The product (work or consumer) the relaunched app must come back as; absent for the
+# unscoped app. Read by ProductParam in packaging/windows/Dodaios.iss.
+WINDOWS_PRODUCT_PARAM = "/PRODUCT"
+
+
+def _product_relaunch_args() -> tuple[str, ...]:
+    """``--product NAME`` of the running app's product, so the relaunch keeps its identity.
+
+    A garbled product environment aborts the handover (the running app keeps working on the
+    old version) instead of relaunching as something else.
+    """
+    from dodaios.core import product_profile
+
+    try:
+        return product_profile.relaunch_args()
+    except product_profile.ProductError as exc:
+        raise InstallerUpdateError(f"refusing to hand over: {exc}") from exc
 # Where the silent installer writes its log. A silent upgrade that fails shows
 # nothing at all, so this file is the only trace of what went wrong.
 WINDOWS_INSTALLER_LOG_NAME = "update-installer.log"
@@ -814,6 +831,7 @@ def _handover_windows(
     only restarts apps registered with ``RegisterApplicationRestart``, which
     this one is not, so it promised a relaunch that never happened.
     """
+    product_args = _product_relaunch_args()
     command = [
         str(installer),
         "/SILENT",
@@ -823,6 +841,9 @@ def _handover_windows(
         WINDOWS_RELAUNCH_PARAM,
         f"{WINDOWS_WAIT_PID_PARAM}={wait_for_pid}",
     ]
+    if product_args:
+        # The [Run] relaunch entry reads it (packaging/windows/Dodaios.iss, ProductParam).
+        command.append(f"{WINDOWS_PRODUCT_PARAM}={product_args[1]}")
     log_file = _windows_installer_log() if log_path is None else log_path
     if log_file is not None:
         command.append(f"/LOG={log_file}")
@@ -949,9 +970,13 @@ def _handover_macos(
 
     if relaunch:
         try:
-            runner.spawn_detached(
-                relaunch_after_exit_command(wait_for_pid, [MACOS_OPEN, "-n", str(installed)])
-            )
+            # LaunchServices does not hand the old app's environment on: the product travels
+            # as an argument, or the relaunch would start the unscoped app (ADR-0064).
+            product_args = _product_relaunch_args()
+            command = [MACOS_OPEN, "-n", str(installed)]
+            if product_args:
+                command += ["--args", *product_args]
+            runner.spawn_detached(relaunch_after_exit_command(wait_for_pid, command))
         except OSError as exc:
             raise InstallerUpdateError(
                 f"the update was installed but could not be relaunched: {exc}"
@@ -999,7 +1024,11 @@ def _handover_linux(
 
     if relaunch:
         try:
-            runner.spawn_detached(relaunch_after_exit_command(wait_for_pid, [str(appimage_path)]))
+            runner.spawn_detached(
+                relaunch_after_exit_command(
+                    wait_for_pid, [str(appimage_path), *_product_relaunch_args()]
+                )
+            )
         except OSError as exc:
             raise InstallerUpdateError(
                 f"the update was installed but could not be relaunched: {exc}"

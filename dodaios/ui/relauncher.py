@@ -997,6 +997,11 @@ def finalize_pending_update(cwd: str | Path) -> bool:
         return False
 
     snapshot_user_state(root)
+    # The product's own data directory is not under ``root``; back up its small files too
+    # (best effort, never raises, never touches the other product; ADR-0064).
+    from dodaios.core.product_backup import snapshot_product_state  # noqa: PLC0415
+
+    snapshot_product_state()
 
     previous = str(payload["previous_revision"])
     target = str(payload["target_revision"])

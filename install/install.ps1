@@ -263,6 +263,16 @@ $InitialPath = $env:Path
 # Forward any extra args to installer.py (e.g. --no-launch, --dry-run, --with-voice-local)
 $ExtraArgs = $args
 
+# --product is refused before anything is touched: Work and Consumer share ONE install folder,
+# registration, autostart entry and set of terminal commands (ADR-0054, ADR-0064).
+foreach ($a in $ExtraArgs) {
+    if ("$a" -eq '--product' -or "$a" -like '--product=*') {
+        Write-Err '--product is not supported by the installer: Work and Consumer share one install.'
+        Write-Err 'Install once, then start a product with: dodaios --product <work|consumer>. Nothing was changed.'
+        exit 3
+    }
+}
+
 # --- prerequisite-bootstrap begin ------------------------------------------
 # This block stays shell-native because Python may not exist yet. Tests extract
 # it directly and exercise the retry/continuation state machine with fakes.

@@ -387,6 +387,66 @@ def validate_entry(
     return rest
 
 
+def running_products(exclude: str | None = None) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Which products hold their launch lock right now: ``(running, unknown)``.
+
+    An install-wide action (update, full uninstall) replaces files BOTH products run from.
+    The caller of a product process excludes its own product (its own app is handled by the
+    existing quit-and-relaunch flow); an unscoped caller excludes nothing. A product whose
+    lock file does not exist never ran and is not running. A lock that cannot be probed is
+    reported in ``unknown`` and must be treated as running (fail closed). The probe takes the
+    lock for an instant and releases it; it never creates a lock file or a directory.
+    """
+    skip = validate_product(exclude) if exclude else None
+    running: list[str] = []
+    unknown: list[str] = []
+    try:
+        roots = _shared_roots()
+    except Exception:  # noqa: BLE001 - cannot locate the roots: nothing can be said, fail closed
+        return (), tuple(p for p in PRODUCTS if p != skip)
+    for name in PRODUCTS:
+        if name == skip:
+            continue
+        state = "free"
+        for shared in roots:
+            lock_file = paths_for(name, shared).lock_file
+            if not lock_file.exists():
+                continue
+            probe = FileLock(str(lock_file))
+            try:
+                probe.acquire(timeout=0)
+            except Timeout:
+                state = "running"
+                break
+            except OSError:
+                state = "unknown"
+                continue
+            else:
+                probe.release()
+        if state == "running":
+            running.append(name)
+        elif state == "unknown":
+            unknown.append(name)
+    return tuple(running), tuple(unknown)
+
+
+def active_product(env: Mapping[str, str] | None = None) -> str | None:
+    """The product this process runs as (``JARVIS_PRODUCT_ACTIVE``), or None when unscoped."""
+    value = ((env if env is not None else os.environ).get(ACTIVE_ENV) or "").strip().lower()
+    return validate_product(value) if value else None
+
+
+def relaunch_args(env: Mapping[str, str] | None = None) -> tuple[str, ...]:
+    """``("--product", name)`` for a relaunch that cannot carry the environment, else ``()``.
+
+    macOS LaunchServices (``open``) and the Windows installer's own [Run] entry do not pass the
+    old app's environment on, so an update that relaunched without this would start the
+    UNSCOPED app on the shared data directory. An unknown active product is an error.
+    """
+    name = active_product(env)
+    return ("--product", name) if name else ()
+
+
 def _pin_credential_service(service: str, env: dict[str, str]) -> None:
     """Bind this process to the product's credential service, or confirm it already is.
 
@@ -440,6 +500,7 @@ __all__ = [
     "ProductPaths",
     "acquire_launch_lock",
     "activate_from_argv",
+    "active_product",
     "check_no_overlap",
     "check_product_root",
     "claim",
@@ -447,6 +508,8 @@ __all__ = [
     "extract_product_flag",
     "paths_for",
     "prepare_launch",
+    "relaunch_args",
+    "running_products",
     "scoped_service",
     "validate_entry",
     "validate_inherited",
