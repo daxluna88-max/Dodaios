@@ -182,7 +182,12 @@ note "$INSTALL_DIR"
 # (required on a headless box where stdin is not a terminal).
 DRY_RUN=0
 ASSUME_YES=0
+# --product work|consumer (ADR-0054, block 5): remove ONE product's data and keys only. The
+# install folder, app registration and autostart are shared by both products, so this script
+# never removes them in that mode.
+PRODUCT_MODE=0
 for a in "$@"; do
+    case "$a" in (--product|--product=*) PRODUCT_MODE=1 ;; esac
     [ "$a" = "--dry-run" ] && DRY_RUN=1
     { [ "$a" = "--yes" ] || [ "$a" = "-y" ]; } && ASSUME_YES=1
 done
@@ -202,6 +207,21 @@ else
     err "Python environment missing — skipping autostart/key cleanup."
     note "The app registration and folder can still be removed; saved API keys may remain."
     if [ "$DRY_RUN" -eq 1 ]; then exit 0; fi
+    # Without the venv nothing can tell whether the Work or Consumer product still uses this
+    # install, so refuse: per-product removal needs the venv, and a full removal needs no
+    # product data (ADR-0054, block 5). Product data dirs sit next to the shared one.
+    if [ "$PRODUCT_MODE" -eq 1 ]; then
+        err "Refusing: --product needs the Python environment. Nothing was changed."
+        exit 3
+    fi
+    for product_dir in "$HOME/.dodaios-data-work" "$HOME/.dodaios-data-consumer" \
+                       "$HOME/.jarvis-work" "$HOME/.jarvis-consumer"; do
+        if [ -e "$product_dir" ] || [ -L "$product_dir" ]; then
+            err "Refusing: product data exists ($product_dir); the shared install is its runtime."
+            note "Remove each product first: python -m dodaios --product <work|consumer> --uninstall"
+            exit 3
+        fi
+    done
     if [ "$ASSUME_YES" -eq 0 ]; then
         printf 'Type '\''yes'\'' to delete %s: ' "$INSTALL_DIR"
         read -r ans
@@ -252,6 +272,11 @@ if [ "$RC" -eq 1 ]; then
     exit 1
 elif [ "$RC" -eq 2 ]; then
     exit 2
+elif [ "$RC" -eq 3 ]; then
+    # Refused (unsure, or a product still uses this install). It printed why; nothing was
+    # changed and the folder must stay: no "rm -rf" advice here.
+    err 'Refused - nothing was changed.'
+    exit 3
 elif [ "$RC" -ne 0 ]; then
     err "The cleanup step failed (exit $RC) — nothing was changed."
     note 'Its own error is printed above. On macOS the usual cause is a venv'
@@ -261,6 +286,12 @@ elif [ "$RC" -ne 0 ]; then
     note "Saved API keys then stay in your OS keychain under \"$KEYRING_SERVICE_NAME\""
     note "and \"$LEGACY_KEYRING_SERVICE_NAMES\"."
     exit "$RC"
+fi
+
+# A per-product removal is done: the install folder belongs to both products and stays.
+if [ "$PRODUCT_MODE" -eq 1 ]; then
+    step 'Done. The product data was removed; the shared install was left in place.'
+    exit 0
 fi
 
 # 1: delete the folder from OUTSIDE the venv. The Python step above already

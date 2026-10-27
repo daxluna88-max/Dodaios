@@ -108,6 +108,10 @@ Write-Note $InstallDir
 
 $DryRun    = $args -contains '--dry-run'
 $AssumeYes = ($args -contains '--yes') -or ($args -contains '-y')
+# --product work|consumer (ADR-0054, block 5): remove ONE product's data and keys only. The
+# install folder, Start menu entry, Installed Apps entry and logon task are shared by both
+# products, so this script never removes them in that mode.
+$ProductMode = ($args -contains '--product') -or (@($args | Where-Object { "$_" -like '--product=*' }).Count -gt 0)
 
 if (-not (Test-Path -LiteralPath $InstallDir)) {
     Write-Err "No install found at $InstallDir - nothing to do."
@@ -124,6 +128,22 @@ if (Test-Path -LiteralPath $VenvPython) {
     Write-Err 'Python environment missing - skipping autostart/key cleanup.'
     Write-Note 'The app registration and folder can still be removed; saved API keys may remain.'
     if ($DryRun) { exit 0 }
+    # Without the venv nothing can tell whether the Work or Consumer product still uses this
+    # install: refuse. Product data dirs sit next to the shared one (ADR-0054, block 5).
+    if ($ProductMode) {
+        Write-Err 'Refusing: --product needs the Python environment. Nothing was changed.'
+        exit 3
+    }
+    if ($env:LOCALAPPDATA) {
+        foreach ($ProductDir in @('Dodaios-work', 'Dodaios-consumer', 'Jarvis-work', 'Jarvis-consumer')) {
+            $ProductPath = Join-Path $env:LOCALAPPDATA $ProductDir
+            if (Test-Path -LiteralPath $ProductPath) {
+                Write-Err "Refusing: product data exists ($ProductPath); the shared install is its runtime."
+                Write-Note 'Remove each product first: python -m dodaios --product <work|consumer> --uninstall'
+                exit 3
+            }
+        }
+    }
     if (-not $AssumeYes) {
         $ans = Read-Host "Type 'yes' to delete $InstallDir"
         if ($ans -ne 'yes') { Write-Note 'Cancelled.'; exit 1 }
@@ -161,9 +181,20 @@ if (Test-Path -LiteralPath $VenvPython) {
 }
 
 # The Python step returns 1 when the user cancels at its prompt. Respect that.
+if ($Rc -eq 3) {
+    # Refused (unsure, or a product still uses this install). The Python step printed why.
+    Write-Err 'Refused - nothing was changed.'
+    exit 3
+}
 if ($Rc -ne 0) {
     Write-Note 'Cancelled - nothing was changed.'
     exit $Rc
+}
+
+# A per-product removal is done: the install folder belongs to both products and stays.
+if ($ProductMode) {
+    Write-Step 'Done. The product data was removed; the shared install was left in place.'
+    exit 0
 }
 
 # 1: delete the folder from OUTSIDE the venv. Leave the install dir first so it

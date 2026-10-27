@@ -231,14 +231,47 @@ def user_outputs_dir() -> Path:
 def desktop_mirror_dir() -> Path:
     """Desktop junction root for direct access to sub-agent outputs.
 
-    ``~/Desktop/Dodaios-Output``, or the folder under its earlier name while
+    Unscoped app: ``~/Desktop/Dodaios-Output``, or the folder under its earlier name while
     that one exists: a folder on the Desktop is never renamed under the user.
+
+    A product launch (ADR-0054, ``JARVIS_PRODUCT_ACTIVE``) has a mirror root of its own,
+    ``~/Desktop/Dodaios-Output-<product>``, so Work and Consumer never share a Desktop folder
+    (two equal slugs would otherwise open the other product's output). It is new, so it has no
+    earlier name to resolve.
     """
+    product = (os.environ.get("JARVIS_PRODUCT_ACTIVE") or "").strip().lower()
+    if product in ("work", "consumer"):
+        return Path.home() / "Desktop" / f"{DESKTOP_OUTPUT_MIRROR_DIR_NAME}-{product}"
     return resolve_named_dir(
         Path.home() / "Desktop",
         DESKTOP_OUTPUT_MIRROR_DIR_NAME,
         LEGACY_DESKTOP_OUTPUT_MIRROR_DIR_NAMES,
     )
+
+
+def _same_place(a: Path, b: Path) -> bool:
+    """True when both paths resolve to one location (links followed on purpose)."""
+    try:
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    except OSError:
+        return False
+
+
+def mirror_is_safe(mirror_root: Path, mirror: Path, canonical: Path) -> bool:
+    """Whether ``mirror`` may be used as this product's Desktop access to ``canonical``.
+
+    ``mirror`` is accepted only when it is a directory link that leads to ``canonical``
+    itself. A link that leads anywhere else (the other product's output, a stale target), a
+    real folder, and a mirror root that is itself a link are never adopted, followed or
+    deleted: the caller falls back to ``canonical``. Nothing here removes anything.
+    """
+    from dodaios.core.identity_migration import is_directory_link
+
+    if is_directory_link(mirror_root):
+        return False
+    if not is_directory_link(mirror):
+        return False
+    return _same_place(mirror, canonical)
 
 
 def ensure_session_output_dir(slug: str) -> tuple[Path, Path]:
@@ -250,6 +283,10 @@ def ensure_session_output_dir(slug: str) -> tuple[Path, Path]:
         headless server with no Desktop) the junction is skipped and ``mirror``
         equals ``canonical``, so callers always receive a usable path and no
         stray ``~/Desktop/Dodaios-Output`` folder is created.
+
+        The mirror lives under a per-product root and is used only if it leads to this
+        product's own ``canonical`` (``mirror_is_safe``); anything else already at that
+        place is left untouched and ``mirror`` equals ``canonical``.
     """
     import subprocess
 
@@ -264,21 +301,32 @@ def ensure_session_output_dir(slug: str) -> tuple[Path, Path]:
     if sys.platform != "win32":
         return canonical, canonical
 
+    from dodaios.core.identity_migration import is_directory_link
+
     mirror_root = desktop_mirror_dir()
+    if is_directory_link(mirror_root):  # never create or follow through a link root
+        return canonical, canonical
     mirror_root.mkdir(parents=True, exist_ok=True)
     mirror = mirror_root / slug
-    if not mirror.exists():
-        try:
-            subprocess.run(
-                ["cmd", "/c", "mklink", "/J", str(mirror), str(canonical)],
-                check=False,
-                capture_output=True,
-                timeout=5.0,
-                creationflags=NO_WINDOW_CREATIONFLAGS,
-            )
-        except Exception:  # noqa: BLE001
-            pass  # Mirror is nice-to-have, not a fatal failure
-    return canonical, mirror
+    if os.path.lexists(mirror):
+        # Something is already there: use it only if it is our own link, else leave it alone.
+        if mirror_is_safe(mirror_root, mirror, canonical):
+            return canonical, mirror
+        return canonical, canonical
+    try:
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(mirror), str(canonical)],
+            check=False,
+            capture_output=True,
+            timeout=5.0,
+            creationflags=NO_WINDOW_CREATIONFLAGS,
+        )
+    except Exception:  # noqa: BLE001
+        return canonical, canonical  # Mirror is nice-to-have, not a fatal failure
+    # Hand back the mirror only if mklink really produced a link to canonical.
+    if mirror_is_safe(mirror_root, mirror, canonical):
+        return canonical, mirror
+    return canonical, canonical
 
 
 def ensure_user_dirs() -> Path:
