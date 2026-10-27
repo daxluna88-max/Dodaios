@@ -29,6 +29,8 @@ from pathlib import Path
 
 from filelock import FileLock, Timeout
 
+from dodaios.core.identity_migration import is_directory_link
+
 PRODUCTS = ("work", "consumer")
 MARKER_NAME = ".product"
 LAUNCH_LOCK_NAME = ".launch.lock"
@@ -100,6 +102,58 @@ def check_no_overlap(shared_data_dir: Path) -> None:
         for second in dirs[i + 1:]:
             if _overlaps(first, second):
                 raise ProductConflict(f"{first} and {second} overlap: refusing to share state")
+
+
+def _real(path: Path) -> Path:
+    """The strict real path (every link followed, must exist), or a :class:`ProductError`."""
+    try:
+        return path.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ProductError(f"cannot resolve {path}: {exc}") from exc
+
+
+def _shared_roots() -> list[Path]:
+    from dodaios.core.identity_boot import resolve_pair, user_data_dir_pair
+
+    pair = user_data_dir_pair()
+    return list({pair.current, resolve_pair(pair)})
+
+
+def check_product_root(product: str, data_dir: Path, *, canonical: bool = False) -> Path:
+    """Refuse a product root that is a link, or that nests with the shared root or the OTHER
+    product's root (an ancestor or a descendant, after every link is resolved).
+
+    With ``canonical`` the real path must also be exactly ``<shared-root>-<product>``, a sibling
+    of the shared root. Deleting one product's root can then never reach the other's data.
+    Returns the strict real path. Reads only.
+    """
+    name = validate_product(product)
+    other = next(p for p in PRODUCTS if p != name)
+    if is_directory_link(data_dir):
+        raise ProductError(f"{data_dir} is a link: a product directory must be a real directory")
+    real = _real(data_dir)
+    shared_roots = _shared_roots()
+    for shared in shared_roots:
+        if _overlaps(real, shared):
+            raise ProductConflict(f"{data_dir} overlaps the shared directory {shared}")
+    for shared in shared_roots:
+        rival = paths_for(other, shared).data_dir
+        if _overlaps(real, rival):
+            raise ProductConflict(f"{data_dir} overlaps the {other} product directory {rival}")
+    if canonical and real not in {paths_for(name, s).data_dir.resolve() for s in shared_roots}:
+        raise ProductError(
+            f"{data_dir} is not the canonical {name} directory (<shared-root>-{name})"
+        )
+    return real
+
+
+def _check_config_file(product: str, data_dir: Path, config: Path) -> None:
+    """The config FILE itself must be ``dodaios.toml`` inside the real data root, and not a link:
+    a link there could point at the other product's file."""
+    if config.is_symlink():
+        raise ProductError(f"{config} is a link: the {product} config must be a real file")
+    if config.resolve() != _real(data_dir) / CONFIG_FILE_NAME:
+        raise ProductError(f"{config} does not resolve inside the {product} directory {data_dir}")
 
 
 def _read_owner(marker: Path) -> str | None:
@@ -290,12 +344,10 @@ def validate_inherited(product: str, env: Mapping[str, str] | None = None) -> Pr
         raise ProductError(f"{data_dir} is not a {name} product directory (<root>{suffix})")
     if config.name != CONFIG_FILE_NAME or config.parent.resolve() != data_dir.resolve():
         raise ProductError(f"{config} is not the {name} product's config inside {data_dir}")
-    from dodaios.core.identity_boot import resolve_pair, user_data_dir_pair
-
-    pair = user_data_dir_pair()
-    for shared in {pair.current, resolve_pair(pair)}:
-        if _overlaps(data_dir, shared):
-            raise ProductConflict(f"{data_dir} overlaps the shared directory {shared}")
+    if (data_dir / MARKER_NAME).is_symlink():
+        raise ProductError(f"{data_dir / MARKER_NAME} is a link: not trusting its ownership")
+    check_product_root(name, data_dir, canonical=True)
+    _check_config_file(name, data_dir, config)
     owner = _read_owner(data_dir / MARKER_NAME)
     if owner is None:
         raise ProductError(f"{data_dir} was never claimed by the {name} product")
@@ -389,6 +441,7 @@ __all__ = [
     "acquire_launch_lock",
     "activate_from_argv",
     "check_no_overlap",
+    "check_product_root",
     "claim",
     "environment",
     "extract_product_flag",
