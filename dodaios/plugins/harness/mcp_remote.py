@@ -96,27 +96,30 @@ class MCPRemoteHarness:
                 # gate (ADR-0044) still apply; anything but "allow" refuses (block 7).
                 # The STOP generation is captured before the gate is awaited and rechecked
                 # right before the call (block 8).
-                import copy
+                from uuid import uuid4
 
-                from dodaios.safety.preflight import (
-                    current_ticket,
-                    final_refusal,
-                    unattended_refusal,
-                )
+                from dodaios.safety.preflight import current_ticket, guarded_call
 
                 qualified = f"{server_name}/{chosen_tool}"
+                descriptor = next((t for t in tools if t.name == chosen_tool), None)
                 run_ticket = current_ticket()
-                call_args = copy.deepcopy(args)
-                held = await unattended_refusal(qualified, call_args, ticket=run_ticket)
-                if held is None:
-                    held = final_refusal(qualified, run_ticket)
-                if held is not None:
+
+                async def _call(call_args: dict) -> object:
+                    return await client.call_tool(chosen_tool, call_args)
+
+                # Block 9: STOP ticket, offline profile (descriptor passed as the tool object),
+                # gate and the effect ledger (a remote call is always an effect here; unknown on
+                # error). No approver: unknown / duplicate / in-flight refuse.
+                ran, result, held = await guarded_call(
+                    qualified, args, _call, tool=descriptor, side_effecting=True,
+                    scope=f"mcp-remote:{uuid4()}", key=f"{qualified}:1", ticket=run_ticket,
+                )
+                if not ran:
                     yield HarnessResult(
                         stdout=f"[mcp:{server_name}] {chosen_tool} not run: {held}\n",
                         is_final=False,
                     )
                 else:
-                    result = await client.call_tool(chosen_tool, call_args)
                     yield HarnessResult(
                         stdout=str(result)[:4000] + "\n",
                         is_final=False,

@@ -11,7 +11,6 @@ Lines starting with `TOOL:` are extracted as tool calls
 """
 from __future__ import annotations
 
-import copy
 import json
 import logging
 import re
@@ -398,21 +397,26 @@ class SkillRunner:
                 # process-wide tool gate (ADR-0044) still apply, and anything but "allow" refuses
                 # (block 7). The STOP generation is captured BEFORE the gate is awaited and
                 # rechecked right before the tool is invoked (block 8).
-                from dodaios.safety.preflight import (
-                    current_ticket,
-                    final_refusal,
-                    unattended_refusal,
-                )
+                from dodaios.safety.preflight import current_ticket, guarded_call
 
                 run_ticket = current_ticket()
-                exec_args = copy.deepcopy(tool_args)
-                held = await unattended_refusal(tool_name, exec_args, ticket=run_ticket)
-                if held is None:
-                    held = final_refusal(tool_name, run_ticket)
-                if held is not None:
-                    result = ToolResult(success=False, output=None, error=f"not run: {held}")
-                else:
-                    result = await tool_obj.execute(exec_args, ctx)
+
+                async def _call(
+                    call_args: dict[str, Any], _t: Any = tool_obj, _c: Any = ctx
+                ) -> Any:
+                    return await _t.execute(call_args, _c)
+
+                # Central pieces without the executor's approver (block 9): STOP ticket, offline
+                # profile with the TOOL OBJECT, gate, then the effect ledger (reserve before the
+                # call, unknown on error). unknown/duplicate/in-flight refuse: nobody to confirm.
+                ran, outcome, held = await guarded_call(
+                    tool_name, tool_args, _call, tool=tool_obj,
+                    scope=str(trace_id), key=f"skill:{skill.name}:{idx}", ticket=run_ticket,
+                )
+                result = (
+                    ToolResult(success=False, output=None, error=f"not run: {held}")
+                    if not ran else outcome
+                )
                 if not isinstance(result, ToolResult):
                     result = ToolResult(success=bool(result), output=result)
                 step = {

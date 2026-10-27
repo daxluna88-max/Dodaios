@@ -288,6 +288,8 @@ class ToolExecutor:
             except Exception as exc:  # noqa: BLE001 - an unrecorded effect must not run
                 log.error("effect ledger unavailable (%r): refusing %s", exc, tool.name)
                 return ToolResult(False, None, LEDGER_UNAVAILABLE_ERROR)
+            if reservation.kind == "reserved":
+                attempt = reservation.attempt  # may be a retry-N identity chosen by the ledger
             if reservation.kind == "replay" and reservation.row is not None:
                 return self._already_executed(tool, tid, reservation.row)
             if reservation.kind == "in_flight":

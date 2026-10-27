@@ -13,7 +13,8 @@ What a row says, and what the executor does with it:
   the task is cancelled the row stays ``started``: the outcome is UNKNOWN.
 * ``done``     the tool succeeded. The same key again returns the stored outcome and does NOT
   run the tool.
-* ``failed``   the tool returned an error AND vouched that nothing was applied
+* ``failed``   (a retry gets its own ``retry-N`` attempt row; the failed row stays as history)
+               the tool returned an error AND vouched that nothing was applied
   (``ToolResult.no_effect_guaranteed`` or the tool's ``failure_means_no_effect``). A retry is
   allowed (it passes the normal approval again).
 * ``unknown``  the tool raised, was cancelled, returned an error WITHOUT that evidence (a shell or
@@ -24,6 +25,10 @@ What a row says, and what the executor does with it:
 
 The same fingerprint under a DIFFERENT key in the same scope (the model re-issued an identical
 call with a new id, e.g. after a retry) is a ``duplicate``: also forced through a confirmation.
+
+Block 7 records: on opening a persistent ledger the old ``effects`` table is imported once
+(``done`` stays ``done``; ``started``/``unknown``/``failed`` become ``unknown``); if that fails
+the ledger is unavailable and effectful calls are refused with a clear message.
 
 Honest limits: this is a record of what THIS app issued. It cannot know whether an external system
 (mail server, remote API) applied an effect whose result we never saw, it only refuses to guess.
@@ -115,7 +120,12 @@ CREATE TABLE IF NOT EXISTS effect_calls (
     PRIMARY KEY (scope, key, attempt)
 );
 CREATE INDEX IF NOT EXISTS effect_calls_fp ON effect_calls (scope, tool, fingerprint);
+CREATE TABLE IF NOT EXISTS effect_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 """
+
+#: ``attempt`` identity of rows imported from the block 7 ``effects`` table.
+LEGACY_ATTEMPT = "legacy-block7"
+_LEGACY_MARK = "legacy_effects_imported"
 
 
 class EffectLedger:
@@ -130,7 +140,56 @@ class EffectLedger:
         self._db.executescript(_SCHEMA)
         self.persistent = path is not None
         if self.persistent:
+            self._import_legacy()
             self._db.execute("DELETE FROM effect_calls WHERE ts < ?", (time.time() - RETENTION_S,))
+
+    def _import_legacy(self) -> None:
+        """Conservatively honour the block 7 ``effects`` table (same file), once.
+
+        Every old row is copied into ``effect_calls`` under ``attempt = LEGACY_ATTEMPT``:
+        ``done`` stays ``done`` (replay), everything else (``started``, ``unknown`` and the old
+        ``failed``, which block 7 did not prove side-effect free) becomes ``unknown``, so none of
+        them can be silently executed again. The old table is only read, never altered. If the
+        import cannot be completed the ledger refuses to open (``LedgerUnavailable``): effectful
+        calls then fail closed with a clear message instead of losing recorded protection."""
+        try:
+            has_old = self._db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='effects'"
+            ).fetchone()
+            if not has_old:
+                return
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                if self._db.execute(
+                    "SELECT 1 FROM effect_meta WHERE k=?", (_LEGACY_MARK,)
+                ).fetchone():
+                    self._db.execute("ROLLBACK")
+                    return
+                self._db.execute(
+                    "INSERT OR IGNORE INTO effect_calls "
+                    "(scope, key, attempt, tool, fingerprint, state, boot, success, preview, "
+                    "error, ts) "
+                    "SELECT scope, key, ?, tool, fingerprint, "
+                    "CASE WHEN state='done' THEN 'done' ELSE 'unknown' END, boot, success, "
+                    "preview, error, ts FROM effects WHERE ts >= ?",
+                    (LEGACY_ATTEMPT, time.time() - RETENTION_S),
+                )
+                self._db.execute(
+                    "INSERT OR REPLACE INTO effect_meta (k, v) VALUES (?, ?)",
+                    (_LEGACY_MARK, str(time.time())),
+                )
+                self._db.execute("COMMIT")
+            except BaseException:
+                try:
+                    self._db.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
+                raise
+        except Exception as exc:
+            raise LedgerUnavailable(
+                "the block 7 effect records could not be migrated "
+                f"({type(exc).__name__}: {exc}); effectful calls stay blocked until they can be"
+            ) from exc
 
     @staticmethod
     def _row(r: tuple[Any, ...]) -> EffectRow:
@@ -211,6 +270,10 @@ class EffectLedger:
                 if kind != "new":
                     self._db.execute("ROLLBACK")
                     return Reservation(kind, row)  # type: ignore[arg-type]
+                # Primary key (scope, key, attempt): a retry after a guaranteed-no-effect
+                # failure (or a reused call id) gets its own attempt identity, so the earlier
+                # row stays as history and the insert cannot collide with it.
+                attempt = self._free_attempt(scope, key, attempt)
                 try:
                     self._db.execute(
                         "INSERT INTO effect_calls "
@@ -229,6 +292,24 @@ class EffectLedger:
                     pass
                 raise
         return Reservation("reserved", None, attempt)
+
+    def _free_attempt(self, scope: str, key: str, attempt: str) -> str:
+        """The attempt id to write: the given one, or the first unused ``retry-N``. Caller holds
+        the lock inside the IMMEDIATE transaction."""
+        taken = {
+            r[0]
+            for r in self._db.execute(
+                "SELECT attempt FROM effect_calls WHERE scope=? AND key=?", (scope, key)
+            ).fetchall()
+        }
+        if attempt:
+            return attempt  # _decide already refused a reused approval id
+        if "" not in taken:
+            return ""
+        n = len(taken)
+        while f"retry-{n}" in taken:
+            n += 1
+        return f"retry-{n}"
 
     def claim(self, scope: str, key: str, tool: str, fingerprint: str, attempt: str = "") -> bool:
         """Compatibility wrapper: True only when :meth:`reserve` wrote the row."""
@@ -371,8 +452,9 @@ def configure_default_ledger(
                 return _default
             _default = None
             _mode = "unavailable"
+            why = str(exc) if isinstance(exc, LedgerUnavailable) else type(exc).__name__
             _detail = (
-                f"effect ledger at {path} could not be opened ({type(exc).__name__}): calls with "
+                f"effect ledger at {path} could not be opened ({why}): calls with "
                 "side effects are refused until it can be; reads and chat keep working"
             )
             log.error("effect ledger: %s", _detail, exc_info=True)
@@ -413,6 +495,7 @@ __all__ = [
     "BOOT_ID",
     "EffectLedger",
     "EffectRow",
+    "LEGACY_ATTEMPT",
     "Inspection",
     "LedgerUnavailable",
     "ProtectionState",

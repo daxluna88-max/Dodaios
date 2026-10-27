@@ -100,3 +100,44 @@ No TypeScript was changed and `dist` was not rebuilt. The UIs never publish `Act
 - The skill runner and remote MCP harness still have no per-call approval, no ledger and no plan-mode check; they only honour STOP (now generation-bound), the offline profile and the gate.
 - Cross-process atomicity relies on SQLite locking with a 2 s busy timeout; contention beyond that surfaces as "ledger unavailable" and the call is refused, not run.
 - Approval identity is not a signature: any in-process code that can read the bus can read `approval_id` from `ActionApprovalRequired`. It prevents stale, mismatched and context-free answers, not a hostile in-process subscriber.
+
+## Block 9: GPT round 2 (F3, F5)
+
+Status of this section: written by static reading only. Nothing was run: no tests, no app, no CI, no build. `py_compile` and `ruff check` only. Test file `tests/contract/test_block9_round2.py` is written, NOT run.
+
+### F3: failed-row retry collision and legacy `effects` table (state: fixed, unverified)
+
+- **Files / functions:** `safety/effects.py` (`EffectLedger.reserve`, `_free_attempt`, `_import_legacy`, `configure_default_ledger`), `safety/tool_executor.py` (`_invoke` now uses `reservation.attempt` for `finish` / `mark_unknown`).
+- **Choice (retry):** the primary key `(scope, key, attempt)` is kept. `_decide` still returns `new` after a guaranteed-no-effect `failed` row, but `reserve` now writes the new row under its own identity: the first free `retry-N` attempt (or the owner's approval id if one was given). The `failed` row is never touched, so outcome history is preserved; no `IntegrityError`, no false `in_flight`. `Reservation.attempt` carries the identity and the executor uses it to finish or mark the right row. An integrity error that remains is still reported as `in_flight`, but only on a real concurrent insert.
+- **Choice (migration):** opening a persistent ledger reads the block 7 `effects` table once (guarded by `effect_meta`) in one `BEGIN IMMEDIATE` transaction and copies each row into `effect_calls` with `attempt = 'legacy-block7'`. `done` stays `done` (replay), and `started`, `unknown` and also the old `failed` become `unknown` (block 7 did not prove a failure side-effect free), so none can be silently re-executed; a forced confirmation is needed. Rows older than the retention window are skipped. The old table is left unchanged. If the import fails, `EffectLedger` raises `LedgerUnavailable` with a clear message; `configure_default_ledger` then makes the state `unavailable` (effectful calls refused, message shown in `protection_state()`), or `reduced` only if the owner enabled it (in-memory, legacy rows NOT covered, said in the detail).
+- **Residual limits:** old `failed` rows are stricter than before (unknown); `retry-N` is chosen per `(scope,key)` and retries are unbounded; a ledger file written by a different process between import and first use is only covered by the normal reserve logic; in-memory ledgers do not migrate.
+- **Controls prepared, NOT RUN:** `test_failed_no_effect_allows_retry_with_new_attempt_row`, `test_second_failed_retry_gets_third_identity`, `test_legacy_effects_table_is_honoured`, `test_legacy_migration_failure_fails_closed`.
+
+### F5: skill runner and MCP harness (state: partial)
+
+- **Files / functions:** `safety/preflight.py` (new `guarded_call`; `offline_refusal`, `final_refusal`, `unattended_refusal` accept the tool object and pass it to `egress_guard.tool_refusal(name, tool)`), `skills/runner.py` (`SkillRunner.run` step execution), `plugins/harness/mcp_remote.py` (`MCPRemoteHarness.invoke`).
+- **Choice:** not routed through `ToolExecutor` (it needs an approver, bus tickets and a brain context that these paths do not have; wiring them is a large change). Instead both paths call `guarded_call`: deep snapshot of the arguments once (reviewed copy, fingerprinted copy and executed copy are separate), STOP ticket captured first, offline profile with the TOOL OBJECT (the skill's resolved tool; the MCP harness passes the server's tool descriptor), gate, final STOP / offline recheck, then `EffectLedger.reserve` (same atomic reserve as the executor; scope = run trace id, key = skill name + step index, or qualified tool name) with no await between reserve and call. Unknown, duplicate, in-flight, replay and unavailable ledger all REFUSE (no approver to confirm). A raise or cancellation marks `unknown`; a failure is `unknown` unless the tool vouches `no_effect`. The skill runner honours `read_only` (read tools skip the ledger); the MCP harness treats the remote call as always effectful.
+- **Residual limits:** still no per-call interactive approval and no plan-mode check on these two paths (an `ask`/`deny` gate or risk tier refuses); the scope is a fresh id per run, so the ledger guards repeats inside one run and process, not a redelivered run; the same tool with identical arguments twice in one skill run now refuses the second call as a duplicate; the MCP descriptor carries no declared offline capability, so under the strict offline profile it is refused (conservative).
+- **Controls prepared, NOT RUN:** `test_guarded_call_runs_once_then_refuses_duplicate`, `test_guarded_call_raise_leaves_unknown`. Existing tests that mock `tool.execute` of the skill runner may need an in-memory default ledger.
+
+### Audit of `ActionApprovalRequired` / `ActionApproved` producers
+
+| Producer | Event | approval_id + fingerprint |
+|---|---|---|
+| `safety/tool_executor.py` (arming, `ActionApprovalRequired`) | required | creates both |
+| `safety/tool_executor.py` (bypass answer) | approved | both, plus tool name |
+| `safety/approval.py` `ApprovalWorkflow.approve` (helper, no production caller found) | approved | optional keyword args, defaults empty: a call-bound ticket ignores it unless the caller passes them |
+| `agent_chat/approval_bridge.py` (inline decision and user answer) | approved | both, echoed from the event |
+| `tasks/approval_bridge.py` | approved | both |
+| `missions/tool_approvals.py` coordinator `approve` | approved | both (kept server-side in `PendingMissionToolApproval`) |
+| `missions/tool_approvals.py` auto-approver | approved | both |
+| `voice/tool_confirmation.py` | none published (two-turn: `execute_confirmed` with both) | n/a |
+| Frontend `hooks/useWebSocket.ts` | CONSUMES `ActionApprovalRequired` (toast, `jarvis:mission-tool-approval` event); publishes nothing | n/a |
+| Frontend `hooks/useRuns.ts` | lists `ActionApproved` as an event name for filtering only | n/a |
+| Mission HTTP routes (`ui/web/missions_routes.py`) | call the coordinator, which publishes | via coordinator |
+
+No TypeScript source publishes `ActionApproved`, so no TS edit was needed or made; `dist` was NOT rebuilt and no UI flow is declared available. All Python producers already carry the identity; no change was necessary in them. `ApprovalWorkflow.approve` is the only one that can omit it (by design: a missing identity is ignored by a call-bound ticket).
+
+### Not run / unverified
+
+Nothing here was executed. Unverified: the SQL of the migration against a real block 7 file, the `retry-N` selection under concurrent processes, the new `guarded_call` paths, existing tests of the skill runner and the MCP harness (they may need the default ledger set in memory).
