@@ -16,7 +16,7 @@ Pure data plus a tiny holder; the brain fills it in where a turn is decided.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 Locality = Literal["local", "remote", "unknown"]
@@ -25,6 +25,8 @@ Role = Literal["main", "reviewer", "synthesizer"]
 CATEGORIES = ("question", "history", "memory", "files", "tool_output")
 #: ``declared`` = from the gate's configuration and the calls issued, not from the network.
 Observability = Literal["declared", "none"]
+#: ``running`` = the engine listed is the one chosen at the start, not yet confirmed to answer.
+TurnState = Literal["running", "answered", "failed"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +55,16 @@ class TurnRecord:
     network_tools: Literal["not_observed", "observed"] = "not_observed"
     observability: Observability = "none"
     refused: tuple[str, ...] = field(default=())
+    state: TurnState = "answered"
+    #: The provider chosen at the start; differs from the one that answered after a fallback.
+    requested: str | None = None
+
+    @property
+    def fell_back(self) -> bool:
+        """The engine that answered is not the one chosen at the start."""
+        if self.requested is None or self.state != "answered" or not self.engines:
+            return False
+        return self.engines[0].provider != self.requested
 
     @property
     def inference(self) -> Literal["local", "remote", "mixed", "unknown", "none"]:
@@ -87,6 +99,29 @@ class TurnLedger:
     def clear(self) -> None:
         self._last = None
 
+    def finish(
+        self, turn_id: str, *, provider: str | None, locality: Locality, answered: bool
+    ) -> None:
+        """Replace the start-of-turn guess with what actually ran.
+
+        ``provider`` is the engine of the last attempt (the one that answered when ``answered``);
+        ``None`` means no model was used (a fast path replied). Only the turn that is still the
+        latest is touched: a late finish of an older turn changes nothing.
+        """
+        last = self._last
+        if last is None or last.turn_id != turn_id or last.state != "running":
+            return
+        if provider is None:
+            self._last = replace(last, engines=(), planned=(), state="answered")
+            return
+        flows = () if locality == "local" else (Flow("question", provider),)
+        self._last = replace(
+            last,
+            engines=(EngineUse(provider, "main", locality),),
+            planned=flows,
+            state="answered" if answered else "failed",
+        )
+
 
 def sanitize_flows(flows: tuple[Flow, ...]) -> tuple[Flow, ...]:
     """Drop anything whose category is not in the fixed list: a free-form value is never kept."""
@@ -102,5 +137,6 @@ __all__ = [
     "Role",
     "TurnLedger",
     "TurnRecord",
+    "TurnState",
     "sanitize_flows",
 ]

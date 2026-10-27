@@ -42,3 +42,39 @@ def test_the_ledger_keeps_only_the_latest_turn():
     assert ledger.last().turn_id == "two"
     ledger.clear()
     assert ledger.last() is None
+
+
+def test_finish_replaces_the_start_of_turn_guess_with_the_engine_that_answered():
+    ledger = tr.TurnLedger()
+    ledger.record(tr.TurnRecord(
+        "t", engines=(tr.EngineUse("openai", "main", "remote"),), state="running",
+        requested="openai"))
+    ledger.finish("t", provider="ollama", locality="local", answered=True)
+    got = ledger.last()
+    assert got.state == "answered" and got.engines[0].provider == "ollama"
+    assert got.inference == "local" and got.fell_back is True and got.planned == ()
+
+
+def test_no_model_used_means_no_engine_not_the_one_that_was_chosen():
+    ledger = tr.TurnLedger()
+    ledger.record(tr.TurnRecord(
+        "t", engines=(tr.EngineUse("openai", "main", "remote"),), state="running",
+        requested="openai"))
+    ledger.finish("t", provider=None, locality="unknown", answered=True)
+    assert ledger.last().engines == () and ledger.last().inference == "none"
+
+
+def test_a_failed_turn_is_marked_failed_and_never_reported_as_a_fallback():
+    ledger = tr.TurnLedger()
+    ledger.record(tr.TurnRecord(
+        "t", engines=(tr.EngineUse("a", "main", "remote"),), state="running", requested="a"))
+    ledger.finish("t", provider="b", locality="remote", answered=False)
+    assert ledger.last().state == "failed" and ledger.last().fell_back is False
+
+
+def test_a_late_finish_of_an_older_turn_changes_nothing():
+    ledger = tr.TurnLedger()
+    ledger.record(tr.TurnRecord("old", state="running", requested="a"))
+    ledger.record(tr.TurnRecord("new", state="running", requested="b"))
+    ledger.finish("old", provider="a", locality="local", answered=True)
+    assert ledger.last().turn_id == "new" and ledger.last().state == "running"

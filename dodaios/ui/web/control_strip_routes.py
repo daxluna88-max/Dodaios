@@ -282,7 +282,8 @@ def _engine_payload(record: Any) -> dict[str, Any]:
     if record is None:
         return {"turn_id": None, "inference": "none", "engines": [],
                 "network_tools": "not_observed", "planned": [], "attempted": [],
-                "observability": "none", "refused": []}
+                "observability": "none", "refused": [], "state": "answered",
+                "requested": None, "fell_back": False}
     return {
         "turn_id": record.turn_id,
         "inference": record.inference,
@@ -295,6 +296,9 @@ def _engine_payload(record: Any) -> dict[str, Any]:
                       for f in record.attempted],
         "observability": record.observability,
         "refused": list(record.refused),
+        "state": record.state,
+        "requested": record.requested,
+        "fell_back": record.fell_back,
     }
 
 

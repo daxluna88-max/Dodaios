@@ -185,6 +185,50 @@ class _SkillTurnState:
         self.injected_inline = False
 
 
+@dataclass(slots=True)
+class _StopTurn:
+    """The STOP generation a turn started under (ADR-0058).
+
+    ``exempt`` marks a turn the door never blocks: the refusal reply itself and a stop phrase.
+    """
+
+    ticket: int
+    exempt: bool = False
+    #: Id under which this turn's engine record was opened, and the engine that last ran for it.
+    ledger_turn_id: str | None = None
+    identity: tuple[str, str | None] | None = None
+
+    def stale(self) -> bool:
+        """STOP (or STOP and a resume) happened after this turn started."""
+        if self.exempt:
+            return False
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
+        return not get_stop_controller().admit(self.ticket).allowed
+
+
+_STOP_TURN: ContextVar[_StopTurn | None] = ContextVar("jarvis_brain_stop_turn", default=None)
+
+
+def _turn_is_stale() -> bool:
+    turn = _STOP_TURN.get()
+    return turn is not None and turn.stale()
+
+
+def _guard_text_consumer(
+    consumer: Callable[[str], None] | None, turn: _StopTurn
+) -> Callable[[str], None] | None:
+    """Streamed text of a turn that started before STOP stops reaching the screen and the voice."""
+    if consumer is None:
+        return None
+
+    def guarded(chunk: str) -> None:
+        if not turn.stale():
+            consumer(chunk)
+
+    return guarded
+
+
 _SKILL_TURN_STATE: ContextVar[_SkillTurnState | None] = ContextVar(
     "dodaios.brain.manager.skill_turn_state",
     default=None,
@@ -3730,6 +3774,10 @@ class BrainManager:
         """Publish the public response event unless this call is an internal reply."""
         if not _PUBLISH_RESPONSE_EVENT.get():
             return
+        if _turn_is_stale():
+            # Nothing a turn that started before STOP says is shown or spoken afterwards.
+            log.info("a response that arrived after STOP was not published")
+            return
         await self._bus.publish(
             ResponseGenerated(
                 trace_id=trace_id,
@@ -3860,10 +3908,32 @@ class BrainManager:
             planned = () if locality == "local" else (tr.Flow("question", provider),)
             self._turn_ledger().record(tr.TurnRecord(
                 turn_id=str(trace_id), engines=(tr.EngineUse(provider, "main", locality),),
-                planned=planned, observability="declared",
+                planned=planned, observability="declared", state="running", requested=provider,
             ))
+            if (turn := _STOP_TURN.get()) is not None:
+                turn.ledger_turn_id = str(trace_id)
         except Exception:  # noqa: BLE001 - the screen's record never breaks a turn
             log.debug("turn record could not be written", exc_info=True)
+
+    def _finish_engine_record(self, turn: _StopTurn, *, crashed: bool = False) -> None:
+        """Swap the start-of-turn guess for the engine that actually ran (a fallback may have
+        answered instead). ``None`` identity = no model was used, e.g. a fast path replied."""
+        if turn.ledger_turn_id is None:
+            return
+        from dodaios.brain import engine_policy  # noqa: PLC0415
+
+        try:
+            identity = turn.identity
+            provider = identity[0] if identity is not None else None
+            locality = "unknown"
+            if provider is not None:
+                locality = "local" if engine_policy.destination_of(provider).local else "remote"
+            self._turn_ledger().finish(
+                turn.ledger_turn_id, provider=provider, locality=locality,  # type: ignore[arg-type]
+                answered=not (crashed or self._last_turn_all_failed),
+            )
+        except Exception:  # noqa: BLE001 - the screen's record never breaks a turn
+            log.debug("turn record could not be finished", exc_info=True)
 
     def personality_snapshot(self) -> tuple[Any, Any, bool]:
         """(effective profile, mood state now, adaptation on) for the settings screen."""
@@ -9523,7 +9593,7 @@ class BrainManager:
         trace_id: UUID | None = None,
     ) -> None:
         """Apply the normal response side effects for non-provider paths too."""
-        if use_history:
+        if use_history and not _turn_is_stale():
             self._history.append(BrainMessage(role="user", content=user_text))
             self._history.append(BrainMessage(role="assistant", content=response_text))
             if len(self._history) > 40:
@@ -10502,8 +10572,15 @@ class BrainManager:
         )
         skill_state = _SkillTurnState(self)
         skill_token = _SKILL_TURN_STATE.set(skill_state)
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
+        stop_turn = _StopTurn(
+            stop_ticket if stop_ticket is not None else get_stop_controller().ticket())
+        stop_turn_token = _STOP_TURN.set(stop_turn)
+        text_consumer = _guard_text_consumer(text_consumer, stop_turn)
+        crashed = True
         try:
-            return await self._generate(
+            result = await self._generate(
                 user_text,
                 use_history=use_history,
                 trace_id=trace_id,
@@ -10519,9 +10596,17 @@ class BrainManager:
                     consume_pending_voice_attachments
                 ),
                 language_text=language_text,
-                stop_ticket=stop_ticket,
+                stop_ticket=stop_turn.ticket,
             )
+            crashed = False
+            if stop_turn.stale():
+                # The owner pressed STOP while this turn was running: its answer is not delivered.
+                log.info("a reply that finished after STOP was dropped")
+                return ""
+            return result
         finally:
+            self._finish_engine_record(stop_turn, crashed=crashed)
+            _STOP_TURN.reset(stop_turn_token)
             # Keep the last completed turn inspectable for diagnostics/tests,
             # while active concurrent turns continue reading their own
             # ContextVar-backed state.
@@ -10585,6 +10670,10 @@ class BrainManager:
         # get through, so the cancel intent is let past the door.
         from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
 
+        if not get_stop_controller().admit(stop_ticket).allowed:
+            # The refusal reply and a stop phrase are never themselves dropped as "late".
+            if (turn := _STOP_TURN.get()) is not None:
+                turn.exempt = True
         if not get_stop_controller().admit(stop_ticket).allowed and not self._detect_cancel_intent(
             user_text
         ):
@@ -11841,6 +11930,8 @@ class BrainManager:
             # Set here — after dead/cooldown skips — so it always names the
             # provider that genuinely runs this attempt, including a fallback win.
             self._active_turn_identity = (prov_name, model)
+            if (turn := _STOP_TURN.get()) is not None:
+                turn.identity = (prov_name, model)
             # Delegated realtime voice turns get hard loop bounds so an
             # unbounded delegate can never run away (live 2026-07-14: 14
             # rounds / 66 s on "what is in my wiki"). They are ceilings, not
