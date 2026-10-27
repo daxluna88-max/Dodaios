@@ -30,6 +30,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from dodaios.control.stop import (
     StopController,
+    StopInProgress,
     Subsystem,
     get_stop_controller,
 )
@@ -177,6 +178,11 @@ def _install(request: Request) -> StopController:
         Subsystem("realtime_session", _no_op, None),
     ):
         controller.add(part)
+    # The approvals gate moves with the door, in the same synchronous step.
+    coordinator = getattr(state, "mission_tool_approvals", None)
+    if coordinator is not None:
+        controller.add_door_listener(
+            lambda: coordinator.set_accepting(False), lambda: coordinator.set_accepting(True))
     setattr(state, _INSTALLED_ATTR, True)
     return controller
 
@@ -314,5 +320,10 @@ async def post_stop(request: Request) -> dict[str, Any]:
 @router.post("/stop/resume", summary="The owner lets work start again (a new generation)")
 async def post_resume(request: Request) -> dict[str, Any]:
     controller = _install(request)
-    controller.resume()
+    try:
+        controller.resume()
+    except StopInProgress:
+        raise HTTPException(
+            status_code=409, detail={"code": "stopping", "reason": "stop_in_progress"}
+        ) from None
     return await _snapshot(request)

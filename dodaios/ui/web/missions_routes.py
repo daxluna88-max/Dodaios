@@ -54,12 +54,37 @@ from dodaios.ui.web.missions_worker import extract_worker_missions
 logger = logging.getLogger(__name__)
 
 
-def _require_door() -> None:
-    """After the owner's STOP nothing new starts or is approved until they resume (ADR-0058)."""
-    admission = get_stop_controller().admit()
+def _require_door() -> int:
+    """After the owner's STOP nothing new starts or is approved until they resume (ADR-0058).
+
+    Returns the generation ticket to re-check once a slow step (creating a mission) is done.
+    """
+    controller = get_stop_controller()
+    admission = controller.admit()
     if not admission.allowed:
         raise HTTPException(
             status_code=409, detail={"code": "stopped", "reason": admission.reason})
+    return controller.ticket()
+
+
+async def _refuse_if_stopped_meanwhile(ticket: int, mission_id: str, request: Request) -> None:
+    """STOP (or STOP and a resume) landed while the mission was being created: it must not run.
+
+    The mission already exists, so it is cancelled through the normal cancel path, then the call
+    is refused. Without this, a dispatch that passed the door a moment before STOP would outlive
+    the STOP that listed the missions.
+    """
+    if get_stop_controller().admit(ticket).allowed:
+        return
+    try:
+        await cancel_mission(mission_id, request)
+    except HTTPException:
+        logger.debug("mission %s was already terminal when STOP caught it", mission_id)
+    raise HTTPException(
+        status_code=409,
+        detail={"code": "stopped", "reason": "stopped_while_starting", "mission_id": mission_id},
+    )
+
 
 router = APIRouter(prefix="/api/missions", tags=["missions"])
 
@@ -513,7 +538,7 @@ async def dispatch_mission(
     ``requires_confirm: true``. The UI shows an AlertDialog, the user clicks OK,
     and re-POSTs with ``confirmed: true``.
     """
-    _require_door()
+    ticket = _require_door()
     from fastapi.responses import JSONResponse
 
     from dodaios.missions.safety.destructive_confirm import is_destructive
@@ -540,6 +565,7 @@ async def dispatch_mission(
     kontrollierer = _optional_kontrollierer(request)
 
     mission_id = await mgr.dispatch(prompt=body.prompt, language=body.language)
+    await _refuse_if_stopped_meanwhile(ticket, mission_id, request)
 
     if kontrollierer is not None:
         background_tasks.add_task(kontrollierer.run_mission, mission_id)
@@ -741,7 +767,7 @@ async def rerun_mission(
       and ``confirmed`` is false — same gate as ``/dispatch``. UI re-POSTs with
       ``confirmed: true`` after the user acknowledges.
     """
-    _require_door()
+    ticket = _require_door()
     from fastapi.responses import JSONResponse
 
     from dodaios.missions.safety.destructive_confirm import is_destructive
@@ -845,6 +871,7 @@ async def rerun_mission(
         source_actor="ui",
         parent_mission_id=mission_id,
     )
+    await _refuse_if_stopped_meanwhile(ticket, new_mission_id, request)
     logger.info(
         "rerun_mission: %s (%s) of source %s as new mission %s",
         action,

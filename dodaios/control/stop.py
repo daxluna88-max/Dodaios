@@ -72,6 +72,10 @@ class StopReport:
     repeated: bool = False
 
 
+class StopInProgress(RuntimeError):
+    """``resume`` was asked while a STOP is still shutting parts down."""
+
+
 @dataclass(frozen=True, slots=True)
 class Admission:
     allowed: bool
@@ -99,6 +103,9 @@ class StopController:
         self._state: StopState = "running"
         self._last: StopReport | None = None
         self._inflight: asyncio.Task[StopReport] | None = None
+        # (on_close, on_open) pairs: gates other modules keep, flipped in the same synchronous step
+        # as the door, so nothing can slip through between "STOP pressed" and "gate closed".
+        self._listeners: list[tuple[Callable[[], None], Callable[[], None]]] = []
 
     # -- the door --------------------------------------------------------------------------
 
@@ -133,13 +140,37 @@ class StopController:
 
     def resume(self) -> int:
         """The owner deliberately lets work start again. Opens a NEW generation, so anything
-        queued before STOP stays refused. Does nothing when the door is already open."""
+        queued before STOP stays refused. Does nothing when the door is already open.
+
+        Refused (``StopInProgress``) while STOP is still shutting parts down: reopening then would
+        let new work start only to be cancelled by the shutdown that is still running."""
         if self._open:
             return self._generation
+        if self.stopping:
+            raise StopInProgress("stop is still in progress")
         self._generation += 1
         self._open = True
         self._state = "running"
+        for _on_close, on_open in self._listeners:
+            self._call(on_open)
         return self._generation
+
+    @property
+    def stopping(self) -> bool:
+        """A STOP is still running its shutdowns."""
+        return self._inflight is not None and not self._inflight.done()
+
+    def add_door_listener(self, on_close: Callable[[], None], on_open: Callable[[], None]) -> None:
+        """Register a gate that must close/open together with the door. The current door state is
+        applied at once, so a gate registered late is never out of step."""
+        self._listeners.append((on_close, on_open))
+        self._call(on_open if self._open else on_close)
+
+    def _call(self, callback: Callable[[], None]) -> None:
+        try:
+            callback()
+        except Exception:  # noqa: BLE001 - one broken gate must not stop the door from moving
+            log.warning("stop: a door listener failed", exc_info=True)
 
     def add(self, subsystem: Subsystem) -> None:
         """Register a part (replaces one with the same name)."""
@@ -154,6 +185,8 @@ class StopController:
         if self._open:
             self._generation += 1
             self._open = False
+            for on_close, _on_open in self._listeners:
+                self._call(on_close)
         self._state = "stopping"
         if self._inflight is not None and not self._inflight.done():
             return await asyncio.shield(self._inflight)
@@ -244,6 +277,7 @@ __all__ = [
     "Admission",
     "Outcome",
     "StopController",
+    "StopInProgress",
     "StopReport",
     "StopState",
     "Subsystem",

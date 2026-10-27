@@ -86,3 +86,33 @@ async def test_a_turn_is_refused_while_stopped_without_calling_an_engine():
     reply = await brain.generate("what time is it")
     assert reply in set(catalog.table("brain.stopped_waiting_resume").values())
     reset_stop_controller()
+
+
+async def test_an_approval_gate_closes_with_the_door_and_denies_late_requests():
+    from dodaios.core.events import ActionApprovalRequired, ActionDenied
+    from dodaios.missions.tool_approvals import MissionToolApprovalCoordinator
+
+    bus = EventBus()
+    denied: list[str] = []
+
+    async def seen(event: ActionDenied) -> None:
+        denied.append(event.reason)
+
+    bus.subscribe(ActionDenied, seen)
+    coordinator = MissionToolApprovalCoordinator(bus)
+    reset_stop_controller()
+    controller = get_stop_controller()
+    controller.add_door_listener(
+        lambda: coordinator.set_accepting(False), lambda: coordinator.set_accepting(True))
+    await controller.stop()
+    import time
+    import uuid
+
+    await bus.publish(ActionApprovalRequired(
+        trace_id=uuid.uuid4(), tool_name="write_file", mission_id="m-1",
+        expires_at_ns=time.time_ns() + 60_000_000_000))
+    assert denied == ["stopped_by_owner"]
+    assert await coordinator.approve("m-1", uuid.uuid4(), approved_by="user") is None
+    controller.resume()
+    assert coordinator._accepting is True
+    reset_stop_controller()

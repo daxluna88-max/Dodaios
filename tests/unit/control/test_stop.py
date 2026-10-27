@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import asyncio
 
-from dodaios.control.stop import StopController, Subsystem
+import pytest
+
+from dodaios.control.stop import StopController, StopInProgress, Subsystem
 
 
 def controller(*parts: Subsystem) -> StopController:
@@ -152,3 +154,48 @@ async def test_resume_is_explicit_and_a_no_op_when_the_door_is_open():
 async def test_stop_works_with_no_parts_registered():
     report = await controller().stop()
     assert report.state == "stopped" and report.results == ()
+
+
+async def test_resume_is_refused_while_a_stop_is_still_running_its_shutdowns():
+    release = asyncio.Event()
+
+    async def request() -> None:
+        await release.wait()
+
+    async def probe() -> str:
+        return "confirmed"
+
+    ctl = StopController([Subsystem("slow", request, probe)], request_timeout_s=5.0)
+    task = asyncio.ensure_future(ctl.stop())
+    await asyncio.sleep(0)
+    assert ctl.stopping and not ctl.door_open
+    with pytest.raises(StopInProgress):
+        ctl.resume()
+    assert not ctl.door_open  # the refusal changed nothing
+    release.set()
+    await task
+    assert not ctl.stopping
+    assert ctl.resume() > 1 and ctl.door_open
+
+
+async def test_door_listeners_flip_in_the_same_synchronous_step_as_the_door():
+    seen: list[str] = []
+    ctl = controller(part("a"))
+    ctl.add_door_listener(lambda: seen.append("close"), lambda: seen.append("open"))
+    assert seen == ["open"]  # applied at registration: the door is open
+    stop = asyncio.ensure_future(ctl.stop())
+    await asyncio.sleep(0)
+    assert seen == ["open", "close"]  # closed before any shutdown finished
+    await stop
+    ctl.resume()
+    assert seen == ["open", "close", "open"]
+
+
+async def test_a_listener_that_raises_does_not_keep_the_door_open():
+    def boom() -> None:
+        raise RuntimeError("no")
+
+    ctl = controller(part("a"))
+    ctl.add_door_listener(boom, boom)
+    await ctl.stop()
+    assert not ctl.door_open
