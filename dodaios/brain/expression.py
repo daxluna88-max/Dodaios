@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from dodaios.brain.mood import MoodState
@@ -105,34 +106,62 @@ def build_plan(
     )
 
 
+def stop_admits(generation: int) -> bool:
+    """True while the STOP generation ``generation`` is still the current one and the door is open
+    (``dodaios.control.stop``, ADR-0058). A fault reads as "not admitted": no style after doubt."""
+    try:
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
+        return get_stop_controller().admit(generation).allowed
+    except Exception:  # noqa: BLE001 - when STOP cannot be asked, nothing is applied
+        return False
+
+
 class PlanGate:
     """Accepts a plan only for the current product, session, turn and generation.
 
-    The newest wins, an older one never comes back. ``begin`` is called when a turn starts,
-    ``cancel`` on STOP or supersede.
+    ``generation`` is the STOP ticket the turn started under (``StopController.ticket()``): many
+    turns share one generation until a STOP, so a NEW turn of the same generation replaces the
+    previous one (``begin`` is called in turn order), but a generation that was cancelled or is
+    older never comes back. ``cancel`` is STOP / supersede.
+
+    With ``admit`` (use :func:`stop_admits`) a plan is also refused as soon as the controller says
+    its generation is stale or the door is closed, even if ``cancel`` was never called on this gate:
+    the gate does not depend on being told about STOP.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, admit: Callable[[int], bool] | None = None) -> None:
+        self._admit = admit
         self._current: tuple[str, str, str] | None = None  # (product, session_id, turn_id)
         self._generation = -1
+        self._cancelled = False
 
     def begin(self, product: str, session_id: str, turn_id: str, generation: int) -> bool:
-        if generation <= self._generation:
+        if generation < self._generation:
             return False
-        self._current, self._generation = (product, session_id, turn_id), generation
+        if generation == self._generation and (self._cancelled or self._current is None):
+            return False
+        if self._admit is not None and not self._admit(generation):
+            return False
+        self._current, self._generation, self._cancelled = (
+            (product, session_id, turn_id), generation, False)
         return True
 
     def cancel(self, generation: int) -> None:
         """STOP / supersede: nothing made for this or any older generation is valid any more."""
+        if generation >= self._generation:
+            self._cancelled = True
         self._generation = max(self._generation, generation)
         self._current = None
 
     def accepts(self, plan: ExpressionPlan) -> bool:
         ident = plan.identity
-        return (
+        if not (
             self._current == (ident.product, ident.session_id, ident.turn_id)
             and ident.generation == self._generation
-        )
+        ):
+            return False
+        return self._admit is None or self._admit(ident.generation)
 
 
 def avatar_event(plan: ExpressionPlan, seq: int) -> dict[str, object]:
@@ -143,8 +172,41 @@ def avatar_event(plan: ExpressionPlan, seq: int) -> dict[str, object]:
     }
 
 
+#: How each channel carries the style, for the settings screen and the ADR. The truth, not a wish:
+#: the realtime text rides in the session instructions; nothing modulates the voice; no avatar
+#: runtime consumes the plan; there is no lip sync.
+CHANNELS: dict[str, str] = {
+    "text": "style_instruction",
+    "realtime": "session_instructions",
+    "voice": "unavailable",
+    "avatar": "not_wired",
+    "lip_sync": "none",
+}
+#: Realtime provider -> when the style text reaches the model. ``every_turn``: the provider
+#: replaces its instructions on each update; ``connect_only``: the style in force when the call
+#: opened stays for the whole call (a mood change or a new profile applies to the NEXT call).
+#: Unknown providers are reported ``unknown``, never assumed to carry it.
+REALTIME_STYLE_DELIVERY: dict[str, str] = {
+    "openai-realtime": "every_turn",
+    "local-realtime": "every_turn",
+    "local-voice": "every_turn",
+    "gemini-live": "connect_only",
+    "vertex-live": "connect_only",
+    "openai-live": "connect_only",
+    "openai-live-subscription": "connect_only",
+}
+
+
+def realtime_delivery(provider: str | None) -> str:
+    return REALTIME_STYLE_DELIVERY.get(provider or "", "unknown")
+
+
 __all__ = [
     "AVATAR_EXPRESSIONS",
+    "CHANNELS",
+    "REALTIME_STYLE_DELIVERY",
+    "realtime_delivery",
+    "stop_admits",
     "ExpressionPlan",
     "PlanGate",
     "TTS_TURN_PARAMS",

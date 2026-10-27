@@ -1,0 +1,28 @@
+{
+  "personality_limits": {
+    "title": "Limites da adaptação",
+    "auto_title": "Adaptação automática (intervalo)",
+    "auto_body": "Por conta própria, o assistente pode mudar o jeito de falar no máximo até esta intensidade, e só para os humores que você permite. Este é o intervalo da adaptação automática.",
+    "auto_value": "Automático: até {n} de {max}",
+    "auto_off": "A adaptação automática está desligada: modo manual ou intervalo 0.",
+    "owner_title": "Seu pedido explícito",
+    "owner_body": "Quando você mesmo pede um humor («mais sério» ou um botão abaixo), ele pode passar desse intervalo, até {max}. Continua limitado aos humores permitidos, nunca acima de {max}, e vale só nesta sessão.",
+    "owner_value": "Seu pedido: até {max} de {max}",
+    "moods_title": "Humores permitidos",
+    "moods_body": "Os dois limites valem só para estes humores. Um humor não permitido é recusado, quem quer que peça.",
+    "pinned": "Humor fixado: {mood}",
+    "never_title": "O que o estilo nunca muda",
+    "never_body": "Fatos, precisão, privacidade, aprovações, ferramentas, orçamentos e parada. Um humor é simulado: um jeito de falar, não um sentimento.",
+    "channels_title": "Onde o estilo chega",
+    "ch_text": "Chat escrito: o estilo faz parte das instruções que o assistente recebe.",
+    "ch_realtime": "Conversas de voz (tempo real): o estilo é enviado como instruções de redação. Muda como ele formula as coisas, não como a voz soa.",
+    "ch_voice": "Voz: nenhum provedor de voz muda o tom por turno, então a voz em si não é modulada.",
+    "ch_avatar": "Avatar: ainda não está ligado ao app; não há sincronização labial.",
+    "delivery_title": "Quando um motor de voz adota uma mudança",
+    "delivery_every_turn": "a cada turno",
+    "delivery_connect_only": "só quando uma chamada começa (uma mudança vale para a próxima)",
+    "delivery_unknown": "desconhecido",
+    "stop_note": "Depois de PARAR, nada do turno anterior é aplicado; o estilo é lido de novo para o próximo.",
+    "_status": "UNREVIEWED DRAFT: translated without a native review; do not ship before one"
+  }
+}

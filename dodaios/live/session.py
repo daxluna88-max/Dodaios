@@ -43,7 +43,25 @@ def _identity(config: Any) -> str:
     except Exception:  # noqa: BLE001 — never block a call on the identity block
         log.warning("live voice: identity block unavailable", exc_info=True)
         return ""
-    return identity + _instructions(config) + _memory() + _initiative(config)
+    return identity + _instructions(config) + _memory() + _initiative(config) + _style()
+
+
+def _style() -> str:
+    """The owner's personality profile + simulated mood, read ONCE when the call opens.
+
+    The live transport has no mid-call instruction update here, so a mood change or a new profile
+    applies to the NEXT call (ADR-0056). Wording only: no voice parameter or lip sync is driven.
+    Empty while STOP has the door closed or on a fault.
+    """
+    try:
+        from dodaios.core.runtime_refs import get_brain_manager
+
+        build = getattr(get_brain_manager(), "realtime_style_block", None)
+        text = str(build() or "") if callable(build) else ""
+    except Exception:  # noqa: BLE001 — never block a call on the style block
+        log.warning("live voice: personality style unavailable")
+        return ""
+    return f"\n\n{text}" if text else ""
 
 
 def _initiative(config: Any) -> str:

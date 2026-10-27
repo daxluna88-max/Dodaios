@@ -4095,6 +4095,29 @@ class BrainManager:
                         exc_info=True)
             return ""
 
+    def realtime_style_block(self, *, compact: bool = False) -> str:
+        """The style text for a realtime / live voice session (ADR-0056, block 12).
+
+        Same profile and mood as the written chat, read fresh at the moment of the update, so no
+        plan is kept that STOP could leave stale. While STOP has the door closed nothing is
+        returned: a session update built then must not carry a style (the refusal reply stays
+        neutral). Enumerations only; a fault logs a warning without values and returns ``""``.
+        """
+        from dodaios.brain import engine_policy, style  # noqa: PLC0415
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
+        cfg = getattr(getattr(getattr(self, "_config", None), "brain", None), "personality", None)
+        if cfg is None:
+            return ""
+        try:
+            if not get_stop_controller().door_open:
+                return ""
+            profile, state = self._style_runtime().sync(cfg, engine_policy.current_product())
+            return style.realtime_instruction(profile, state, compact=compact)
+        except Exception:  # noqa: BLE001 - a style fault must never break a voice session
+            log.warning("realtime personality style could not be built; continuing without it")
+            return ""
+
     def _build_system_prompt(self) -> str:
         """Builds the system prompt with Jarvis-Agent-style workspace injection.
 

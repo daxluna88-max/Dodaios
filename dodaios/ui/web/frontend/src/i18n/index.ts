@@ -124,7 +124,8 @@ export type LocaleChunk =
   | "pane_review"
   | "memory"
   | "ship"
-  | "self_build";
+  | "self_build"
+  | "personality_limits";
 
 const SHIP_LOCALES = import.meta.glob("./locales/ship/*.json");
 
@@ -222,6 +223,14 @@ const CHUNK_LOADERS: Record<LocaleChunk, Record<UiLanguage, () => Promise<unknow
     es: () => import("./locales/memory/es.json"),
     zh: () => import("./locales/memory/zh.json"),
     pt: () => import("./locales/memory/pt.json"),
+  },
+  // Settings > Assistant > Personality: limits of adaptation vs the owner's explicit request.
+  personality_limits: {
+    en: () => import("./locales/personality_limits/en.json"),
+    de: () => import("./locales/personality_limits/de.json"),
+    es: () => import("./locales/personality_limits/es.json"),
+    zh: () => import("./locales/personality_limits/zh.json"),
+    pt: () => import("./locales/personality_limits/pt.json"),
   },
   // "Built for you": what the self-building loop made, opened from its nav row.
   self_build: {

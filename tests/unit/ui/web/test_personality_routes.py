@@ -118,3 +118,15 @@ def test_before_the_assistant_is_ready_the_mood_endpoint_waits(env):
     app.state.brain = None
     assert client.get("/api/personality").json()["mood_available"] is False
     assert client.post("/api/personality/mood", json={"action": "neutral"}).status_code == 503
+
+
+def test_payload_separates_automatic_range_from_owner_request_and_states_channels(env):
+    """Block 12 (written, NOT run): two different limits, honest channels."""
+    client, _, _ = env
+    got = client.get("/api/personality").json()
+    assert got["limits"]["adaptation_max_intensity"] == 1
+    assert got["limits"]["owner_max_intensity"] == 3
+    assert "neutral" not in got["limits"]["moods_allowed"]
+    assert got["channels"]["voice"] == "unavailable"
+    assert got["channels"]["lip_sync"] == "none"
+    assert got["realtime_delivery"]["gemini-live"] == "connect_only"

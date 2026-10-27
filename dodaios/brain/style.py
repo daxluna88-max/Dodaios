@@ -74,6 +74,23 @@ def instruction(
     return " ".join(parts)
 
 
+_REALTIME_NOTE = (
+    "You are speaking aloud: this style shapes your wording, sentence length and pacing of words "
+    "only. Never describe your own voice, tone of voice, face or mood as changed or felt."
+)
+
+
+def realtime_instruction(
+    profile: personality.EffectiveProfile, state: mood_mod.MoodState, *, compact: bool = False
+) -> str:
+    """The style text for a realtime / live voice session (ADR-0056, block 12).
+
+    The same enumerated text as the written one plus one sentence that keeps a speaking model
+    honest: the voice itself is not modulated by the app, so it must not claim that it is.
+    """
+    return f"{instruction(profile, state, compact=compact)} {_REALTIME_NOTE}"
+
+
 class StyleRuntime:
     """The profile in force and the mood of one conversation."""
 
@@ -125,4 +142,4 @@ class StyleRuntime:
         return self._reducer.apply(event, self._clock())
 
 
-__all__ = ["StyleRuntime", "instruction"]
+__all__ = ["StyleRuntime", "instruction", "realtime_instruction"]

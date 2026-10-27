@@ -1,0 +1,28 @@
+{
+  "personality_limits": {
+    "title": "适应的限度",
+    "auto_title": "自动适应（范围）",
+    "auto_body": "助手自己最多只能把说话方式调整到此强度，并且只能使用你允许的情绪。这就是自动适应的范围。",
+    "auto_value": "自动：最高 {n}（满分 {max}）",
+    "auto_off": "自动适应已关闭：手动模式或范围为 0。",
+    "owner_title": "你的明确请求",
+    "owner_body": "当你自己要求某种情绪（「更严肃」或下方按钮）时，可以超出该范围，最高到 {max}。它仍受你允许的情绪限制，不会超过 {max}，并且只在本次会话有效。",
+    "owner_value": "你的请求：最高 {max}（满分 {max}）",
+    "moods_title": "允许的情绪",
+    "moods_body": "两个限度都只适用于这些情绪。不被允许的情绪无论谁请求都会被拒绝。",
+    "pinned": "已固定的情绪：{mood}",
+    "never_title": "风格永远不会改变的内容",
+    "never_body": "事实、准确性、隐私、批准、工具、预算和停止。情绪是模拟的：一种说话方式，而不是感受。",
+    "channels_title": "风格作用于哪里",
+    "ch_text": "文字聊天：风格是助手收到的指令的一部分。",
+    "ch_realtime": "语音对话（实时）：风格以措辞指令的形式发送。它改变助手的用词，而不是声音的听感。",
+    "ch_voice": "声音：没有语音服务能按回合改变语气，因此声音本身不会被调制。",
+    "ch_avatar": "头像：尚未接入应用；没有口型同步。",
+    "delivery_title": "语音引擎何时采用更改",
+    "delivery_every_turn": "每个回合",
+    "delivery_connect_only": "仅在通话开始时（更改在下次通话生效）",
+    "delivery_unknown": "未知",
+    "stop_note": "停止之后，不会应用前一回合的任何内容；下一回合会重新读取风格。",
+    "_status": "UNREVIEWED DRAFT: translated without a native review; do not ship before one"
+  }
+}

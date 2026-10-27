@@ -1,0 +1,28 @@
+{
+  "personality_limits": {
+    "title": "Límites de la adaptación",
+    "auto_title": "Adaptación automática (rango)",
+    "auto_body": "Por sí solo, el asistente puede cambiar su forma de hablar como máximo hasta esta intensidad, y solo hacia los estados de ánimo que permites. Es el rango de la adaptación automática.",
+    "auto_value": "Automático: hasta {n} de {max}",
+    "auto_off": "La adaptación automática está desactivada: modo manual o rango 0.",
+    "owner_title": "Tu petición explícita",
+    "owner_body": "Cuando pides tú mismo un estado de ánimo («más serio» o un botón de abajo), puede superar ese rango, hasta {max}. Sigue limitado a los estados que permites, nunca por encima de {max}, y dura solo esta sesión.",
+    "owner_value": "Tu petición: hasta {max} de {max}",
+    "moods_title": "Estados de ánimo permitidos",
+    "moods_body": "Ambos límites se aplican solo a estos estados. Uno no permitido se rechaza, lo pida quien lo pida.",
+    "pinned": "Estado fijado: {mood}",
+    "never_title": "Lo que el estilo nunca cambia",
+    "never_body": "Hechos, exactitud, privacidad, aprobaciones, herramientas, presupuestos y detención. Un estado de ánimo es simulado: una forma de hablar, no un sentimiento.",
+    "channels_title": "Adónde llega el estilo",
+    "ch_text": "Chat escrito: el estilo forma parte de las instrucciones que recibe el asistente.",
+    "ch_realtime": "Conversaciones de voz (tiempo real): el estilo se envía como instrucciones de redacción. Cambia cómo formula las cosas, no cómo suena la voz.",
+    "ch_voice": "Voz: ningún proveedor de voz puede cambiar el tono por turno, así que la voz en sí no se modula.",
+    "ch_avatar": "Avatar: aún no está conectado a la app; no hay sincronización labial.",
+    "delivery_title": "Cuándo un motor de voz recoge un cambio",
+    "delivery_every_turn": "en cada turno",
+    "delivery_connect_only": "solo al empezar una llamada (un cambio se aplica a la siguiente)",
+    "delivery_unknown": "no se sabe",
+    "stop_note": "Tras STOP no se aplica nada del turno anterior; el estilo se vuelve a leer para el siguiente.",
+    "_status": "UNREVIEWED DRAFT: translated without a native review; do not ship before one"
+  }
+}

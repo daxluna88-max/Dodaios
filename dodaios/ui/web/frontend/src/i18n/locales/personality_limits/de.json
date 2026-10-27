@@ -1,0 +1,28 @@
+{
+  "personality_limits": {
+    "title": "Grenzen der Anpassung",
+    "auto_title": "Automatische Anpassung (Spielraum)",
+    "auto_body": "Von selbst darf der Assistent seine Sprechweise höchstens bis zu dieser Stärke verändern und nur in den Stimmungen, die du erlaubst. Das ist der Spielraum der automatischen Anpassung.",
+    "auto_value": "Automatisch: bis {n} von {max}",
+    "auto_off": "Automatische Anpassung ist aus: manueller Modus oder Spielraum 0.",
+    "owner_title": "Deine ausdrückliche Bitte",
+    "owner_body": "Wenn du selbst eine Stimmung verlangst («ernster» oder eine Schaltfläche unten), darf sie über diesen Spielraum hinausgehen, bis {max}. Sie bleibt auf die erlaubten Stimmungen begrenzt, nie über {max}, und gilt nur für diese Sitzung.",
+    "owner_value": "Deine Bitte: bis {max} von {max}",
+    "moods_title": "Erlaubte Stimmungen",
+    "moods_body": "Beide Grenzen gelten nur für diese Stimmungen. Eine nicht erlaubte Stimmung wird abgelehnt, egal wer fragt.",
+    "pinned": "Festgehaltene Stimmung: {mood}",
+    "never_title": "Was der Stil nie ändert",
+    "never_body": "Fakten, Genauigkeit, Datenschutz, Freigaben, Werkzeuge, Budgets und Stopp. Eine Stimmung ist simuliert: eine Sprechweise, kein Gefühl.",
+    "channels_title": "Wo der Stil ankommt",
+    "ch_text": "Schriftlicher Chat: Der Stil ist Teil der Anweisungen, die der Assistent erhält.",
+    "ch_realtime": "Sprachgespräche (Echtzeit): Der Stil wird als Formulierungsanweisung gesendet. Er ändert die Wortwahl, nicht den Klang der Stimme.",
+    "ch_voice": "Stimme: Kein Sprachanbieter kann den Ton pro Antwort ändern, die Stimme selbst wird also nicht moduliert.",
+    "ch_avatar": "Avatar: noch nicht mit der App verbunden; es gibt keine Lippensynchronisation.",
+    "delivery_title": "Wann eine Sprach-Engine eine Änderung übernimmt",
+    "delivery_every_turn": "bei jeder Antwort",
+    "delivery_connect_only": "nur beim Start eines Anrufs (eine Änderung gilt für den nächsten Anruf)",
+    "delivery_unknown": "nicht bekannt",
+    "stop_note": "Nach STOPP wird nichts aus der früheren Antwort angewendet; der Stil wird für die nächste neu gelesen.",
+    "_status": "UNREVIEWED DRAFT: translated without a native review; do not ship before one"
+  }
+}

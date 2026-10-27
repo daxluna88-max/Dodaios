@@ -37,6 +37,17 @@ export interface PersonalityState {
     expires_at: number | null;
     adaptation_on: boolean;
   };
+  /** Range of AUTOMATIC adaptation vs what an explicit owner request may reach (ADR-0056). */
+  limits?: {
+    adaptation_max_intensity: number;
+    owner_max_intensity: number;
+    moods_allowed: string[];
+    locked_mood: string | null;
+  };
+  /** What each channel really carries: text, realtime, voice, avatar, lip_sync. */
+  channels?: Record<string, string>;
+  /** Realtime provider -> every_turn | connect_only. */
+  realtime_delivery?: Record<string, string>;
   mood_available: boolean;
   simulated: true;
   tones: string[];
