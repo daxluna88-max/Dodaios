@@ -162,6 +162,12 @@ class MissionToolApprovalCoordinator:
             self._pending.pop(trace_id, None)
             return pending
 
+    async def pending_count(self) -> int:
+        """How many approvals wait, across every mission (expired ones are not counted)."""
+        now_ns = time.time_ns()
+        async with self._lock:
+            return sum(1 for item in self._pending.values() if item.expires_at_ns > now_ns)
+
     async def deny_all(self, *, reason: str) -> None:
         """Release every waiter during orderly application shutdown."""
         async with self._lock:

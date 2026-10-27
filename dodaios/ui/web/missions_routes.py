@@ -26,6 +26,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel
 
+from dodaios.control.stop import get_stop_controller
 from dodaios.missions.diff_summary import read_mission_changes
 from dodaios.missions.events import (
     EventEnvelope,
@@ -51,6 +52,14 @@ from dodaios.missions.voice.readback import approved_summary
 from dodaios.ui.web.missions_worker import extract_worker_missions
 
 logger = logging.getLogger(__name__)
+
+
+def _require_door() -> None:
+    """After the owner's STOP nothing new starts or is approved until they resume (ADR-0058)."""
+    admission = get_stop_controller().admit()
+    if not admission.allowed:
+        raise HTTPException(
+            status_code=409, detail={"code": "stopped", "reason": admission.reason})
 
 router = APIRouter(prefix="/api/missions", tags=["missions"])
 
@@ -434,6 +443,7 @@ async def approve_mission_tool_call(
     request: Request,
 ) -> dict[str, Any]:
     """Approve and resume exactly one paused mission tool call."""
+    _require_door()
     pending = await _require_tool_approvals(request).approve(
         mission_id,
         trace_id,
@@ -503,6 +513,7 @@ async def dispatch_mission(
     ``requires_confirm: true``. The UI shows an AlertDialog, the user clicks OK,
     and re-POSTs with ``confirmed: true``.
     """
+    _require_door()
     from fastapi.responses import JSONResponse
 
     from dodaios.missions.safety.destructive_confirm import is_destructive
@@ -665,6 +676,7 @@ async def decide_capacity(
     never stored or reused. Returns ``409`` when the mission is no longer
     waiting or the offer changed — nothing is decided or billed then.
     """
+    _require_door()
     from dodaios.missions.capacity import CapacityDecisionRejected
 
     mgr = _require_manager(request)
@@ -729,6 +741,7 @@ async def rerun_mission(
       and ``confirmed`` is false — same gate as ``/dispatch``. UI re-POSTs with
       ``confirmed: true`` after the user acknowledges.
     """
+    _require_door()
     from fastapi.responses import JSONResponse
 
     from dodaios.missions.safety.destructive_confirm import is_destructive

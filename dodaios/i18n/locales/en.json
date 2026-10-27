@@ -61,6 +61,7 @@
     },
     "mid_answer_error": "I ran the steps, but something went wrong while composing the answer. Please ask me again in a moment.",
     "action_failed": "I recognized the action but couldn't execute it.",
+    "stopped_waiting_resume": "I am stopped. Resume me from the control strip and I will carry on.",
     "multi_engine": {
       "work": "Asking several engines is not available in the Work product: it only uses local models.",
       "off": "Asking several engines is switched off. Turn it on and pick the engines in the settings first.",

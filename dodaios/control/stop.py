@@ -218,6 +218,27 @@ class StopController:
             await asyncio.sleep(SETTLE_STEP_S)
 
 
+_PROCESS_CONTROLLER: StopController | None = None
+
+
+def get_stop_controller() -> StopController:
+    """The product process's one :class:`StopController`, created on first use.
+
+    One process is one product, so this is the product-wide scope of STOP: it reaches every
+    session of this product and nothing of the other product or of another installation.
+    """
+    global _PROCESS_CONTROLLER
+    if _PROCESS_CONTROLLER is None:
+        _PROCESS_CONTROLLER = StopController()
+    return _PROCESS_CONTROLLER
+
+
+def reset_stop_controller() -> None:
+    """Forget the singleton (tests)."""
+    global _PROCESS_CONTROLLER
+    _PROCESS_CONTROLLER = None
+
+
 __all__ = [
     "Admission",
     "Outcome",
@@ -226,4 +247,6 @@ __all__ = [
     "StopState",
     "Subsystem",
     "SubsystemResult",
+    "get_stop_controller",
+    "reset_stop_controller",
 ]

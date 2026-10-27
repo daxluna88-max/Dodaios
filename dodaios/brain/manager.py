@@ -10470,6 +10470,7 @@ class BrainManager:
         consume_pending_voice_attachments: bool = False,
         turn_override: TurnOverride | None = None,
         language_text: str | None = None,
+        stop_ticket: int | None = None,
     ) -> str:
         """Generate a turn, optionally leaving its public response event to the caller.
 
@@ -10518,6 +10519,7 @@ class BrainManager:
                     consume_pending_voice_attachments
                 ),
                 language_text=language_text,
+                stop_ticket=stop_ticket,
             )
         finally:
             # Keep the last completed turn inspectable for diagnostics/tests,
@@ -10559,6 +10561,7 @@ class BrainManager:
         force_output_language: str | None = None,
         consume_pending_voice_attachments: bool = False,
         language_text: str | None = None,
+        stop_ticket: int | None = None,
     ) -> str:
         # 1. Intercept meta-commands (cancel, switch, depth override).
         # User request 2026-04-25: no standardised confirmation phrases
@@ -10576,6 +10579,23 @@ class BrainManager:
         # fallback loop (wiki-delta base) does not carry a stale provider name.
         self._active_turn_identity = None
         turn_trace_id = trace_id or uuid4()
+
+        # After the owner's STOP nothing new starts until they resume (ADR-0058). A turn queued
+        # before STOP carries its old ticket and stays refused. A spoken/typed "stop" must still
+        # get through, so the cancel intent is let past the door.
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
+        if not get_stop_controller().admit(stop_ticket).allowed and not self._detect_cancel_intent(
+            user_text
+        ):
+            stopped_reply = i18n_catalog.t(
+                "brain.stopped_waiting_resume", self._phrase_language(user_text)
+            ).strip()
+            await self._record_response_side_effects(
+                user_text=user_text, response_text=stopped_reply,
+                use_history=False, trace_id=turn_trace_id,
+            )
+            return stopped_reply
 
         # Tool-surface self-heal (live 2026-07-13): a source that connects
         # AFTER the boot's last BrainToolsChanged — or whose event is lost to a
