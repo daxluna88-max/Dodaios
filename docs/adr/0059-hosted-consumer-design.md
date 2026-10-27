@@ -44,7 +44,7 @@ Work offer would be a separate decision, and a private cloud is not "local in th
 | Process model | one UI/server process, port 47821 (+ product offsets), launch lock files | multi-tenant service or one sandboxed worker per active tenant; no fixed port; no per-machine lock |
 | Tools | tools act on the local computer (files, browser, apps, computer use, screen) | most are meaningless or dangerous on a shared server; a hosted tool allow-list, sandboxed, no shell access to the host; local-computer tools only through an explicit paired device |
 | Voice | microphone/speakers of the PC, local STT/TTS options | streaming audio from app/web, server-side STT/TTS cost metering, echo/latency budget |
-| Engines | local engines (Ollama etc.) and the customer's own accounts | the operator's engines and metering; a local model is not available per customer; subscription logins (Claude/Codex style) are not API credit and not transferable |
+| Engines | local engines (Ollama etc.) and the customer's own accounts | the operator's engines and metering; a local model is not available per customer; subscription logins of the vendors' command-line tools are not API credit and not transferable |
 | Cost control | `[brain.multi_engine]` budget, costs module | a per-tenant, server-enforced ledger with hard caps, an audit trail, and plain-language usage |
 | Updates and operations | auto-update of the desktop app | deployments, migrations, monitoring, incident handling, support access with the customer's consent and an audit log |
 | Compliance | none in code | privacy notice, data location, retention, deletion on request, subprocessor list, backups' retention |

@@ -49,7 +49,7 @@ def _background_tasks() -> list[asyncio.Task[Any]]:
     try:
         return [t for t in asyncio.all_tasks() if (t.get_name() or "").startswith(_BG_PREFIX)
                 and not t.done()]
-    except RuntimeError:
+    except RuntimeError:  # no running loop here, so there are no tasks to count
         return []
 
 

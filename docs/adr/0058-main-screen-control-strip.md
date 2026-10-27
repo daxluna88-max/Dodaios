@@ -1,6 +1,6 @@
 # ADR-0058 — Main screen: a control strip that makes the assistant understandable and stoppable
 
-**Status:** Proposed (design only: nothing implemented, nothing tested) · **Date:** 2026-10-27
+**Status:** Proposed; implemented locally in `claude/p4-product-ports` (code and tests WRITTEN, not run; `dist` not rebuilt, so nothing is live) · **Date:** 2026-10-27
 
 ## Context
 
@@ -132,3 +132,33 @@ in the 5 interface languages (no raw keys), reduced-motion respected. Italian is
   simultaneous activity, privacy wording, archive vs delete, endpoint security) are reflected above. Controls S01–S12.
 - The remote-access case (phone) is out of scope: STOP from the phone is checked separately (issue 16, F03/F05).
 - Budget display and cost are not part of the strip.
+
+## Implementation notes (2026-10-27, local)
+
+- **Existing emergency stop.** `dodaios/control/cancel.py` already has `KillSwitch` / `KillRequested` (tray, hotkey,
+  voice). It only reaches holders that registered a `CancelToken` (the computer-use loop); a search of `speech/`,
+  `audio/` and `realtime/` found no subscriber, so playback and realtime have no verified stop. `POST /api/stop` trips
+  the same switch (`kill_switch_holders`) and adds the parts that were missing.
+- **Scope.** One `StopController` per product process (`get_stop_controller()`): STOP reaches every session of that
+  product and nothing of the other product or of another installation. Session overrides (mood, style nudges) are
+  neither read nor reset. This is different from data isolation, which is a separate concern.
+- **Door and resume.** `stop()` bumps the generation and closes the door before any await; new turns, mission
+  dispatch / rerun, tool approvals and capacity decisions then answer `409 stopped`. A turn queued before STOP carries
+  its `stop_ticket` (the generation at enqueue); after `POST /api/stop/resume` (a NEW generation) it is still refused
+  as `stale_generation`. A typed or spoken stop phrase still passes the door. The queued voice path does not pass a
+  ticket yet (limit).
+- **Outcomes.** Parts: `kill_switch_holders`, `computer_use_runs`, `background_agents`, `pending_approvals`,
+  `missions`, `voice_playback`, `realtime_session`. The last two have no probe, so they are always `unknown` and the
+  summary is `partly_stopped`: "Stopped" cannot be shown today whenever voice or realtime exist. Missions count as
+  stopped only if the cancel path reports the worker killed; a state flip alone leaves them `unknown`.
+- **State.** `strip_state.derive` (pure). The voice state comes from `/api/voice/state`; where it cannot be read the
+  summary is `unknown`, never `idle`.
+- **Engine.** `TurnLedger` is filled by the multi-engine path (from the orchestrator's own egress metadata) and by
+  ordinary turns (main engine only). Locality is the endpoint's (loopback only). Tools and network use are not
+  observed: `network_tools` stays `not_observed`. "Planned" and "attempted" come from the app's records, not from the
+  wire.
+- **Memory.** The strip links to the existing Memory view (view, correct, archive). No deletion and no per-note
+  approval were added.
+- **Not done.** Per-session ticket in the voice pipeline; verified stop of playback / realtime / worker processes;
+  a spoken "stop" does not close the door (the existing background-task cancel still answers it); the new routes'
+  Origin/CSRF behaviour is covered by the existing middleware by default and by a written test, not by a run.

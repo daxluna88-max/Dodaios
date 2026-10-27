@@ -209,6 +209,7 @@ class StopController:
             try:
                 answer = await asyncio.wait_for(part.probe(), self._probe_timeout_s)
             except TimeoutError:
+                log.warning("stop: probe of %s did not answer in time", part.name)
                 return "unknown"
             except Exception:  # noqa: BLE001 - a broken probe is "unknown", never "confirmed"
                 log.warning("stop: probe of %s failed", part.name, exc_info=True)
