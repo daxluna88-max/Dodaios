@@ -24,7 +24,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from dodaios.control.stop import get_stop_controller
 from dodaios.missions.diff_summary import read_mission_changes
@@ -207,13 +207,20 @@ class DenyToolApprovalBody(BaseModel):
     call_fingerprint: str | None = None
     #: STOP generation the screen knew; an older one is refused (it saw a pre-STOP state).
     generation: int | None = None
+    #: Opaque id of the pending request the owner looked at (block 13); optional for a denial.
+    request_id: str | None = None
 
 
 class ApproveToolApprovalBody(BaseModel):
-    """Optional identity of the call the owner looked at (block 10, ADR-0058)."""
+    """The identity of the ONE request the owner looked at; all four parts are required
+    (block 13). A missing or empty part is a 422 and nothing is consumed."""
 
-    call_fingerprint: str | None = None
-    generation: int | None = None
+    model_config = {"extra": "forbid"}
+
+    request_id: str = Field(min_length=1, max_length=200)
+    tool_name: str = Field(min_length=1, max_length=300)
+    call_fingerprint: str = Field(min_length=1, max_length=200)
+    generation: int
 
 
 def _require_known_generation(generation: int | None) -> None:
@@ -501,16 +508,18 @@ async def approve_mission_tool_call(
     mission_id: str,
     trace_id: UUID,
     request: Request,
-    body: ApproveToolApprovalBody | None = None,
+    body: ApproveToolApprovalBody,
 ) -> dict[str, Any]:
-    """Approve and resume exactly one paused mission tool call."""
+    """Approve and resume exactly one paused mission tool call (the body is REQUIRED)."""
     _require_door()
-    _require_known_generation(body.generation if body is not None else None)
+    _require_known_generation(body.generation)
     pending = await _require_tool_approvals(request).approve(
         mission_id,
         trace_id,
         approved_by="user",
-        expected_fingerprint=body.call_fingerprint if body is not None else None,
+        expected_fingerprint=body.call_fingerprint,
+        expected_request_id=body.request_id,
+        expected_tool=body.tool_name,
     )
     if pending is None:
         raise HTTPException(
@@ -541,6 +550,7 @@ async def deny_mission_tool_call(
         trace_id,
         reason=reason[:200],
         expected_fingerprint=body.call_fingerprint,
+        expected_request_id=body.request_id,
     )
     if pending is None:
         raise HTTPException(

@@ -74,13 +74,19 @@ export async function fetchMissionToolApprovals(
   );
 }
 
+/** Approve ONE pending call: the identity of the request the person saw is required (block 13). */
 export async function approveMissionToolCall(
   missionId: string,
   traceId: string,
+  identity: { request_id: string; tool_name: string; call_fingerprint: string; generation: number },
 ): Promise<MissionToolApprovalDecision> {
   return requestJson(
     `${API_BASE}/${encodeURIComponent(missionId)}/tool-approvals/${encodeURIComponent(traceId)}/approve`,
-    { method: "POST" },
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(identity),
+    },
   );
 }
 

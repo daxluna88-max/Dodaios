@@ -21,7 +21,12 @@ from dodaios.core.events import (
 
 @dataclass(frozen=True, slots=True)
 class PendingMissionToolApproval:
-    """Secret-free data needed to render and decide one paused call."""
+    """Secret-free data needed to render and decide one paused call.
+
+    ``approval_id`` is an OPAQUE, ONE-USE request identity (block 13), exposed as ``request_id``:
+    it names this one pending request, not a capability. An approval must echo it with the tool
+    name, the call fingerprint and the STOP generation; the server still enforces one use and an
+    exact match before anything is consumed."""
 
     trace_id: UUID
     mission_id: str
@@ -34,15 +39,26 @@ class PendingMissionToolApproval:
     expires_at_ns: int
     #: Digest of the exact tool + arguments that were asked about; the decision echoes it.
     call_fingerprint: str = ""
-    #: One-use identity of this pending approval (block 8); kept server-side and echoed by
-    #: ``approve``, never taken from the HTTP client. Not part of ``to_dict`` on purpose.
+    #: One-use identity of this pending approval (blocks 8, 13); published as ``request_id``.
     approval_id: str = field(default="", repr=False)
 
     def to_dict(self) -> dict[str, str | int | None]:
         payload = asdict(self)
-        payload.pop("approval_id", None)  # a server-side secret of the pending call
+        payload["request_id"] = payload.pop("approval_id", "")
         payload["trace_id"] = str(self.trace_id)
         return payload
+
+    def matches_identity(self, event: ActionApproved) -> bool:
+        """Whether an ``ActionApproved`` is the answer to THIS pending request. A request that
+        carries an identity (every executor-armed one) is matched on id, tool and fingerprint;
+        only a request without any identity (a legacy publisher) is matched by trace alone."""
+        if not self.approval_id and not self.call_fingerprint:
+            return True
+        return (
+            event.approval_id == self.approval_id
+            and event.tool_name == self.tool_name
+            and event.call_fingerprint == self.call_fingerprint
+        )
 
 
 class MissionToolApprovalCoordinator:
@@ -106,6 +122,16 @@ class MissionToolApprovalCoordinator:
         event: ActionApproved | ActionDenied | ActionExecuted,
     ) -> None:
         async with self._lock:
+            pending = self._pending.get(event.trace_id)
+            if (
+                pending is not None
+                and isinstance(event, ActionApproved)
+                and not pending.matches_identity(event)
+            ):
+                # An approval the workflow rejects (legacy, other request, other call) must not
+                # make the real pending decision disappear from the screen (block 13). A denial
+                # and an executed result do end the request.
+                return
             self._pending.pop(event.trace_id, None)
 
     async def list_pending(
@@ -139,11 +165,20 @@ class MissionToolApprovalCoordinator:
         *,
         approved_by: str,
         expected_fingerprint: str | None = None,
+        expected_request_id: str | None = None,
+        expected_tool: str | None = None,
     ) -> PendingMissionToolApproval | None:
+        """Approve exactly the request the person saw (block 13). The request id, tool name and
+        fingerprint are all REQUIRED: a missing one decides nothing and consumes nothing, as does
+        a pending request whose identity differs (it stays for a fresh look)."""
         if not self._accepting:
             return None
+        if not (expected_request_id and expected_tool and expected_fingerprint):
+            return None
         pending = await self._take_live(
-            mission_id, trace_id, expected_fingerprint=expected_fingerprint)
+            mission_id, trace_id, expected_fingerprint=expected_fingerprint,
+            expected_request_id=expected_request_id, expected_tool=expected_tool,
+            require_identity=True)
         if pending is None:
             return None
         if not self._accepting:
@@ -174,9 +209,12 @@ class MissionToolApprovalCoordinator:
         *,
         reason: str,
         expected_fingerprint: str | None = None,
+        expected_request_id: str | None = None,
     ) -> PendingMissionToolApproval | None:
+        """Deny works with or without an identity; one that is given must still match."""
         pending = await self._take_live(
-            mission_id, trace_id, expected_fingerprint=expected_fingerprint)
+            mission_id, trace_id, expected_fingerprint=expected_fingerprint,
+            expected_request_id=expected_request_id)
         if pending is None:
             return None
         await self._bus.publish(
@@ -194,13 +232,23 @@ class MissionToolApprovalCoordinator:
         trace_id: UUID,
         *,
         expected_fingerprint: str | None = None,
+        expected_request_id: str | None = None,
+        expected_tool: str | None = None,
+        require_identity: bool = False,
     ) -> PendingMissionToolApproval | None:
         async with self._lock:
             pending = self._pending.get(trace_id)
-            if (
-                pending is not None
-                and expected_fingerprint is not None
-                and pending.call_fingerprint != expected_fingerprint
+            if pending is not None and require_identity and not (
+                pending.approval_id and pending.call_fingerprint
+            ):
+                # A request that never carried an identity cannot be matched: no effect.
+                return None
+            if pending is not None and (
+                (expected_fingerprint is not None
+                 and pending.call_fingerprint != expected_fingerprint)
+                or (expected_request_id is not None
+                    and pending.approval_id != expected_request_id)
+                or (expected_tool is not None and pending.tool_name != expected_tool)
             ):
                 # The screen decided about a different call than the one waiting now: nothing
                 # is taken, nothing is decided (the pending call stays for a fresh look).

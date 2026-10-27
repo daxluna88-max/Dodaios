@@ -43,6 +43,7 @@ from .approval_surface import (
     UNATTENDED,
     resolve_approval_surface,
 )
+from .decision import decide_call, plan_mode_refusal
 from .effects import (
     EffectLedger,
     call_fingerprint,
@@ -567,13 +568,12 @@ class ToolExecutor:
             return ToolResult(False, None, f"stopped ({stopped})")
 
         if (config_snapshot or {}).get("chat_read_only"):
-            from dodaios.core.tool_read_only import allows_read
-
-            if not allows_read(tool, args):
+            plan_refusal = plan_mode_refusal(tool, args)
+            if plan_refusal is not None:
                 await self._bus.publish(ActionDenied(
-                    trace_id=tid, tool_name=tool.name, reason="Plan mode permits reads only",
+                    trace_id=tid, tool_name=tool.name, reason=plan_refusal,
                 ))
-                return ToolResult(False, None, "Plan mode permits reads only")
+                return ToolResult(False, None, plan_refusal)
 
         from dodaios.core import egress_guard
 
@@ -590,15 +590,17 @@ class ToolExecutor:
             )
 
         # 1. Evaluate
-        try:
-            decision = self._evaluator.evaluate(tool, args)
-        except ActionBlocked as exc:
+        # Block 13: the same function the unattended paths call (safety/decision.py).
+        verdict = decide_call(self._evaluator, tool, args)
+        if verdict.verdict == "deny" or verdict.decision is None:
             await self._bus.publish(ActionDenied(
-                trace_id=tid,
-                tool_name=tool.name,
-                reason=f"blacklist: {exc.pattern}",
+                trace_id=tid, tool_name=tool.name, reason=verdict.reason,
             ))
-            return ToolResult(success=False, output=None, error=str(exc))
+            return ToolResult(
+                success=False, output=None,
+                error=str(verdict.blocked) if verdict.blocked is not None else verdict.reason,
+            )
+        decision = verdict.decision
 
         # Where the call's target came from (ADR-0040, record only). Settled
         # here, before an approval ticket exists, so nothing but the publish
@@ -662,7 +664,7 @@ class ToolExecutor:
         # TaskAutoApprover may answer synchronously from that event; registering
         # afterward loses the answer and turns a valid grant into a timeout.
         approved_by = decision.approved_by or "auto"
-        tier_confirm = self._evaluator.needs_user_confirmation(decision)
+        tier_confirm = verdict.verdict == "ask"
         plaus_confirm = plaus is not None and plaus.require_confirmation
         # Explicit intent (Claude-Code permission model, mandate 2026-08-08):
         # a consequential action the user's own utterance already asked for by

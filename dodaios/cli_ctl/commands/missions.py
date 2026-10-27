@@ -48,13 +48,21 @@ def tool_approvals(mission_id: str = typer.Argument(..., help="Mission id.")) ->
 def approve_tool(
     mission_id: str = typer.Argument(..., help="Mission id."),
     trace_id: str = typer.Argument(..., help="Approval trace id."),
+    request_id: str = typer.Option(..., "--request-id", help="request_id from tool-approvals."),
+    tool_name: str = typer.Option(..., "--tool", help="tool_name from tool-approvals."),
+    fingerprint: str = typer.Option(..., "--fingerprint", help="call_fingerprint from the list."),
+    generation: int = typer.Option(..., "--generation", help="Current STOP generation."),
     yes: bool = options.yes_opt(),
     dry_run: bool = options.dry_opt(),
 ) -> None:
-    """Approve one paused mission tool call and resume it."""
+    """Approve one paused mission tool call and resume it (the exact request identity is needed)."""
     invoke.run(
         "POST",
         f"/api/missions/{mission_id}/tool-approvals/{trace_id}/approve",
+        body={
+            "request_id": request_id, "tool_name": tool_name,
+            "call_fingerprint": fingerprint, "generation": generation,
+        },
         assume_yes=yes,
         dry_run=dry_run,
         dangerous=True,

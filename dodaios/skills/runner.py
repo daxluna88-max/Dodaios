@@ -412,6 +412,10 @@ class SkillRunner:
                 ran, outcome, held = await guarded_call(
                     tool_name, tool_args, _call, tool=tool_obj,
                     scope=str(trace_id), key=f"skill:{skill.name}:{idx}", ticket=run_ticket,
+                    # Block 13: the executor's own policy decision on the REAL tool object (plan
+                    # mode, blacklist, tier); an ASK refuses here, the skill's declared tier
+                    # above can only add to it.
+                    evaluator=self._risk_evaluator(),
                 )
                 result = (
                     ToolResult(success=False, output=None, error=f"not run: {held}")

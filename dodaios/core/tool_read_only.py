@@ -19,6 +19,11 @@ def chat_is_read_only(session_id: str) -> bool:
     return _sessions.get(session_id, False)
 
 
+def any_chat_read_only() -> bool:
+    """True while ANY chat session is in plan mode (for paths that have no session id)."""
+    return bool(_sessions)
+
+
 def allows_read(tool: Any, args: dict[str, Any] | None = None) -> bool:
     """Use trusted tool metadata, never a presentation/command heuristic.
 

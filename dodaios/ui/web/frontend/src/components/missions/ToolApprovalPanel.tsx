@@ -22,6 +22,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useT } from "@/i18n";
 import { useRunLocale } from "@/components/runs/format";
 import { cn } from "@/lib/utils";
+import { useControlStrip } from "@/lib/controlStrip";
 import type {
   MissionToolApprovalDecision,
   MissionToolApprovalsResponse,
@@ -92,15 +93,29 @@ export function ToolApprovalPanel({
 
   useEffect(() => setConfirmingTraceId(null), [missionId]);
 
+  const strip = useControlStrip();
   const decision = useMutation<
     MissionToolApprovalDecision,
     Error,
     DecisionRequest
   >({
-    mutationFn: ({ approval, decision: requestedDecision }) =>
-      requestedDecision === "approve"
-        ? approveMissionToolCall(approval.mission_id, approval.trace_id)
-        : denyMissionToolCall(approval.mission_id, approval.trace_id),
+    mutationFn: ({ approval, decision: requestedDecision }) => {
+      if (requestedDecision !== "approve") {
+        return denyMissionToolCall(approval.mission_id, approval.trace_id);
+      }
+      // Block 13: approving needs the identity of the request that was shown AND the STOP
+      // generation this screen knows; without them nothing is sent.
+      const generation = strip.data?.generation;
+      if (!approval.request_id || !approval.call_fingerprint || generation === undefined) {
+        return Promise.reject(new Error("The request identity is not known; reload and look again."));
+      }
+      return approveMissionToolCall(approval.mission_id, approval.trace_id, {
+        request_id: approval.request_id,
+        tool_name: approval.tool_name,
+        call_fingerprint: approval.call_fingerprint,
+        generation,
+      });
+    },
     onSuccess: (_result, request) => {
       const key = missionToolApprovalsQueryKey(request.approval.mission_id);
       queryClient.setQueryData<MissionToolApprovalsResponse>(key, (current) =>

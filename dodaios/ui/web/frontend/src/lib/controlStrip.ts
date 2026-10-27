@@ -40,6 +40,8 @@ export interface PendingDecision {
   args_preview: string;
   /** Digest of the exact call asked about; the decision echoes it (the server refuses a mismatch). */
   call_fingerprint?: string;
+  /** Opaque one-use id of THIS pending request (block 13); an approval must echo it. */
+  request_id?: string;
   requested_at_ns?: number;
   expires_at_ns?: number;
 }
@@ -319,7 +321,9 @@ export function useResume() {
  * Approve or deny ONE paused mission tool call, through the existing mission routes. The request
  * carries the identity the server gave (trace id in the path, `call_fingerprint` of the call the
  * owner looked at, and the STOP generation the screen knew); the server refuses a mismatch. The
- * one-use `approval_id` stays on the server and is never sent by the browser. There is no bulk
+ * opaque one-use `request_id` of the pending request (an identity, not a secret) and the tool name
+ * are sent too and are REQUIRED to approve (a deny works without them); the server consumes the
+ * request only on an exact match. There is no bulk
  * and no "always allow": one call per click.
  */
 export function useDecide() {
@@ -332,6 +336,8 @@ export function useDecide() {
         body: JSON.stringify({
           ...(decision === "deny" ? { reason: "user_denied" } : {}),
           call_fingerprint: d.call_fingerprint ?? null,
+          request_id: d.request_id ?? null,
+          ...(decision === "approve" ? { tool_name: d.tool_name } : {}),
           generation,
         }),
       }),

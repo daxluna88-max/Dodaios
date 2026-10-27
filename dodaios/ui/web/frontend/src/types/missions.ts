@@ -432,6 +432,10 @@ export interface PendingMissionToolApproval {
   args_preview: string;
   requested_at_ns: number;
   expires_at_ns: number;
+  /** Digest of the exact call asked about (block 7). */
+  call_fingerprint?: string;
+  /** Opaque one-use id of this pending request (block 13); an approval must echo it. */
+  request_id?: string;
 }
 
 export interface MissionToolApprovalsResponse {
