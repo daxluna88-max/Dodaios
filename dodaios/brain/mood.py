@@ -146,6 +146,11 @@ class MoodReducer:
         self._last_adapt_at = -math.inf
         self._state = self._pinned(now)
 
+    @property
+    def adaptation_on(self) -> bool:
+        """False after «turn adaptation off» (this session only)."""
+        return self._adaptation_on
+
     # -- profile ---------------------------------------------------------------------------
 
     def set_profile(self, profile: EffectiveProfile, now: float) -> None:

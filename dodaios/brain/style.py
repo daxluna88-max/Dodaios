@@ -94,6 +94,10 @@ class StyleRuntime:
         self._profile = profile
         return profile, self._reducer.state(now)
 
+    @property
+    def adaptation_on(self) -> bool:
+        return True if self._reducer is None else self._reducer.adaptation_on
+
     def apply(self, event: mood_mod.Event) -> mood_mod.Applied | None:
         """A mood event; ``None`` before the first ``sync`` (no profile yet to hold limits)."""
         if self._reducer is None:

@@ -3839,6 +3839,23 @@ class BrainManager:
             runtime = self._style_runtime_obj = StyleRuntime()
         return runtime
 
+    def personality_snapshot(self) -> tuple[Any, Any, bool]:
+        """(effective profile, mood state now, adaptation on) for the settings screen."""
+        from dodaios.brain import engine_policy  # noqa: PLC0415
+
+        profile, state = self._style_runtime().sync(
+            self._config.brain.personality, engine_policy.current_product())
+        return profile, state, self._style_runtime().adaptation_on
+
+    def personality_apply(self, event: Any) -> Any:
+        """A mood event from the owner (screen or command); the saved profile is untouched."""
+        self.personality_snapshot()  # make sure a profile is loaded before the reducer acts
+        return self._style_runtime().apply(event)
+
+    def set_personality(self, cfg: Any) -> None:
+        """The owner saved a profile: the next turn and the screen follow it at once."""
+        self._config.brain.personality = cfg
+
     def _style_instruction(self, *, compact: bool = False) -> str:
         """The personality + mood text for this turn; empty when no profile is configured."""
         from dodaios.brain import engine_policy, style  # noqa: PLC0415
