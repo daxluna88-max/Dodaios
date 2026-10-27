@@ -10397,6 +10397,8 @@
     "stale_note": "连接已丢失。此处没有任何内容是最新的；最后一次读取时间 {time}。",
     "engine_provisional": "在本轮开始时选定；尚未确认已作答。",
     "engine_failed": "本轮没有引擎作答。",
+    "engine_superseded": "STOP came before this turn finished; its reply was dropped.",
+    "planned_partial": "(partial: only what the app declares, not every item of context)",
     "engine_fell_back": "由备用引擎代替 {requested} 作答。",
     "engine_no_model": "本轮没有使用模型。"
   }

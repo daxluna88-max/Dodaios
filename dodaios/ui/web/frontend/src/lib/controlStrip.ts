@@ -24,6 +24,8 @@ export interface EngineUse {
   provider: string;
   role: "main" | "reviewer" | "synthesizer";
   locality: "local" | "remote" | "unknown";
+  /** The model resolved at dispatch; null = not known. */
+  model?: string | null;
 }
 export interface Flow {
   category: string;
@@ -59,9 +61,16 @@ export interface ControlStrip {
     observability: "declared" | "none";
     refused: string[];
     /** `running`: the engine listed is the one chosen at the start, not yet confirmed to answer. */
-    state: "running" | "answered" | "failed";
+    state: "running" | "answered" | "failed" | "superseded";
     requested: string | null;
     fell_back: boolean;
+    /** planned -> attempted -> completed | failed | superseded (STOP overtook the turn). */
+    phase?: "planned" | "attempted" | "completed" | "failed" | "superseded";
+    /** `planned` is a declared list, never a full inventory (history, memory, files, tool output). */
+    planned_partial?: boolean;
+    generation?: number | null;
+    run_id?: string | null;
+    earlier_attempts?: string[];
   };
   jobs: {
     missions: { id: string; state: string }[];

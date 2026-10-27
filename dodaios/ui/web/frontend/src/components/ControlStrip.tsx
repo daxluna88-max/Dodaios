@@ -217,6 +217,7 @@ function Details({
         <h3 className="font-medium">{t("control_strip.engine_title")}</h3>
         {e.state === "running" && <p className="text-muted-foreground">{t("control_strip.engine_provisional")}</p>}
         {e.state === "failed" && <p className="text-warning">{t("control_strip.engine_failed")}</p>}
+        {e.state === "superseded" && <p className="text-warning">{t("control_strip.engine_superseded")}</p>}
         {e.fell_back && e.requested && (
           <p className="text-warning">{t("control_strip.engine_fell_back").replace("{requested}", e.requested)}</p>
         )}
@@ -226,7 +227,7 @@ function Details({
           <ul>
             {e.engines.map((u, i) => (
               <li key={`${u.provider}-${u.role}-${i}`}>
-                {u.provider} · {t(`control_strip.role_${u.role}`)} · {t(`control_strip.inference_${u.locality}`)}
+                {u.provider}{u.model ? ` (${u.model})` : ""} · {t(`control_strip.role_${u.role}`)} · {t(`control_strip.inference_${u.locality}`)}
               </li>
             ))}
           </ul>
@@ -238,6 +239,7 @@ function Details({
         <p>
           <span className="font-medium">{t("control_strip.planned_title")}: </span>
           {flows(e.planned, none)}
+          {e.planned_partial && <span className="text-muted-foreground"> {t("control_strip.planned_partial")}</span>}
         </p>
         <p>
           <span className="font-medium">{t("control_strip.attempted_title")}: </span>
