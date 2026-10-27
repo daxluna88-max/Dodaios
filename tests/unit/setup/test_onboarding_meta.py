@@ -7,10 +7,13 @@ from dodaios.setup import onboarding_meta as m
 
 def test_meta_constants():
     assert m.CURRENT_TERMS_VERSION == "1.1"
-    # Setup is one window with three steps (2026-10-05) — the name (the wake
-    # word), connecting an AI, how the user talks to it — then the walk
-    # through the app, which ends in the single completion restart.
-    assert m.ONBOARDING_STEPS == ["name", "connect", "voice", "tour"]
+    # Setup is one window with six steps (issue 18): the name (the wake word)
+    # and the owner's, how the user talks to it, a personality, the engine,
+    # privacy and actions, and the summary - then the walk through the app,
+    # which ends in the single completion restart.
+    assert m.ONBOARDING_STEPS == [
+        "name", "voice", "personality", "connect", "privacy", "summary", "tour",
+    ]
     assert m.ONBOARDING_STEPS[-1] == "tour"
     # Retired step ids must not come back through a partial revert.
     for retired in (

@@ -224,6 +224,10 @@ def post_first_run_apply(request: Request) -> dict:
     from dodaios.brain import engine_policy
 
     _require_ui_click(request)
+    if st.is_onboarding_complete(_path()):
+        # An installed app's approval mode and memory switch change in Settings,
+        # never by replaying the guide.
+        raise HTTPException(status_code=409, detail="onboarding is already complete; use Settings")
     try:
         fr.apply(engine_policy.current_product(), fr.load_choices(_path()), state_path=_path())
     except ValueError as exc:

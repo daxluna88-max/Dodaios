@@ -121,3 +121,13 @@ def test_completing_onboarding_is_not_done_by_apply(env):
     client, _, _ = env
     client.post("/api/onboarding/first-run/apply")
     assert client.get("/api/onboarding/state").json()["completed"] is False
+
+
+def test_an_installed_app_is_never_changed_by_replaying_the_guide(env):
+    from dodaios.setup import state as setup_state
+
+    client, cfg_file, _ = env
+    setup_state.mark_onboarding_complete(onboarding_routes._STATE_PATH_OVERRIDE)
+    before = cfg_file.read_text(encoding="utf-8")
+    assert client.post("/api/onboarding/first-run/apply").status_code == 409
+    assert cfg_file.read_text(encoding="utf-8") == before
