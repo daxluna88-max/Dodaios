@@ -84,6 +84,8 @@ class ChatTurn(BaseModel):
     # replayed by the UI into the "Thought for Ns" steps. None for user and
     # system lines and for replies recorded before traces were kept.
     trace: dict[str, Any] | None = None
+    # Stored typed provenance of the message (block 13, G2); None = unlabelled = UNAVAILABLE.
+    provenance: str | None = None
 
 
 class ConversationDetail(BaseModel):
@@ -197,6 +199,7 @@ def _normalized_messages(
                 text=m["text"],
                 ts_ms=int(m["timestamp_ns"]) // 1_000_000,
                 trace=m.get("trace") if m["role"] == "assistant" else None,
+                provenance=m.get("provenance"),
             )
             for m in thread["messages"]
         ]
@@ -355,6 +358,17 @@ def _voice_turn_trace(turn: Any, events: list[Any]) -> dict[str, Any] | None:
     if not started:
         return None
     return trace_from_events(events, since_ms=started, until_ms=until)
+
+
+def _seed_messages(messages: list[ChatTurn]) -> list[dict[str, Any]]:
+    """Like :func:`_seed_pairs` but each entry keeps its STORED provenance (None = unavailable),
+    so a resumed chat is never promoted to remote-replayable (block 13, G2)."""
+    out = [
+        {"role": m.role, "content": m.text, "provenance": m.provenance}
+        for m in messages
+        if m.role in _SEEDABLE_ROLES and m.text.strip()
+    ]
+    return out[-_SEED_MAX_MESSAGES:]
 
 
 def _seed_pairs(messages: list[ChatTurn]) -> list[tuple[str, str]]:
@@ -548,7 +562,7 @@ async def resume_conversation(
     seeded = 0
     brain = _optional_brain(request)
     if brain is not None and hasattr(brain, "seed_history"):
-        pairs = _seed_pairs(messages)
+        pairs = _seed_messages(messages)
         brain.seed_history(pairs)
         seeded = len(pairs)
 

@@ -114,3 +114,25 @@ Files: `dodaios/core/child_identity.py` (`forward_identity`, `enforce_identity`,
 Controls prepared, NOT RUN (`tests/test_block9_gpt_round2.py`): homonymous plugin objects named `whoami`/`wiki-list`/`click`
 refused, name-only refused, real first-party class accepted, spoofed `__module__` refused; env override conflicts raise
 for product, data dir and network policy while equal values and absent values pass.
+
+## Block 13: GPT round 3 (egress identity)
+
+Finding: `declare_tool_coverage` / `_impl_identity` verified first-party class identity for the built-in allowlist, but the
+registered (third-party) branch bound a `none` declaration to a mutable `module:qualname` STRING, so an untrusted
+implementation reproducing the same string could match a previously vetted declaration. State: **fixed** for that
+comparison (`core/egress_guard.py`); the trust in the registry that calls it, and the missing OS enforcement, are unchanged.
+
+Implementation choice: `_DECLARED_IMPL` now maps the tool name to the vetted class OBJECT. `_impl_identity(tool)` returns
+the class itself (`tool` if it is a class, else `type(tool)`), never a string. `tool_capability` grants `none` only when
+`_impl_identity(tool) is _DECLARED_IMPL[name]`. Consequences: a class with equal `__module__`/`__qualname__` strings is a
+different identity and gets `unknown`; a subclass of the vetted class does not match either; a name alone still earns
+nothing; a `none` declaration without a tool is still stored as `unknown`; re-declaring as restrictive drops the vetted
+class. The dictionary keeps the class alive, so its identity cannot be recycled by another class while declared. The
+first-party allowlist (`_first_party_identity`, class found at its qualname inside this package) is unchanged.
+
+Residual limits: whoever calls `declare_tool_coverage` is trusted to have vetted the object (the registry's job); a vetted
+class whose methods are later monkey-patched in-process is still the same identity. This is an in-process check, not
+containment: there is no OS enforcement (ADR-0060), and nothing here claims offline completion.
+
+Controls prepared, NOT RUN (`tests/test_block13_gpt_round3.py`): same-string impostor class refused while the vetted class
+passes; subclass refused; name-only refused; `_impl_identity` is the class object and not a `str`. Nothing was run.

@@ -310,10 +310,12 @@ class ProposalStore:
 
 def provenance_of(texts: list[str]) -> str:
     """``restricted`` on a positive local-only signal in the material, else ``unlabelled``."""
-    from dodaios.brain.provenance import withheld_from_remote_store
+    # Positive-evidence tagging only (block 13): "unlabelled" is NOT a permission, and the remote
+    # boundary treats it as unavailable.
+    from dodaios.brain.provenance import local_only_signal
 
     try:
-        if any(withheld_from_remote_store(t) for t in texts):
+        if any(local_only_signal(t) for t in texts):
             return "restricted"
     except Exception:  # noqa: BLE001 - a label failure must read as the safe default
         log.debug("memory proposals: provenance check failed", exc_info=True)

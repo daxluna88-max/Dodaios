@@ -237,21 +237,33 @@ def _chain_has_remote(chain: Any) -> bool:
         return True
 
 
-def _history_for_engine(history: Any, provider: str) -> Any:
-    """History for ONE engine: restricted messages are not replayed to a remote one (R6).
+def _replayable_to_remote(message: Any) -> bool:
+    """A history message may go to a remote engine only on a POSITIVE stored UNRESTRICTED label.
 
-    Local engines see everything. Unknown destination counts as remote (fails closed).
+    Block 13 (G2): a message with no label (``provenance`` missing, an old row, a seeded pair, a
+    drop-context note, a tool/system message) is UNAVAILABLE and is NOT replayable. The legacy
+    ``restricted`` flag still vetoes.
+    """
+    from dodaios.brain import provenance  # noqa: PLC0415
+
+    return not getattr(message, "restricted", False) and provenance.remote_replayable(
+        getattr(message, "provenance", None))
+
+
+def _history_for_engine(history: Any, provider: str) -> Any:
+    """History for ONE engine: only positively UNRESTRICTED messages go to a remote one (G2).
+
+    Local engines see everything (history is not promoted or rewritten). Unknown destination
+    counts as remote (fails closed).
     """
     from dodaios.brain import engine_policy  # noqa: PLC0415
 
-    if not any(getattr(m, "restricted", False) for m in history):
-        return history
     try:
         if engine_policy.destination_of(str(provider)).local:
             return history
     except Exception:  # noqa: BLE001 - unreadable means unknown means remote
         log.debug("engine locality of %s unreadable: treated as remote", provider)
-    return [m for m in history if not getattr(m, "restricted", False)]
+    return [m for m in history if _replayable_to_remote(m)]
 
 
 def _turn_is_stale() -> bool:
@@ -9768,11 +9780,18 @@ class BrainManager:
 
         # R6: the typed label (own + turn channel) decides; the text match is an extra signal.
         # UNAVAILABLE is treated as restricted: no curator note, no replay to a remote engine.
-        withheld = provenance.withheld_from_remote_store(response_text)
+        # Block 13 (G2): fail closed. The typed label is stored WITH each message; an undeclared
+        # turn is UNAVAILABLE (local engines still see it, remote engines and the curator do not).
+        stored = provenance.storage_label(response_text)
+        withheld = stored is not provenance.Provenance.UNRESTRICTED
         if use_history and not _turn_is_stale():
-            self._history.append(BrainMessage(role="user", content=user_text, restricted=withheld))
-            self._history.append(
-                BrainMessage(role="assistant", content=response_text, restricted=withheld))
+            _restricted = stored is provenance.Provenance.RESTRICTED
+            self._history.append(BrainMessage(
+                role="user", content=user_text, restricted=_restricted,
+                provenance=stored.value))
+            self._history.append(BrainMessage(
+                role="assistant", content=response_text, restricted=_restricted,
+                provenance=stored.value))
             if len(self._history) > 40:
                 self._history = self._history[-40:]
 
@@ -12598,9 +12617,17 @@ class BrainManager:
                 turn_override.receipt.mark_guard_failure("unbacked_action_claim")
 
         # 4. History + Events
+        # Block 13 (G2): typed label stored with the pair; undeclared turn = UNAVAILABLE.
+        from dodaios.brain import provenance as _prov  # noqa: PLC0415
+
+        _stored = _prov.storage_label(response_text)
         if use_history:
-            self._history.append(BrainMessage(role="user", content=user_text))
-            self._history.append(BrainMessage(role="assistant", content=response_text))
+            self._history.append(BrainMessage(
+                role="user", content=user_text,
+                restricted=_stored is _prov.Provenance.RESTRICTED, provenance=_stored.value))
+            self._history.append(BrainMessage(
+                role="assistant", content=response_text,
+                restricted=_stored is _prov.Provenance.RESTRICTED, provenance=_stored.value))
             if len(self._history) > 40:
                 self._history = self._history[-40:]
 
@@ -12612,7 +12639,7 @@ class BrainManager:
         # Fire-and-forget: the curator extracts personal facts from the turn
         # and merges them into USER.md / people/*.md in a controlled manner.
         # Runs async, does not block the response.
-        if self._curator is not None and not (
+        if self._curator is not None and _stored is _prov.Provenance.UNRESTRICTED and not (
             (profile_override := _TURN_OVERRIDE.get()) is not None
             and profile_override.tool_context.get("tool_origin") == "society"
         ):
@@ -13110,10 +13137,17 @@ class BrainManager:
                     continue
             elif not content:
                 continue
+            # Block 13 (G2): a seeded pair keeps the label stored with it; a bare (role, text)
+            # pair or a row without a label is UNAVAILABLE (never promoted to unrestricted).
+            from dodaios.brain import provenance as _prov  # noqa: PLC0415
+
+            stored = _prov.parse(item.get("provenance") if isinstance(item, dict) else None)
             seeded.append(
                 item
                 if isinstance(item, BrainMessage)
-                else BrainMessage(role=role, content=content)
+                else BrainMessage(
+                    role=role, content=content, provenance=stored.value,
+                    restricted=stored is _prov.Provenance.RESTRICTED)
             )
         return seeded[-self._HISTORY_MAX :]
 

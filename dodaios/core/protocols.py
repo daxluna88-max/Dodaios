@@ -131,6 +131,10 @@ class BrainMessage:
     images: tuple[ImageBlock, ...] = ()
     #: Derives from local-only material (typed provenance, R6): never replayed to a remote engine.
     restricted: bool = False
+    #: Typed label stored with the message (block 13, G2): ``Provenance`` value. Missing means
+    #: ``unavailable``. Only ``unrestricted`` may be replayed to a remote engine; the message
+    #: always stays available to a local one. Never promote this to keep a feature working.
+    provenance: str = "unavailable"
 
 
 #: The reasoning-effort ladder a request may ask for, ascending. Providers

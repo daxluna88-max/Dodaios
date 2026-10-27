@@ -212,16 +212,71 @@ def remote_speech_blocked(text: str) -> bool:
     return is_restricted(text)
 
 
-def withheld_from_remote_store(text: str) -> bool:
-    """Whether ``text`` must stay out of a remote engine's replay / the curator (history, notes).
+def local_only_signal(text: str) -> bool:
+    """A POSITIVE local-only / cannot-tell signal on ``text`` (block-8 meaning).
 
-    Different question from :func:`remote_speech_blocked`: speech is fail-closed on ABSENCE of a
-    label; storage keeps the block-8 meaning (blocked only on a POSITIVE restricted/unavailable
-    signal) so that ordinary chat history and memory curation are not silently disabled. Residual
-    limit: an unlabelled answer of an unmarked path is still stored (ADR-0050, block 9)."""
+    True only when a label, the turn channel or the text registry says RESTRICTED/UNAVAILABLE.
+    Absence of any signal is False here: this is a "known tainted" test, NOT a permission. Use it
+    where the question is "is there evidence of taint" (e.g. tagging a memory proposal); use
+    :func:`storage_label` / :func:`withheld_from_remote_store` where the question is "may this go
+    to a remote destination" (fail closed).
+    """
     if label_of(text) in (Provenance.RESTRICTED, Provenance.UNAVAILABLE):
         return True
     state = _turn_var.get()
     if state is not None and (state.restricted or state.unavailable):
         return True
     return is_restricted(text)
+
+
+def parse(value: Any) -> Provenance:
+    """A stored/serialised label back to :class:`Provenance`. Missing, empty, unknown or
+    malformed (an old row, a migration default, a hand-edited value) is UNAVAILABLE (block 13)."""
+    if isinstance(value, Provenance):
+        return value
+    try:
+        return Provenance(str(value).strip().lower()) if value is not None else (
+            Provenance.UNAVAILABLE)
+    except ValueError:
+        return Provenance.UNAVAILABLE
+
+
+def storage_label(text: str) -> Provenance:
+    """The label to STORE next to ``text`` that was just produced in THIS turn (block 13, G2).
+
+    RESTRICTED on any positive local-only signal. UNRESTRICTED only on a POSITIVE declaration:
+    the turn channel says so (``attach_unrestricted``), the text, when it carries a label, agrees,
+    and the text registry does not match. Everything else, including the initial undeclared state
+    of a turn that no path labelled, is UNAVAILABLE. Local engines still see UNAVAILABLE history;
+    remote ones do not (:func:`remote_replayable`).
+    """
+    if local_only_signal(text):
+        own = label_of(text)
+        state = _turn_var.get()
+        if own is Provenance.RESTRICTED or (state is not None and state.restricted) or (
+                is_restricted(text)):
+            return Provenance.RESTRICTED
+        return Provenance.UNAVAILABLE
+    state = _turn_var.get()
+    if state is None or state.label() is not Provenance.UNRESTRICTED:
+        return Provenance.UNAVAILABLE
+    if label_of(text) not in (None, Provenance.UNRESTRICTED):
+        return Provenance.UNAVAILABLE
+    return Provenance.UNRESTRICTED
+
+
+def remote_replayable(value: Any) -> bool:
+    """Whether stored material with this label may be replayed/summarised/curated by a REMOTE
+    destination. Only a stored UNRESTRICTED qualifies; a missing label is UNAVAILABLE."""
+    return parse(value) is Provenance.UNRESTRICTED
+
+
+def withheld_from_remote_store(text: str) -> bool:
+    """Whether ``text`` must stay out of a remote engine's replay / the curator (history, notes).
+
+    Block 13 (G2): FAIL CLOSED. The block-8/9 version blocked only on a positive restricted
+    signal and let an unlabelled answer through (the turn's initial undeclared state), which made
+    ordinary unlabelled paths remote-replayable. Now only :func:`storage_label` ==
+    UNRESTRICTED (a positive declaration) is storable for remote use.
+    """
+    return storage_label(text) is not Provenance.UNRESTRICTED

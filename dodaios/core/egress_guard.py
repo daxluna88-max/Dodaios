@@ -351,8 +351,10 @@ def _first_party_identity(tool: Any) -> str | None:
 
 #: Coverage declared at registration time by the tool/plugin registry (it vets the plugin first).
 _DECLARED: dict[str, str] = {}
-#: name -> class identity the registry vetted for a ``none`` declaration (F2).
-_DECLARED_IMPL: dict[str, str] = {}
+#: name -> the vetted class OBJECT of a ``none`` declaration (F2; block 13: an object, never a
+#: descriptive "module:qualname" string, which an untrusted class can reproduce). Compared with
+#: ``is``. Holding the class keeps it alive, so its identity cannot be recycled by another class.
+_DECLARED_IMPL: dict[str, type] = {}
 
 CAPABILITY_NONE = "none"  # no network, no child process: the only value that passes the profile
 CAPABILITY_NETWORK = "network"
@@ -377,6 +379,7 @@ def declare_tool_coverage(tool_name: str, capability: str, tool: Any = None) -> 
         ident = _impl_identity(tool)
         if ident is None:
             _DECLARED[name] = CAPABILITY_UNKNOWN
+            _DECLARED_IMPL.pop(name, None)
             return
         _DECLARED_IMPL[name] = ident
     else:
@@ -384,17 +387,16 @@ def declare_tool_coverage(tool_name: str, capability: str, tool: Any = None) -> 
     _DECLARED[name] = value
 
 
-def _impl_identity(tool: Any) -> str | None:
-    """Stable identity of any tool class (first-party verified form, else module:qualname)."""
+def _impl_identity(tool: Any) -> type | None:
+    """The implementation's class OBJECT (block 13), or None for no tool.
+
+    Identity is the object itself, compared with ``is``: two classes that share ``__module__`` and
+    ``__qualname__`` strings are different identities, so an untrusted implementation cannot match
+    a vetted declaration by name. A subclass is a different class and does not match either.
+    """
     if tool is None:
         return None
-    first = _first_party_identity(tool)
-    if first is not None:
-        return first
-    cls = type(tool)
-    qual = getattr(cls, "__qualname__", "")
-    mod = getattr(cls, "__module__", "")
-    return f"{mod}:{qual}" if mod and qual and "<locals>" not in qual else None
+    return tool if isinstance(tool, type) else type(tool)
 
 
 def tool_capability(tool_name: str, tool: Any = None) -> str:
@@ -416,8 +418,9 @@ def tool_capability(tool_name: str, tool: Any = None) -> str:
     ident = _first_party_identity(tool)
     if declared == CAPABILITY_NONE:
         # only for the very implementation the registry vetted
-        return CAPABILITY_NONE if _impl_identity(tool) == _DECLARED_IMPL.get(name) else (
-            CAPABILITY_UNKNOWN)
+        vetted = _DECLARED_IMPL.get(name)
+        impl = _impl_identity(tool)
+        return CAPABILITY_NONE if vetted is not None and impl is vetted else CAPABILITY_UNKNOWN
     if ident is not None:
         if ident in OFFLINE_SAFE_IMPLEMENTATIONS.get(name, frozenset()):
             return CAPABILITY_NONE
