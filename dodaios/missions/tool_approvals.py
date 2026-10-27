@@ -138,10 +138,12 @@ class MissionToolApprovalCoordinator:
         trace_id: UUID,
         *,
         approved_by: str,
+        expected_fingerprint: str | None = None,
     ) -> PendingMissionToolApproval | None:
         if not self._accepting:
             return None
-        pending = await self._take_live(mission_id, trace_id)
+        pending = await self._take_live(
+            mission_id, trace_id, expected_fingerprint=expected_fingerprint)
         if pending is None:
             return None
         if not self._accepting:
@@ -171,8 +173,10 @@ class MissionToolApprovalCoordinator:
         trace_id: UUID,
         *,
         reason: str,
+        expected_fingerprint: str | None = None,
     ) -> PendingMissionToolApproval | None:
-        pending = await self._take_live(mission_id, trace_id)
+        pending = await self._take_live(
+            mission_id, trace_id, expected_fingerprint=expected_fingerprint)
         if pending is None:
             return None
         await self._bus.publish(
@@ -188,9 +192,19 @@ class MissionToolApprovalCoordinator:
         self,
         mission_id: str,
         trace_id: UUID,
+        *,
+        expected_fingerprint: str | None = None,
     ) -> PendingMissionToolApproval | None:
         async with self._lock:
             pending = self._pending.get(trace_id)
+            if (
+                pending is not None
+                and expected_fingerprint is not None
+                and pending.call_fingerprint != expected_fingerprint
+            ):
+                # The screen decided about a different call than the one waiting now: nothing
+                # is taken, nothing is decided (the pending call stays for a fresh look).
+                return None
             if (
                 pending is None
                 or pending.mission_id != mission_id

@@ -289,3 +289,79 @@ The turn record now says what actually ran, and who it belongs to. Full event ta
   not wired to the record; `run_task` and non-`_generate` voice paths record nothing; `tools_used` / `network_tools`
   still not observed. Tests were written, not run: `tests/unit/control/test_turn_record_identity.py`,
   `tests/unit/brain/test_turn_record_dispatch.py`.
+
+## Block 10: main screen state (2026-10-27, local, NOT RUN)
+
+Plan block 9 "Stato e schermata principale". **Nothing was run**: no test, no type-check, no lint of the TS, no build,
+no app. Python was only `py_compile` + `ruff check`. The TypeScript is **not type-checked** and `dist` is **not
+rebuilt**, so none of this UI is live.
+
+### What changed
+
+- **Ordering of replies.** `GET /api/control-strip` and the STOP / resume replies now carry `boot_id` (this process),
+  `seq` (strictly increasing, taken when the snapshot starts), `etag`, `server_time` (epoch ms, display only) and the
+  echoed `client_seq`. The generation was already there. The client (`StripOrderer` in `lib/controlStrip.ts`) numbers
+  every poll (`client_seq`), sends the STOP generation it knows (`known_generation`), and applies a reply only if it is
+  from the current server process, `seq` is higher than the last applied and `generation` is not lower. STOP / resume
+  raise a barrier (replies to polls sent before it are refused) and cancel polls in flight through the query's
+  `AbortController` signal. A reply of an earlier server process is dropped; a restart starts a new epoch. An older
+  server without these fields still cannot go back across a STOP generation.
+- **Stale data.** The time of the last *successfully applied* read is kept by the orderer (a dropped reply never
+  refreshes it). `isError` is read before any data; React Query keeps the last success in `data` after a failed
+  refetch, so the screen no longer reads `data` directly. Failed read, no read, older than 9 s or `navigator.onLine ===
+  false` give state **unknown**; the last reading, if shown at all (Details), is labelled **historical** with its time
+  and carries no Approve / Deny / per-job Cancel / Resume. STOP is always rendered and enabled.
+- **Jobs.** Missions list: title (first 80 characters of the prompt), state, start time, the tool it waits on (only while a
+  decision for it is pending), engine (always "not observed": the mission header does not record one), per-job
+  Cancel as a two-step button over the existing cancel route. Computer-use runs and background agents are counts only
+  with no per-job cancel (said on screen; STOP covers them).
+- **Decisions.** Shown above everything else on the strip while pending, not only in Details. One call per click, all
+  buttons disabled while one decision is in flight, no bulk and no "always allow". The request carries the identity the
+  server gave: path `trace_id`, body `call_fingerprint` (digest of the exact call) and `generation` (STOP generation the
+  screen knew). The server now refuses a fingerprint that is not the pending one (nothing is consumed) and a generation
+  that is not the current one (409 `stale_generation`). The one-use `approval_id` is a server-side secret, deliberately not
+  in the payload, and is **not** sent by the browser: the server echoes it on its own. Both new body fields are optional,
+  so older callers behave as before.
+- **Memory.** The Memory button opens the existing memory view. Details has a Memory panel: learning on / off / unknown
+  (`[memory.learning].enabled` from the running config), page count of the visible vault (cached 30 s, `null` = unknown,
+  never 0), and three fixed statements: Archive moves a page aside and is not deletion; no per-note approval exists yet;
+  backups and search indexes are not covered. Those three are facts about this build, not observations.
+- **Real limits.** New `limits` object, built from sources, never invented: `egress_guard.status()` fields
+  `python_guard_enforced` and `os_enforcement_verified` (unreadable = `null` = "could not be read"), the last turn's
+  `network_tools` (`not_observed` unless a component recorded use), `tools_used_observed: false`, the STOP outcome of
+  `voice_playback` and `realtime_session` (`unknown` when no STOP has reported on them), and the turn record phase.
+  The screen says strict offline is enforced by the Python guard only and OS enforcement is not verified.
+- **Accessibility.** Two live regions: a `role="status"` polite one (set to `off` while the assertive one speaks) and a
+  `role="alert"` assertive one only for an error state or a pending decision. Buttons keep the design system's
+  `focus-visible` ring and `motion-safe` transitions; nothing new animates. Buttons carry specific `aria-label`s (tool or job
+  name).
+- **Strings.** 46 new keys in `control_strip` in en, de, es, pt, zh (same key set in all five). en is the source; de / es /
+  pt / zh were written by the model without a native-speaker review: treat as drafts.
+
+### Residual limits
+
+- Mission engine and the tool a running mission is executing are not recorded anywhere the strip can read; the tool
+  appears only for a mission with a pending decision.
+- A mission cancel still ends in the existing route (`worker_killed` only means a cancel request reached the run task).
+- The strip decides staleness with the browser clock and its own receipt time; `server_time` is shown for reference
+  only. Clock skew is therefore harmless but the "as of" server time is not displayed yet.
+- `seq` is per process and in memory; two server processes behind one address would interleave (not a supported setup).
+- A dropped out-of-order reply is silent; the next poll (3 s) supplies the state.
+- The memory count walks the vault (cached, 2 s timeout); it counts visible pages, not "things remembered".
+- No per-note approval, no real Delete, backups / indexes untouched (unchanged from the decision above).
+- Voice and realtime stop stay `unknown` until a STOP reports them; `confirmed` there still means this process holds no
+  stream, not that sound stopped at the speaker.
+- Layout of the nested Details grid was written by hand, not run through prettier.
+
+### Controls prepared, NOT RUN
+
+Python (written, only `py_compile` + `ruff check` on the touched files; one pre-existing `S608` in `missions_routes.py` is
+not from this block): `tests/unit/ui/web/test_control_strip_block10.py` (ordering fields, STOP reply newer than an earlier
+read, limits from the guard and unknown when unreadable, memory limits, fingerprint mismatch decides nothing, stale
+generation refused). Frontend (vitest, written, not run): `src/lib/controlStrip.test.ts` (orderer, barrier, restart epoch,
+`viewOf`), `src/components/ControlStrip.block10.test.tsx` (decision identity, assertive alert, no controls on historical
+data, per-job cancel, memory panel, limits). The existing `ControlStrip.test.tsx` was not edited and should still hold, but
+was not run. PC checklist still owed: kill the server while the page is open (state must go unknown, controls vanish);
+slow GET across a STOP; approve with a stale tab; screen reader behaviour of the two live regions; read the five
+translations.
+

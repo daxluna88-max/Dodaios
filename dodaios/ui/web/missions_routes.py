@@ -203,6 +203,24 @@ class DenyToolApprovalBody(BaseModel):
     """Optional audit reason for denying one paused supervisor tool call."""
 
     reason: str = "user_denied"
+    #: Identity of the call the owner looked at (block 10); a mismatch decides nothing.
+    call_fingerprint: str | None = None
+    #: STOP generation the screen knew; an older one is refused (it saw a pre-STOP state).
+    generation: int | None = None
+
+
+class ApproveToolApprovalBody(BaseModel):
+    """Optional identity of the call the owner looked at (block 10, ADR-0058)."""
+
+    call_fingerprint: str | None = None
+    generation: int | None = None
+
+
+def _require_known_generation(generation: int | None) -> None:
+    """A decision made on a screen that has not seen the current STOP generation is refused."""
+    if generation is not None and generation != get_stop_controller().generation:
+        raise HTTPException(
+            status_code=409, detail={"code": "stale_generation", "reason": "stale_generation"})
 
 
 # ---------------------------------------------------------------------------
@@ -483,13 +501,16 @@ async def approve_mission_tool_call(
     mission_id: str,
     trace_id: UUID,
     request: Request,
+    body: ApproveToolApprovalBody | None = None,
 ) -> dict[str, Any]:
     """Approve and resume exactly one paused mission tool call."""
     _require_door()
+    _require_known_generation(body.generation if body is not None else None)
     pending = await _require_tool_approvals(request).approve(
         mission_id,
         trace_id,
         approved_by="user",
+        expected_fingerprint=body.call_fingerprint if body is not None else None,
     )
     if pending is None:
         raise HTTPException(
@@ -514,10 +535,12 @@ async def deny_mission_tool_call(
 ) -> dict[str, Any]:
     """Deny exactly one paused mission tool call without running it."""
     reason = body.reason.strip() or "user_denied"
+    _require_known_generation(body.generation)
     pending = await _require_tool_approvals(request).deny(
         mission_id,
         trace_id,
         reason=reason[:200],
+        expected_fingerprint=body.call_fingerprint,
     )
     if pending is None:
         raise HTTPException(

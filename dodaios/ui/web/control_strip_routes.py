@@ -22,11 +22,14 @@ flipped but whose worker was not confirmed killed is not counted as stopped.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
+import time
+import uuid
 from types import SimpleNamespace
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from dodaios.control.stop import (
     StopController,
@@ -43,6 +46,18 @@ router = APIRouter(prefix="/api", tags=["control"])
 
 _BG_PREFIX = "jarvis-agent-"
 _INSTALLED_ATTR = "stop_subsystems_installed"
+
+# -- ordering of responses (block 10) ---------------------------------------------------------
+# Every payload carries where it sits in time, so a client can drop a reply that arrives after a
+# newer one: ``boot_id`` (this process; a restart restarts ``seq``), ``seq`` (strictly increasing
+# per process, taken when the snapshot STARTS), ``generation`` (the STOP generation) and
+# ``server_time`` (epoch ms, for display only: clocks of server and browser may differ).
+_BOOT_ID = uuid.uuid4().hex
+_SEQ = itertools.count(1)
+_MEMORY_COUNT_TTL_S = 30.0
+_MEMORY_COUNT_TIMEOUT_S = 2.0
+_memory_count_cache: dict[str, tuple[float, int | None]] = {}
+_TERMINAL_VOICE_PARTS = ("voice_playback", "realtime_session")
 
 
 def _background_tasks() -> list[asyncio.Task[Any]]:
@@ -233,9 +248,97 @@ async def _pending_decisions(request: Request, mission_ids: list[str]) -> list[d
     return out
 
 
-async def _snapshot(request: Request) -> dict[str, Any]:
+async def _mission_rows(mgr: Any, missions: list[tuple[str, str, str]],
+                        tool_by_mission: dict[str, str]) -> list[dict[str, Any]]:
+    """Per running mission: what it is, since when, the tool it waits on. Anything the store
+    does not record (the engine of a mission) is reported as not observed, never guessed."""
+    headers: dict[str, dict[str, Any]] = {}
+    try:
+        headers = {h["id"]: h for h in await mgr.store.list_missions(limit=200)}
+    except Exception:  # noqa: BLE001 - missing headers leave started/title unknown
+        log.debug("control strip: the mission headers could not be read", exc_info=True)
+    rows: list[dict[str, Any]] = []
+    for mission_id, prompt, state in missions:
+        header = headers.get(mission_id)
+        rows.append({
+            "id": mission_id,
+            "state": state,
+            "title": (prompt or "")[:80] or None,
+            "started_ms": header["created_ms"] if header is not None else None,
+            "tool": tool_by_mission.get(mission_id),
+            "engine": None,  # the mission header does not record an engine: not observed
+        })
+    return rows
+
+
+async def _memory_count(request: Request) -> int | None:
+    """Pages in the visible vault (archive excluded), cached briefly; None = could not be read."""
+    try:
+        from dodaios.ui.web.wiki_routes import (  # noqa: PLC0415
+            _resolve_vault_root,
+            _scan_visible_pages,
+        )
+
+        root = _resolve_vault_root(request)
+    except Exception:  # noqa: BLE001
+        return None
+    if root is None:
+        return None
+    key = str(root)
+    cached = _memory_count_cache.get(key)
+    if cached is not None and time.monotonic() - cached[0] < _MEMORY_COUNT_TTL_S:
+        return cached[1]
+    count: int | None
+    try:
+        count = len(await asyncio.wait_for(_scan_visible_pages(root), _MEMORY_COUNT_TIMEOUT_S))
+    except Exception:  # noqa: BLE001 - an unreadable vault is unknown, not zero
+        count = None
+    _memory_count_cache[key] = (time.monotonic(), count)
+    return count
+
+
+async def _memory_payload(request: Request) -> dict[str, Any]:
+    cfg = getattr(request.app.state, "config", None)
+    learning = getattr(getattr(getattr(cfg, "memory", None), "learning", None), "enabled", None)
+    return {
+        "learning_enabled": learning if isinstance(learning, bool) else None,
+        "count": await _memory_count(request),
+        # Facts about this build, not observations: the vault offers archive (moved aside,
+        # restorable), there is no per-note approval flow, and nothing here reaches backups or
+        # search / embedding indexes.
+        "archive_is_deletion": False,
+        "per_note_approval": False,
+        "backups_and_indexes_covered": False,
+    }
+
+
+def _limits_payload(record: Any, last: Any) -> dict[str, Any]:
+    """What is NOT observed, from the sources that know (never invented)."""
+    guard: dict[str, Any] = {}
+    try:
+        from dodaios.core import egress_guard  # noqa: PLC0415
+
+        guard = egress_guard.status()
+    except Exception:  # noqa: BLE001 - an unreadable guard is unknown
+        log.debug("control strip: the egress guard status could not be read", exc_info=True)
+    python_guard = guard.get("python_guard_enforced")
+    os_verified = guard.get("os_enforcement_verified")
+    outcomes = {r.name: r.outcome for r in last.results} if last is not None else {}
+    return {
+        "network_tools": getattr(record, "network_tools", "not_observed") if record is not None
+        else "not_observed",
+        "python_guard_enforced": python_guard if isinstance(python_guard, bool) else None,
+        "os_enforcement_verified": os_verified if isinstance(os_verified, bool) else None,
+        "voice_stop": {name: outcomes.get(name, "unknown") for name in _TERMINAL_VOICE_PARTS},
+        "turn_phase": getattr(record, "lifecycle", None) if record is not None else None,
+        "tools_used_observed": False,
+    }
+
+
+async def _snapshot(request: Request, client_seq: int | None = None) -> dict[str, Any]:
     from dodaios.harness import cu_run_registry  # noqa: PLC0415
 
+    seq = next(_SEQ)  # taken at the START: a reply built from older reads has the lower number
     controller = _install(request)
     app_state = request.app.state
     mgr = getattr(app_state, "mission_manager", None)
@@ -266,7 +369,17 @@ async def _snapshot(request: Request) -> dict[str, Any]:
     brain = _brain(request)
     ledger = getattr(brain, "_turn_ledger_obj", None)
     record = ledger.last() if ledger is not None else None
+    tool_by_mission: dict[str, str] = {}
+    for d in decisions:
+        tool_by_mission.setdefault(str(d.get("mission_id")), str(d.get("tool_name")))
+    mission_rows = (await _mission_rows(mgr, missions, tool_by_mission)
+                    if missions_ok and mgr is not None else [])
     return {
+        "boot_id": _BOOT_ID,
+        "seq": seq,
+        "etag": f"{_BOOT_ID[:8]}-{controller.generation}-{seq}",
+        "server_time": int(time.time() * 1000),
+        "client_seq": client_seq,
         "state": strip.summary,
         "not_confirmed": list(strip.not_confirmed),
         "door_open": controller.door_open,
@@ -278,11 +391,13 @@ async def _snapshot(request: Request) -> dict[str, Any]:
         },
         "engine": _engine_payload(record),
         "jobs": {
-            "missions": [{"id": m[0], "state": m[2]} for m in missions],
+            "missions": mission_rows,
             "computer_use_runs": cu_n,
             "background_agents": bg_n,
         },
         "approvals": decisions,
+        "memory": await _memory_payload(request),
+        "limits": _limits_payload(record, last),
         "stop": _report_payload(last) if controller.state != "running" else None,
     }
 
@@ -331,8 +446,12 @@ def _report_payload(report: Any) -> dict[str, Any] | None:
 
 
 @router.get("/control-strip", summary="State, engine, jobs and decisions for the main screen")
-async def get_control_strip(request: Request) -> dict[str, Any]:
-    return await _snapshot(request)
+async def get_control_strip(
+    request: Request,
+    client_seq: int | None = Query(default=None, ge=0),
+) -> dict[str, Any]:
+    """``client_seq`` is echoed so the screen can match a reply to the request that asked."""
+    return await _snapshot(request, client_seq)
 
 
 @router.post("/stop", summary="Stop this product: door first, then every part on its own")

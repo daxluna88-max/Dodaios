@@ -7,6 +7,11 @@
  * the computer (inference and network/tools are two separate lines); call archiving "deletion";
  * approve in bulk or "always allow". STOP is one click, no confirmation, first in the focus order.
  * Resuming is a separate, deliberate button.
+ *
+ * Block 10: what is on screen is the last reading that was ORDERED and SUCCESSFUL (see
+ * `lib/controlStrip.ts`). When there is none, or it is old, or the browser is offline, the state
+ * is "unknown" and the last reading, if shown at all, is labelled historical and carries no
+ * Approve / Deny / Cancel / Resume. STOP is always available.
  */
 import { useEffect, useState } from "react";
 import { Square } from "lucide-react";
@@ -15,13 +20,15 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n";
 import {
-  isStale,
+  useCancelJob,
   useControlStrip,
   useDecide,
   useResume,
   useStop,
   type ControlStrip as Strip,
   type Flow,
+  type MissionJob,
+  type PendingDecision,
   type StripSummary,
 } from "@/lib/controlStrip";
 import { useEventStore } from "@/store/events";
@@ -60,15 +67,14 @@ function useNow(intervalMs: number): number {
 
 export function ControlStrip() {
   const t = useT();
-  const { data: fetched, isError, dataUpdatedAt } = useControlStrip();
-  const now = useNow(1000);
-  const stale = isStale({ hasData: !!fetched, failed: isError, updatedAt: dataUpdatedAt, now });
-  // After a lost connection the last reading is kept for the "last seen" note only: it is never
-  // shown as the current state, and it cannot be acted on (no Approve / Deny / Resume from it).
-  const data = stale ? undefined : fetched;
+  const { current: data, historical, lastOkAt, failed } = useControlStrip();
+  // Re-render every second so a reading that stops arriving is noticed without any new data.
+  useNow(1000);
+  const offline = typeof navigator !== "undefined" && navigator.onLine === false;
   const stop = useStop();
   const resume = useResume();
   const decide = useDecide();
+  const cancel = useCancelJob();
   const setActiveSection = useEventStore((s) => s.setActiveSection);
   const pushToast = useEventStore((s) => s.pushToast);
   const [open, setOpen] = useState(false);
@@ -76,11 +82,26 @@ export function ControlStrip() {
   const stoppedDoor = data ? !data.door_open : false;
   const level = (key: "active" | "idle" | "unknown") => t(`control_strip.level_${key}`);
   const count = (n: number | null) => (n === null ? level("unknown") : String(n));
+  const at = (ms: number) => new Date(ms).toLocaleTimeString();
+  const pendingCount = data ? data.approvals.length : 0;
+  // Assertive only for errors and decisions waiting; everything else is polite.
+  const assertive = !!data && (ASSERTIVE.has(data.state) || pendingCount > 0);
+  const shown = data ?? historical;
 
   const onStop = () =>
     stop.mutate(undefined, {
       onError: (e) => pushToast("error", t("control_strip.error_stop").replace("{reason}", e.message)),
     });
+  const onDecide = (decision: "approve" | "deny", d: PendingDecision) =>
+    decide.mutate(
+      { decision, d, generation: data?.generation ?? 0 },
+      { onError: (e) => pushToast("error", t("control_strip.error_decide").replace("{reason}", e.message)) },
+    );
+  const onCancel = (m: MissionJob) =>
+    cancel.mutate(
+      { missionId: m.id },
+      { onError: (e) => pushToast("error", t("control_strip.error_cancel").replace("{reason}", e.message)) },
+    );
 
   return (
     <section
@@ -123,7 +144,7 @@ export function ControlStrip() {
 
         <div
           role="status"
-          aria-live={data && ASSERTIVE.has(data.state) ? "assertive" : "polite"}
+          aria-live={assertive ? "off" : "polite"}
           className="flex flex-wrap items-center gap-2"
         >
           {data ? (
@@ -145,16 +166,26 @@ export function ControlStrip() {
               <Badge variant="warning" data-testid="control-strip-state">
                 {t("control_strip.state_unknown")}
               </Badge>
-              {fetched && (
+              {historical ? (
                 <span className="text-sm text-muted-foreground" data-testid="control-strip-stale">
-                  {t("control_strip.stale_note").replace("{time}", new Date(dataUpdatedAt).toLocaleTimeString())}
+                  {t("control_strip.stale_note").replace("{time}", at(lastOkAt))}
+                </span>
+              ) : (
+                <span className="text-sm text-muted-foreground">
+                  {t(failed ? "control_strip.error_load" : "control_strip.never_read")}
                 </span>
               )}
-              {!fetched && isError && (
-                <span className="text-sm text-muted-foreground">{t("control_strip.error_load")}</span>
-              )}
+              {offline && <span className="text-sm text-muted-foreground">{t("control_strip.offline_note")}</span>}
             </>
           )}
+        </div>
+        {/* A separate assertive region: only an error or a decision waiting interrupts. */}
+        <div role="alert" aria-live="assertive" className="sr-only" data-testid="control-strip-alert">
+          {assertive && data
+            ? pendingCount > 0
+              ? t("control_strip.approvals_alert").replace("{n}", String(pendingCount))
+              : t(`control_strip.state_${data.state}`)
+            : ""}
         </div>
 
         {data && (
@@ -179,40 +210,194 @@ export function ControlStrip() {
         )}
 
         <div className="ml-auto flex items-center gap-2">
-          <Button type="button" variant="ghost" size="sm" onClick={() => setActiveSection("memory")}>
-            {t("control_strip.memory_title")}
-          </Button>
           <Button
             type="button"
             variant="ghost"
             size="sm"
-            aria-expanded={open}
-            aria-controls="control-strip-details"
-            onClick={() => setOpen(!open)}
+            title={t("control_strip.memory_open")}
+            onClick={() => setActiveSection("memory")}
+            data-testid="control-strip-memory"
           >
-            {t(open ? "control_strip.details_hide" : "control_strip.details_show")}
+            {t("control_strip.memory_title")}
           </Button>
+          {shown && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-expanded={open}
+              aria-controls="control-strip-details"
+              onClick={() => setOpen(!open)}
+            >
+              {t(open ? "control_strip.details_hide" : "control_strip.details_show")}
+            </Button>
+          )}
         </div>
       </div>
 
-      {open && data && <Details strip={data} onDecide={(decision, d) => decide.mutate({ decision, d })} />}
+      {/* Decisions come before anything else on the strip while one is pending. */}
+      {data && pendingCount > 0 && (
+        <Approvals
+          approvals={data.approvals}
+          busy={decide.isPending}
+          onDecide={onDecide}
+        />
+      )}
+
+      {open && shown && (
+        <Details
+          strip={shown}
+          historicalAt={data ? null : lastOkAt}
+          busy={cancel.isPending}
+          onCancel={onCancel}
+          onMemory={() => setActiveSection("memory")}
+          at={at}
+        />
+      )}
     </section>
+  );
+}
+
+function Approvals({
+  approvals,
+  busy,
+  onDecide,
+}: {
+  approvals: PendingDecision[];
+  busy: boolean;
+  onDecide: (decision: "approve" | "deny", d: PendingDecision) => void;
+}) {
+  const t = useT();
+  return (
+    <div className="flex flex-col gap-1 text-sm" data-testid="control-strip-approvals">
+      <h3 className="font-medium">{t("control_strip.approvals_title")}</h3>
+      <p className="text-muted-foreground">{t("control_strip.approvals_one_at_a_time")}</p>
+      <ul className="flex flex-col gap-2">
+        {approvals.map((d) => (
+          <li key={d.trace_id} className="flex flex-col gap-1 rounded-md border border-border p-2">
+            <span className="font-medium">{d.tool_name}</span>
+            <span className="text-muted-foreground">
+              {t("control_strip.approvals_from").replace("{mission}", d.mission_id)}
+              {d.risk_tier ? ` · ${d.risk_tier}` : ""}
+            </span>
+            {d.args_preview && <span className="break-all text-muted-foreground">{d.args_preview}</span>}
+            <span className="flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="default"
+                disabled={busy}
+                aria-label={t("control_strip.approve_label").replace("{tool}", d.tool_name)}
+                onClick={() => onDecide("approve", d)}
+              >
+                {t("control_strip.approve")}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                aria-label={t("control_strip.deny_label").replace("{tool}", d.tool_name)}
+                onClick={() => onDecide("deny", d)}
+              >
+                {t("control_strip.deny")}
+              </Button>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Cancel is two steps (arm, then confirm): a mission cancel cannot be undone. */
+function JobRow({
+  job,
+  controls,
+  busy,
+  onCancel,
+  at,
+}: {
+  job: MissionJob;
+  controls: boolean;
+  busy: boolean;
+  onCancel: (m: MissionJob) => void;
+  at: (ms: number) => string;
+}) {
+  const t = useT();
+  const [armed, setArmed] = useState(false);
+  const name = job.title || t("control_strip.jobs_untitled");
+  return (
+    <li className="flex flex-col gap-0.5" data-testid="control-strip-job">
+      <span className="font-medium">{name}</span>
+      <span className="text-muted-foreground">
+        {job.state}
+        {job.started_ms ? ` · ${t("control_strip.jobs_started").replace("{time}", at(job.started_ms))}` : ""}
+      </span>
+      <span className="text-muted-foreground">
+        {job.tool
+          ? t("control_strip.jobs_tool").replace("{tool}", job.tool)
+          : t("control_strip.jobs_tool_unknown")}
+        {" · "}
+        {job.engine ? job.engine : t("control_strip.jobs_engine_not_observed")}
+      </span>
+      {controls && (
+        <span>
+          <Button
+            type="button"
+            size="sm"
+            variant={armed ? "destructive" : "outline"}
+            disabled={busy}
+            aria-label={t("control_strip.jobs_cancel_label").replace("{name}", name)}
+            onClick={() => {
+              if (!armed) {
+                setArmed(true);
+                return;
+              }
+              setArmed(false);
+              onCancel(job);
+            }}
+            onBlur={() => setArmed(false)}
+          >
+            {t(armed ? "control_strip.jobs_cancel_confirm" : "control_strip.jobs_cancel")}
+          </Button>
+        </span>
+      )}
+    </li>
   );
 }
 
 function Details({
   strip,
-  onDecide,
+  historicalAt,
+  busy,
+  onCancel,
+  onMemory,
+  at,
 }: {
   strip: Strip;
-  onDecide: (decision: "approve" | "deny", d: Strip["approvals"][number]) => void;
+  /** Set when `strip` is NOT current: browser time of its reading; no controls are rendered. */
+  historicalAt: number | null;
+  busy: boolean;
+  onCancel: (m: MissionJob) => void;
+  onMemory: () => void;
+  at: (ms: number) => string;
 }) {
   const t = useT();
   const none = t("control_strip.flows_none");
   const e = strip.engine;
+  const controls = historicalAt === null;
   const jobsTotal = strip.jobs.missions.length + strip.jobs.computer_use_runs + strip.jobs.background_agents;
+  const learning = strip.memory?.learning_enabled;
   return (
-    <div id="control-strip-details" className="grid gap-4 text-sm md:grid-cols-3" data-testid="control-strip-details">
+    <div id="control-strip-details" className="flex flex-col gap-3 text-sm" data-testid="control-strip-details">
+      {historicalAt !== null && (
+        <p className="rounded-md border border-warning/40 p-2 text-warning" data-testid="control-strip-historical">
+          <span className="font-medium">{t("control_strip.historical_label")}. </span>
+          {t("control_strip.historical_banner").replace("{time}", at(historicalAt))}
+        </p>
+      )}
+      <div className="grid gap-4 md:grid-cols-3">
       <div className="flex flex-col gap-1">
         <h3 className="font-medium">{t("control_strip.engine_title")}</h3>
         {e.state === "running" && <p className="text-muted-foreground">{t("control_strip.engine_provisional")}</p>}
@@ -255,11 +440,9 @@ function Details({
         {jobsTotal === 0 ? (
           <p className="text-muted-foreground">{t("control_strip.jobs_none")}</p>
         ) : (
-          <ul>
+          <ul className="flex flex-col gap-2">
             {strip.jobs.missions.map((m) => (
-              <li key={m.id}>
-                {t("control_strip.jobs_missions")} · {m.state}
-              </li>
+              <JobRow key={m.id} job={m} controls={controls} busy={busy} onCancel={onCancel} at={at} />
             ))}
             {strip.jobs.computer_use_runs > 0 && (
               <li>
@@ -272,6 +455,9 @@ function Details({
               </li>
             )}
           </ul>
+        )}
+        {(strip.jobs.computer_use_runs > 0 || strip.jobs.background_agents > 0) && (
+          <p className="text-muted-foreground">{t("control_strip.jobs_no_cancel")}</p>
         )}
         {strip.stop && (
           <>
@@ -287,29 +473,96 @@ function Details({
         )}
       </div>
 
-      <div className="flex flex-col gap-1">
-        <h3 className="font-medium">{t("control_strip.approvals_title")}</h3>
-        {strip.approvals.length === 0 ? (
-          <p className="text-muted-foreground">{t("control_strip.approvals_none")}</p>
+      <div className="flex flex-col gap-1" data-testid="control-strip-memory-panel">
+        <h3 className="font-medium">{t("control_strip.memory_title")}</h3>
+        {strip.memory ? (
+          <>
+            <p>
+              <span className="font-medium">{t("control_strip.memory_learning")}: </span>
+              {t(
+                learning === true
+                  ? "control_strip.memory_learning_on"
+                  : learning === false
+                    ? "control_strip.memory_learning_off"
+                    : "control_strip.memory_learning_unknown",
+              )}
+            </p>
+            <p>
+              <span className="font-medium">{t("control_strip.memory_count")}: </span>
+              {strip.memory.count === null ? t("control_strip.level_unknown") : String(strip.memory.count)}
+            </p>
+            <ul className="list-disc pl-4 text-muted-foreground">
+              <li>{t("control_strip.memory_limit_archive")}</li>
+              <li>{t("control_strip.memory_limit_approval")}</li>
+              <li>{t("control_strip.memory_limit_backups")}</li>
+            </ul>
+          </>
         ) : (
-          <ul className="flex flex-col gap-2">
-            {strip.approvals.map((d) => (
-              <li key={d.trace_id} className="flex flex-col gap-1 rounded-md border border-border p-2">
-                <span className="font-medium">{d.tool_name}</span>
-                {d.args_preview && <span className="break-all text-muted-foreground">{d.args_preview}</span>}
-                <span className="flex gap-2">
-                  <Button type="button" size="sm" variant="default" onClick={() => onDecide("approve", d)}>
-                    {t("control_strip.approve")}
-                  </Button>
-                  <Button type="button" size="sm" variant="outline" onClick={() => onDecide("deny", d)}>
-                    {t("control_strip.deny")}
-                  </Button>
-                </span>
-              </li>
-            ))}
-          </ul>
+          <p className="text-muted-foreground">{t("control_strip.level_unknown")}</p>
         )}
+        <span>
+          <Button type="button" size="sm" variant="outline" onClick={onMemory}>
+            {t("control_strip.memory_open")}
+          </Button>
+        </span>
       </div>
+      </div>
+
+      {strip.approvals.length === 0 && (
+        <div className="flex flex-col gap-1">
+          <h3 className="font-medium">{t("control_strip.approvals_title")}</h3>
+          <p className="text-muted-foreground">{t("control_strip.approvals_none")}</p>
+        </div>
+      )}
+      {strip.approvals.length > 0 && !controls && (
+        <p className="text-muted-foreground">
+          {t("control_strip.approvals_alert").replace("{n}", String(strip.approvals.length))}
+        </p>
+      )}
+
+      <Limits strip={strip} />
+    </div>
+  );
+}
+
+/** What is NOT observed, straight from the server's `limits` (never filled in by the screen). */
+function Limits({ strip }: { strip: Strip }) {
+  const t = useT();
+  const l = strip.limits;
+  if (!l) return null;
+  const guard =
+    l.python_guard_enforced === true
+      ? "limits_guard_on"
+      : l.python_guard_enforced === false
+        ? "limits_guard_off"
+        : "limits_guard_unknown";
+  const os =
+    l.os_enforcement_verified === true
+      ? "limits_os_verified"
+      : l.os_enforcement_verified === false
+        ? "limits_os_not_verified"
+        : "limits_os_unknown";
+  return (
+    <div className="flex flex-col gap-1" data-testid="control-strip-limits">
+      <h3 className="font-medium">{t("control_strip.limits_title")}</h3>
+      <ul className="list-disc pl-4 text-muted-foreground">
+        <li>{l.network_tools === "observed" ? t("control_strip.network_observed") : t("control_strip.limits_network")}</li>
+        {!l.tools_used_observed && <li>{t("control_strip.limits_tools")}</li>}
+        <li>{t(`control_strip.${guard}`)}</li>
+        <li>{t(`control_strip.${os}`)}</li>
+        {Object.entries(l.voice_stop).map(([part, outcome]) => (
+          <li key={part}>
+            {t("control_strip.limits_voice")
+              .replace("{part}", t(`control_strip.part_${part}`))
+              .replace("{outcome}", t(`control_strip.outcome_${outcome ?? "unknown"}`))}
+          </li>
+        ))}
+        <li>
+          {l.turn_phase
+            ? t("control_strip.limits_phase").replace("{phase}", t(`control_strip.phase_${l.turn_phase}`))
+            : t("control_strip.limits_phase_none")}
+        </li>
+      </ul>
     </div>
   );
 }
