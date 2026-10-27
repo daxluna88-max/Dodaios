@@ -5426,7 +5426,7 @@ def _apply_instance_overrides(data: dict[str, Any]) -> dict[str, Any]:
     instance passes through untouched.
     """
     identity = current_instance()
-    if identity.is_default:
+    if identity.port_offset == 0:
         return data
     for section, field, default in _INSTANCE_PORT_FIELDS:
         table = data.get(section)
@@ -5437,6 +5437,10 @@ def _apply_instance_overrides(data: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(base, int) or isinstance(base, bool):
             base = default
         table[field] = identity.port(base)
+    if identity.is_default:
+        # A product launch (``--product``) shifts ports only; its data directory is already its
+        # own (``paths.user_data_dir``), and ``DATA_DIR`` here is the checkout's.
+        return data
     memory = data.get("memory")
     if not isinstance(memory, dict):
         memory = {}

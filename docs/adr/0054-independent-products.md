@@ -23,13 +23,21 @@ other's data, would defeat the Work policy (ADR-0049).
 - a per-product launch lock: a second launch of the same product is refused, the other product
   runs alongside.
 
+- its own ports: every configured port (`ui.admin_api_port` 47821, `mcp_server.http_port` 47822,
+  `telemetry.metrics_port` 9090) sits above its configured base by `PRODUCT_PORT_OFFSETS`
+  (`dodaios.core.instance`): Work +1000, Consumer +2000, so 48821 / 49821 for the admin port. The
+  offset is read from `JARVIS_PRODUCT_ACTIVE`, so children and the restart chain bind the same
+  ports. It stacks with the dev instance's +100 and no combination collides (unit-tested). The
+  unscoped app keeps 47821 and the desktop focus probe no longer falls back to it from a product.
+
 The environment (`JARVIS_PRODUCT`, data dir, config, credential service) is inherited by child
 processes. An unknown product name is an error, not a default.
 
 ## Consequences / limits
 
-- Not verified: ports (both products still use the same default ports, so running them at the
-  same time needs a port override), OS identity (window title, icon, Windows AppUserModelID,
+- Not verified: the two products running side by side on a real machine (checklist B04 of
+  Jarvis-di-dax issue 16, NOT RUN), other fixed ports not listed above (voice worker, avatar
+  server), OS identity (window title, icon, Windows AppUserModelID,
   autostart entries), installers, signing, upgrades of a real installed build, macOS/Windows.
 - `JARVIS_PRODUCT` set by hand without `--product` still selects the policy but shares the
   vault and directory; use the flag.
