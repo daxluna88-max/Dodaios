@@ -3839,6 +3839,32 @@ class BrainManager:
             runtime = self._style_runtime_obj = StyleRuntime()
         return runtime
 
+    def _turn_ledger(self) -> Any:
+        """What the latest turn used (engines, categories), for the main screen's control strip."""
+        from dodaios.control.turn_record import TurnLedger  # noqa: PLC0415
+
+        ledger = getattr(self, "_turn_ledger_obj", None)
+        if ledger is None:
+            ledger = self._turn_ledger_obj = TurnLedger()
+        return ledger
+
+    def _record_single_engine_turn(self, trace_id: UUID) -> None:
+        """The main engine of an ordinary turn, for the control strip. Locality is the endpoint's
+        (loopback only); tools and network use are not observed here and stay 'not observed'."""
+        from dodaios.brain import engine_policy  # noqa: PLC0415
+        from dodaios.control import turn_record as tr  # noqa: PLC0415
+
+        try:
+            provider = self.active_provider
+            locality = "local" if engine_policy.destination_of(provider).local else "remote"
+            planned = () if locality == "local" else (tr.Flow("question", provider),)
+            self._turn_ledger().record(tr.TurnRecord(
+                turn_id=str(trace_id), engines=(tr.EngineUse(provider, "main", locality),),
+                planned=planned, observability="declared",
+            ))
+        except Exception:  # noqa: BLE001 - the screen's record never breaks a turn
+            log.debug("turn record could not be written", exc_info=True)
+
     def personality_snapshot(self) -> tuple[Any, Any, bool]:
         """(effective profile, mood state now, adaptation on) for the settings screen."""
         from dodaios.brain import engine_policy  # noqa: PLC0415
@@ -9474,6 +9500,7 @@ class BrainManager:
                 turn_id=str(trace_id),
                 # The owner's style applies to the FINAL answer only: reviewers stay neutral.
                 style_instruction=self._style_instruction(compact=True),
+                ledger=self._turn_ledger(),
             )
         except Exception as exc:  # noqa: BLE001 - the person gets a reason, never a crashed turn
             log.warning("multi-engine turn failed: %s", type(exc).__name__)
@@ -10662,6 +10689,7 @@ class BrainManager:
                 use_history=use_history, trace_id=turn_trace_id,
             )
             return multi_reply
+        self._record_single_engine_turn(turn_trace_id)
 
         society_reply = await self._run_society_inventory_fast_path(
             user_text, trace_id=turn_trace_id,

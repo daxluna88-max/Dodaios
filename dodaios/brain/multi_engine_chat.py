@@ -118,8 +118,60 @@ def _build(registry: Any, spec: Any, branch_id: str, refusals: list[str]) -> Bra
     )
 
 
+#: The gate calls the question ``task``; the screen's fixed list calls it ``question``.
+_CATEGORY_NAMES = {"task": "question"}
+
+
+def _locality(provider: str) -> str:
+    try:
+        return "local" if engine_policy.destination_of(provider).local else "remote"
+    except Exception:  # noqa: BLE001 - an unreadable endpoint is an unknown one, not a crash
+        log.debug("locality of %s could not be told", provider, exc_info=True)
+        return "unknown"
+
+
+def _record_turn(
+    ledger: Any, turn_id: str, branches: list[Branch], results: list[Any],
+    synthesizer: Branch | None, synth: Any,
+) -> None:
+    """What this turn used, for the main screen: engines, planned and attempted categories.
+
+    From the orchestrator's own egress records (metadata only), so it is "declared", not seen on
+    the wire. A fault here must never touch the answer.
+    """
+    if ledger is None:
+        return
+    try:
+        from dodaios.control import turn_record as tr  # noqa: PLC0415
+
+        engines = [tr.EngineUse(b.provider, "reviewer", _locality(b.provider)) for b in branches]
+        if synthesizer is not None:
+            engines.append(tr.EngineUse(synthesizer.provider, "synthesizer",
+                                        _locality(synthesizer.provider)))
+        planned = tuple(
+            tr.Flow(_CATEGORY_NAMES["task"], b.provider)
+            for b in branches if _locality(b.provider) != "local"
+        )
+        egress = [r.egress for r in results if getattr(r, "egress", None) is not None]
+        if synth is not None and getattr(synth, "egress", None) is not None:
+            egress.append(synth.egress)
+        attempted = tuple(
+            tr.Flow(_CATEGORY_NAMES.get(c, c), e.destination)
+            for e in egress for c in e.categories
+        )
+        refused = tuple(sorted({r.provider for r in results if r.status == "refused"}))
+        ledger.record(tr.TurnRecord(
+            turn_id=turn_id, engines=tuple(engines),
+            planned=tr.sanitize_flows(planned), attempted=tr.sanitize_flows(attempted),
+            observability="declared", refused=refused,
+        ))
+    except Exception:  # noqa: BLE001 - the screen's record never breaks a turn
+        log.debug("turn record could not be written", exc_info=True)
+
+
 async def ask(
-    task: str, config: Any, registry: Any, *, turn_id: str, style_instruction: str = ""
+    task: str, config: Any, registry: Any, *, turn_id: str, style_instruction: str = "",
+    ledger: Any = None,
 ) -> MultiEngineOutcome:
     """Run the configured engines on ``task`` and write one final answer.
 
@@ -152,6 +204,7 @@ async def ask(
     refusals += [f"{r.provider}: {r.reason or r.status}" for r in results if r.status != "ok"]
     report = fan_out_report(results, orchestrator.budget)
     if not any(r.status == "ok" and r.text.strip() for r in results):
+        _record_turn(ledger, turn_id, branches, results, None, None)
         return MultiEngineOutcome("no_answer", reason="; ".join(refusals), report=report)
     # Unset synthesizer: the first engine that actually answered writes the final answer (an
     # engine that just failed is not asked to do the harder job).
@@ -163,9 +216,11 @@ async def ask(
     if synthesizer is not None and style_instruction:
         synthesizer = dataclasses.replace(synthesizer, instruction=style_instruction)
     if synthesizer is None:
+        _record_turn(ledger, turn_id, branches, results, None, None)
         return MultiEngineOutcome("synthesis_failed", reason="; ".join(refusals), report=report)
 
     synth = await orchestrator.synthesize(turn_id, items, results, synthesizer)
+    _record_turn(ledger, turn_id, branches, results, synthesizer, synth)
     report = fan_out_report(results, orchestrator.budget)
     if synth.status != "ok" or not synth.text.strip():
         reason = synth.reason or synth.status
