@@ -131,7 +131,7 @@ async def reset_personality(request: Request) -> dict[str, Any]:
 
 
 @router.post("/preview", summary="The style text a profile would produce (nothing is saved)")
-async def preview_personality(body: PersonalityConfig) -> dict[str, str]:
+def preview_personality(body: PersonalityConfig) -> dict[str, str]:
     profile = personality.effective(body, engine_policy.current_product())
     return {"instruction": style.instruction(profile, mood_mod.NEUTRAL_STATE)}
 
