@@ -1610,7 +1610,15 @@ class AudioPlayer:
                 if not first_audio_published and self._bus is not None:
                     first_audio_published = True
                     try:
-                        await self._bus.publish(AudioOutFirst())
+                        # Originating STOP generation of the turn that is playing (ADR-0058
+                        # block 17): the turn ticket rides the context. No ticket = -1, which
+                        # a turn-following consumer drops instead of guessing.
+                        from dodaios.speech import stop_gate  # noqa: PLC0415
+
+                        _turn = stop_gate.current_turn()
+                        await self._bus.publish(AudioOutFirst(
+                            stop_generation=-1 if _turn is None else _turn.ticket,
+                        ))
                         log.info("AudioOutFirst published")
                     except Exception as exc:  # noqa: BLE001
                         log.debug("AudioOutFirst publish failed: %s", exc)

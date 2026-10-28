@@ -122,6 +122,8 @@ class BrowserVoiceSession:
         # break the audio path.
         self._bus_session_started = False
         self._turn_seq = 0
+        #: STOP generation each open bus turn was created under (ADR-0058 block 17).
+        self._bus_turn_gen: dict[str, int] = {}
         # Master-volume limiter for this socket, built on first use so importing
         # browser_voice still costs no numpy. Stateful across chunks, so an
         # utterance streamed as many frames is limited as one continuous signal
@@ -260,10 +262,15 @@ class BrowserVoiceSession:
             await self._ensure_bus_session()
             self._turn_seq += 1
             turn_id = uuid4().hex
+            from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
+            turn_gen = get_stop_controller().generation
+            self._bus_turn_gen[turn_id] = turn_gen
             await self._publish(
                 VoiceTurnStarted(
                     session_id=self.session_id,
                     turn_id=turn_id,
+                    stop_generation=turn_gen,
                     turn_index=self._turn_seq,
                     source_layer="browser_voice",
                 )
@@ -333,6 +340,7 @@ class BrowserVoiceSession:
             VoiceTurnCompleted(
                 session_id=self.session_id,
                 turn_id=turn_id,
+                stop_generation=self._bus_turn_gen.pop(turn_id, -1),
                 user_text=user_text,
                 user_lang=self._lang_short(),
                 jarvis_text=jarvis_text,

@@ -79,7 +79,53 @@ def not_stale(turn: VoiceTurnTicket | None = None) -> Callable[[], bool]:
     return (lambda: True) if held is None else (lambda: not held.stale())
 
 
+#: JSON frame types that carry CONTENT toward the person (text, captions, timed audio, speech
+#: timing, spoken fallback). Control frames (``audio_clear``, ``audio_closed``, ``tts_cancel``,
+#: ``provider_error``, indicators) are NOT in the set: after STOP they must still go out.
+STOPPABLE_JSON_TYPES = frozenset({
+    "transcript", "audio_timed", "speech_timing", "error_spoken", "caption",
+})
+
+
+def fenced_sender(
+    ticket: VoiceTurnTicket,
+    raw: Callable[..., object],
+    *,
+    content_types: frozenset[str] | None = None,
+    on_drop: Callable[[], object] | None = None,
+) -> Callable[..., object]:
+    """Wrap an output callable so the ORIGINAL ticket is checked at the write itself.
+
+    ``stale()`` is evaluated synchronously and ``raw(payload)`` is invoked in the same step: a
+    coroutine runs inline up to its first suspension point, and nothing is awaited in between,
+    so no STOP can land between the final check and the hand-over to ``raw`` (an entry check
+    earlier in the call chain, followed by awaits, cannot promise that). ``content_types`` limits
+    the fence to JSON payloads of those types (``None`` = every payload, for binary audio).
+
+    Scope: this suppresses LOCAL sends (this process stops handing data to the transport). It
+    does not recall bytes the transport already queued, does not stop browser / WebRTC playback
+    and does not cancel the provider's response; none of that is demonstrated here.
+    """
+
+    async def send(payload: object, *args: object, **kwargs: object) -> object:
+        if content_types is not None and not (
+            isinstance(payload, dict)
+            and payload.get("type") in content_types
+            and payload.get("role") != "user"  # the person's own words are not old OUTPUT
+        ):
+            return await raw(payload, *args, **kwargs)  # type: ignore[misc]
+        if ticket.stale():
+            if on_drop is not None:
+                on_drop()
+            return None
+        return await raw(payload, *args, **kwargs)  # type: ignore[misc]
+
+    return send
+
+
 __all__ = [
+    "STOPPABLE_JSON_TYPES",
+    "fenced_sender",
     "VoiceTurnTicket",
     "current_turn",
     "current_turn_stale",

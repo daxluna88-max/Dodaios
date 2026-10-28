@@ -1934,6 +1934,10 @@ class BrainTurnStarted(Event):
     model: str = ""
     intent_level: str = ""
     system_prompt_preview: str = ""
+    #: Originating identity (ADR-0058 block 17). ``stop_generation`` is the STOP generation the
+    #: producer's turn/call was created under; -1 = unknown (legacy producer). Consumers that
+    #: follow a turn (avatar bridge) drop an event whose generation differs from theirs.
+    stop_generation: int = -1
 
 
 @dataclass(frozen=True, slots=True)
@@ -1972,8 +1976,15 @@ class AudioOutFirst(Event):
     """The native player or browser playback began audible output.
 
     Last stage event of a voice turn; marks TTFW = audio audible to the user.
+
+    Originating identity (ADR-0058 block 17, all optional; defaults mean "unknown / legacy
+    producer"): ``session_id`` / ``turn_id`` of the turn that produced the audio and the
+    ``stop_generation`` it was created under (-1 = unknown). A consumer that follows a turn
+    must match them and drop the event otherwise; it must never re-stamp it as current.
     """
-    pass
+    session_id: str = ""
+    turn_id: str = ""
+    stop_generation: int = -1
 
 
 # ----------------------------------------------------------------------
@@ -2164,6 +2175,8 @@ class VoiceTurnStarted(Event):
     session_id: str = ""
     turn_id: str = ""
     turn_index: int = 0
+    #: STOP generation the turn was created under (ADR-0058 block 17); -1 = unknown (legacy).
+    stop_generation: int = -1
 
 
 @dataclass(frozen=True, slots=True)
@@ -2187,6 +2200,8 @@ class VoiceTurnCompleted(Event):
     # publisher knows it. See SpeechSpoken.voice for the semantics.
     voice: str | None = None
     voice_provider: str | None = None
+    #: STOP generation the turn was created under (ADR-0058 block 17); -1 = unknown (legacy).
+    stop_generation: int = -1
 
 
 @dataclass(frozen=True, slots=True)
