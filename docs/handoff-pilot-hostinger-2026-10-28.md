@@ -1,4 +1,4 @@
-# Handoff — Pilota Jarvis su VPS Hostinger (28/10/2026)
+# Handoff — Pilota Jarvis su VPS Hostinger (28/10/2026, aggiornato 17:25 CET)
 
 Scopo: stato della sessione + **sequenza di comandi verificata**, da trasformare in script o in un bot che guida Dax passo passo (Dax lavora da iPhone con Termius).
 Nessun segreto in questo file. Tutto ciò che non è marcato «verificato» NON lo è.
@@ -16,7 +16,16 @@ Nessun segreto in questo file. Tutto ciò che non è marcato «verificato» NON 
 - `ufw` attivo: solo `22/tcp` (v4+v6) da ovunque. Nessun desktop remoto attivo (`xrdp` inactive; template XFCE non verificato).
 - Dodaios installato da clone di `https://github.com/daxluna88-max/Dodaios.git` (`main`, commit `01cdb7258`), con `install/install.sh --headless --no-launch`. Versione `jarvis 4.1.2`. L'installer ha scaricato Python 3.13 via `uv` e il modello wake vosk (~40 MB).
 - UI web costruita a mano (non era precostruita): `npm ci` + `NODE_OPTIONS=--max-old-space-size=5120 npm run build` (senza il limite: OOM di Node). 8 vulnerabilità npm segnalate: NON usare `npm audit fix --force`.
-- Server avviato: `nohup jarvis serve` → `127.0.0.1:47821` (solo loopback), `/api/health` ok. UI raggiunta da iPhone con tunnel Termius (Local 47821 → 127.0.0.1:47821, bind 127.0.0.1, host `dax`), Safari su `http://localhost:47821` (carica; mostrava «UPDATING…»).
+- Server avviato: `nohup jarvis serve` → `127.0.0.1:47821` (solo loopback), `/api/health` ok. UI raggiunta da iPhone con tunnel Termius (Local 47821 → 127.0.0.1:47821, bind 127.0.0.1, host `dax`), Safari su `http://localhost:47821`.
+- **UI funzionante (verificato da Dax con screenshot, 17:21):** dopo la correzione di §2b compare la schermata «Set up Assistant» (scelta del nome/wake word, passi 1–3). Non verificato: completamento del setup, chat, voce, memoria.
+
+**2b. Causa e correzione del blocco «UPDATING…» (verificate sul server, 28/10 17:05–17:20 CET):**
+- Sintomo: Safari mostrava solo «UPDATING…» (era la **pagina di attesa del server**, non un aggiornamento): `curl /` restituiva 2170 byte con `data-state="jarvis-build-holding"`, nessun `src=`; `/assets/index-DOGXXRTE.js` dava 404 JSON (22 byte) anche se il file esisteva nel checkout.
+- Causa: il server (`~/.dodaios/.venv`, cwd `~/.dodaios`) esegue la **copia installata** `~/.dodaios/dodaios`, non il checkout `~/Dodaios`. La UI costruita (P11) era in `~/Dodaios/dodaios/ui/web/dist`; in `~/.dodaios/dodaios/ui/web/` non c'era `dist` (l'installer lo diceva: «no prebuilt UI found»). Verificato lanciando Python da `~/.dodaios`: `DIST_DIR=/home/dax/.dodaios/dodaios/ui/web/dist`, `build_is_complete=False`.
+- Correzione (minima, senza ricostruire né reinstallare): `cp -a ~/Dodaios/dodaios/ui/web/dist ~/.dodaios/dodaios/ui/web/` + riavvio del solo server. Dopo: `/` = 29060 byte, asset `200 1262977`, UI visibile su iPhone.
+- Ipotesi scartate: tunnel/iOS, percorso `dist` sbagliato nel checkout, sandbox (`NoNewPrivs 0`, `Seccomp 0`), `dev_mode=False`, più processi in ascolto (uno solo, PID unico). Un mio primo controllo era sbagliato (`ls index-*.js | head -1` prendeva il file sbagliato): nei controlli usare i nomi letti dall'`index.html`.
+- Trappola per il bot: i controlli Python lanciati da `~/Dodaios` importano il checkout (cwd per primo nel path), non ciò che esegue il server. Per ispezionare il server: `cd ~/.dodaios` o `/proc/<pid>`.
+- Verifica corretta in futuro: `curl -s localhost:47821/ | wc -c` ≠ ~2170 e `grep -c 'data-state="jarvis-build-holding"'` = 0.
 
 **Difetti/osservazioni da registrare (non risolti):**
 1. Voice-ready watchdog scaduto dopo 45 s: pipeline vocale mai pronta (causa probabile: nessuna chiave per STT/TTS cloud; NON verificato).
@@ -84,13 +93,16 @@ bash install/install.sh --headless --no-launch                                  
 ```
 Poi `source ~/.bashrc` (PATH `~/.local/bin`).
 
-**P11 – UI.**
+**P11 – UI (CORRETTO dopo il test del 28/10).**
 ```
 sudo apt -y install nodejs npm && node --version && npm --version
 cd ~/Dodaios/dodaios/ui/web/frontend && npm ci
 NODE_OPTIONS=--max-old-space-size=5120 npm run build 2>&1 | tail -15      # atteso «built in …»; l'avviso chunk >500 kB è normale
+# NUOVO, necessario: il server usa la copia in ~/.dodaios, non il checkout
+cp -a ~/Dodaios/dodaios/ui/web/dist ~/.dodaios/dodaios/ui/web/
 ```
-**P12 – Avvio e tunnel.**
+Poi avviare/riavviare il server (P12). Senza la copia: pagina «UPDATING…» per sempre.
+**P12 – Avvio e tunnel.** (Riavvio: `pkill -x jarvis; sleep 2; cd ~ && nohup jarvis serve > ~/jarvis-serve.log 2>&1 &`.)
 ```
 cd ~ && nohup jarvis serve > ~/jarvis-serve.log 2>&1 &
 sleep 15; curl -s localhost:47821/api/health; tail -5 ~/jarvis-serve.log; ss -tlnp | grep 47821
@@ -107,7 +119,17 @@ Atteso: `{"ok":true,…}` e ascolto su `127.0.0.1:47821` (mai `0.0.0.0`). Tunnel
 - Rilevare differenze dall'atteso (es. Ubuntu 26.04 invece di 24.04, UI non precostruita, OOM Node) e registrarle come difetti, non nasconderle.
 - Registro per ogni controllo come richiesto dall'issue #16; risultati di altre piattaforme non valgono come PASS qui.
 
+## 4b. Cosa è stato fatto a mano e dovrà essere automatizzato (elenco per chi costruisce lo script/bot)
+Tutto §3 P1–P12, in particolare: creazione utente + chiave SSH (richiede Termius sul telefono di Dax), hardening sshd con drop-in `00-hardening.conf`, ufw 22/tcp, clone del fork pubblico, `install.sh --headless --no-launch`, build UI con `NODE_OPTIONS`, **copia di `dist` in `~/.dodaios/dodaios/ui/web/`**, avvio server in loopback, port forward Termius. Un bot dovrebbe: generare i comandi giusti per ogni passo, controllare l'output atteso, fermarsi su FAIL, registrare gli esiti (formato del registro #16), non toccare mai chiavi/token.
+Idee per una versione automatica: script `bootstrap.sh` idempotente per P2–P12 (eseguito da `dax` con sudo) che verifica gli «attesi» e stampa un riepilogo; un guidatore (chat/bot) per le sole parti che richiedono Dax (acquisto, chiavi, login Codex, Termius). Da decidere con Dax prima di scrivere codice.
+
+## 4c. Stato di coordinamento con GPT (issue Jarvis #16)
+- Commento GPT 16:02 UTC: chiede prima di tutto diagnosi di «UPDATING…» (fatta: §2b), poi: handoff dice ancora «cloud-all3 non pushato» → **superato, cloud-all3 è pushato** (commit `c722b6d8`, `5e3e2b31`, `693db5ef` su `daxluna88-max/Dodaios`).
+- Residui K3 segnalati da GPT (non corretti): `LedgerBudget` legge `max_idem_seq` solo in costruzione (due adapter creati prima di riservare condividono la sequenza → replay condiviso); il fingerprint del broker non lega il payload di trasporto (assente); un replay «reserved» ritorna ok (serve un confine di single-claim durevole prima di invocare il provider); holds, `needs_reconcile`, escalation/voce/turno/inflight restano in memoria di processo (blocker di rilascio). K1 resta un erratum, non una riconciliazione di architettura/deploy/matrice.
+- Risposta a GPT sull'issue #16 con la causa di §2b e questi punti: **non ancora pubblicata**.
+
 ## 5. Prossimi passi
+0. Completare il «Set up Assistant» in Safari (nome/wake word; passi 2–3).
 1. Dax sceglie il brain (chiave OpenAI con tetto di spesa, oppure login Codex con abbonamento).
 2. Riavviare il server col brain scelto e provare una risposta in chat dalla UI (F01) poi voce (E01–E03) e memoria (F02), uno alla volta, con registro.
 3. Capire e decidere sul canale Telegram attivo (difetto 3) e sul watchdog voce (difetto 1).
