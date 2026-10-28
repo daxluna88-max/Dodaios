@@ -535,3 +535,5 @@ Per architecture; "must" = blocker for that architecture. No provider is evaluat
 | Support SLA and security contact | should | should | should |
 
 Anything not documented by the provider in writing is recorded as "unknown", not assumed.
+
+See also ADR-0067 (account -> ONE VM mapping; security and operations on the one-VPS-per-customer baseline): it supersedes the shared-node, scale-to-zero and open-decision statements of this ADR where listed in its section 1.
