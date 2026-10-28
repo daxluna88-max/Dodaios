@@ -239,3 +239,61 @@ State: **fixed in code, not run.**
 
 Section 1 said no `it.json` exists. At this SHA the frontend has `locales/it.json` and four namespace
 `it.json` files (listed in the table); only the backend lacks Italian. Corrected above.
+
+## 8. Block 18: GPT round 5 (I2, I3)
+
+Nothing was run: no test, build, restore, recover or file-system experiment. Only reading, editing,
+`python3 -m py_compile` and `ruff check`.
+
+### I2 (HIGH): recovery trusted journal paths and state as instructions
+
+- State: fixed in code, unverified at run time.
+- Files: `dodaios/core/product_backup.py` (`_validate_journal`, `_read_journal_file`, `_confined`,
+  `_single_name`, `_prior_ok`, `JournalInvalid`, `recover_product_state`).
+- Choice: recovery has two phases. Phase 1 validates EVERY journal and EVERY path and mutates
+  nothing; one invalid journal refuses the whole recovery with `JournalInvalid` naming the journal and
+  the field. Checks: file name matches the generated pattern and sits directly in the data dir; the file
+  is a regular, non-linked, single-hard-link file under a size cap, opened with `O_NOFOLLOW` and
+  compared by inode; exact keys, schema (1 or 2), product, stamp, journal state and item state from
+  allow-lists; names are canonical single components (no separator, drive, NUL, control character,
+  `.`/`..`, no absolute path), not reserved names; staged names must be
+  `.restore-<journal token>-<n>.tmp`, prior names `<name>.before-restore[.N]`, sidecars only
+  `<db name>-wal|-shm|-journal` with priors derived from their own name; no duplicate (case-insensitive)
+  name across name/staged/prior/sidecars; each path must not be a link and must resolve (strictly) to a
+  direct child of the resolved data dir. Only then Phase 2 mutates.
+- Residual limits: a check-then-use gap remains between validation and rollback (the launch lock
+  excludes the product, not a hostile local process that can write the data dir); only the data dir
+  itself is checked for being a link, ancestors above it rely on `check_product_root`; a schema 1 journal
+  (block 17) has no terminal state and is read as interrupted; case/Unicode folding rules of exotic
+  file systems are approximated by `lower()`.
+
+### I3 (HIGH): swap success followed by cleanup failure was misreported
+
+- State: fixed in code, unverified at run time.
+- Files: `dodaios/core/product_backup.py` (`restore_product_state`, `recover_product_state`, `main`,
+  `_persist_state`, `_finish_journal`, `_write_journal`, `RestoreReport`).
+- Choice: journal schema 2 has a top-level state `swapping|committed|rolled_back`. After the last
+  install the state `committed` is written atomically with fsync (and a directory fsync, best effort)
+  BEFORE any cleanup; if it cannot be recorded the swap is undone so journal and disk agree. A rollback
+  records `rolled_back` the same way. Cleanup (`_finish_journal`) never raises: a failure goes into the
+  report (`journal_left`, `cleanup_errors`, `final_state`). `recover` acts per state: committed means
+  remove only (never roll back), rolled_back means clean only, swapping means roll back. Errors after
+  the first mutation always become `RestoreFailed` with the real report, so the generic "No data file was
+  replaced" message is only reachable from checks before any data or journal change. Exit codes:
+  0 done, 3 refused before any change, 4 final state good but journal left (cleanup pending),
+  5 failed after changes started (report says restored / rolled back / left behind).
+- Residual limits: a crash between the last install and the durable `committed` write still looks
+  interrupted and `recover` rolls back (data stays consistent: the previous files are restored); fsync
+  semantics depend on the file system (Windows and network drives never exercised); a rollback that
+  itself fails keeps the journal and may leave an inconsistent directory, as before. Exit code 3 for a
+  failed-after-change case moved to 5.
+- Controls prepared, NOT RUN: `tests/unit/packaging/test_product_backup_recovery_hardening.py`
+  (`test_invalid_journal_refuses_whole_recovery_without_any_mutation` over absolute, traversal,
+  separator, drive, non-generated prior/staged, bad states, schema, product, extra keys, duplicates,
+  bad sidecars; non-JSON/non-object journal; non-generated journal name; linked and hard-linked journal;
+  linked item path; `test_committed_journal_is_only_removed_never_rolled_back`;
+  `test_rolled_back_journal_is_only_cleaned`;
+  `test_cleanup_failure_after_a_successful_swap_is_reported_as_restored`;
+  `test_failure_to_record_the_commit_rolls_back_and_says_so`;
+  `test_cleanup_failure_after_partial_recovery_reports_real_state`;
+  `test_exit_codes_are_distinct_and_refusal_is_before_any_change`).
