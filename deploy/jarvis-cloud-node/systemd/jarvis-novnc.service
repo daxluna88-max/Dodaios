@@ -1,0 +1,56 @@
+# DEFINITION - NOT RUN. noVNC static client + websockify bridge to the loopback VNC
+# port. Listens on 127.0.0.1:6080 ONLY. Public reachability exists only through the
+# authenticated HTTPS reverse proxy (proxy/Caddyfile.sample, path /live/*).
+# There is NO public VNC, NO public websockify, NO public CDP.
+[Unit]
+Description=Jarvis noVNC / websockify (127.0.0.1 only)
+Requires=jarvis-vnc.service
+After=jarvis-vnc.service
+
+[Service]
+Type=simple
+User=jarvis-novnc
+# TODO: needs a dedicated unprivileged account (not 'jarvis': the web bridge must not share
+# the agent's uid). Create with `useradd --system --no-create-home --shell /usr/sbin/nologin jarvis-novnc`
+# in cloud-init. Not yet in cloud-init.yaml - listed in DEPENDENCY-MAP gap G10.
+Group=jarvis-novnc
+# --web serves the noVNC static files from the distro package (/usr/share/novnc).
+# Do not pass --cert/--ssl-only here: TLS terminates at the proxy; the hop is loopback.
+ExecStart=/usr/bin/websockify --web /usr/share/novnc 127.0.0.1:6080 127.0.0.1:5900
+Restart=on-failure
+RestartSec=2
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+ReadWritePaths=
+MemoryMax=256M
+TasksMax=64
+CPUQuota=50%
+IPAddressDeny=any
+IPAddressAllow=127.0.0.0/8
+
+[Install]
+WantedBy=multi-user.target

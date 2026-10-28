@@ -1,0 +1,16 @@
+# DEFINITION - NOT RUN. Aggregate budget for everything the agent can spawn
+# (runtime + its shell tools + the Chromium that browser-use launches as a child
+# of the runtime). 8 GB VPS budget (unmeasured, TODO(measure)):
+#   OS+sshd+caddy+journald ~0.7 GB | Xvfb+openbox+x11vnc+novnc ~0.6 GB
+#   zram 2 GB is carved out of RAM only when used | agent slice 6 GB max
+[Unit]
+Description=Jarvis agent resource budget (runtime, tools, browser)
+Documentation=file:///opt/jarvis/current/deploy/jarvis-cloud-node/README.md
+
+[Slice]
+MemoryHigh=5G
+MemoryMax=6G
+MemorySwapMax=2G
+TasksMax=2048
+CPUQuota=380%
+IOWeight=100

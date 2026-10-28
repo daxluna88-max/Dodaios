@@ -1,0 +1,134 @@
+#!/usr/sbin/nft -f
+# DEFINITION - NOT RUN. Never loaded, never checked with `nft -c -f`. Syntax from memory of
+# nft(8); a first `nft -c -f` on a throwaway host is the first verification step.
+# Documentation address ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32)
+# are PLACEHOLDERS, not real infrastructure. Replace every TODO set before use.
+#
+# Model (ADR-0065 sections 10, 12 on a one-VPS-per-customer baseline):
+#  * INPUT default DROP; only TCP 443 (Caddy) and SSH from the management source.
+#  * OUTPUT: the AGENT uid (jarvis, 2000) is restricted; root/caddy/apt are not (they need
+#    updates, ACME, the control plane). Metadata/link-local is blocked for EVERYONE.
+#  * The provider's own metadata address is blocked for all uids, then re-allowed only for
+#    root/cloud-init if the provider needs it at boot (TODO(owner) - after boot, block for all).
+flush ruleset
+
+define AGENT_UID = 2000
+
+table inet jarvis {
+
+	# ---- management & control-plane placeholders ---------------------------------
+	set mgmt_v4 { type ipv4_addr; flags interval; elements = { 203.0.113.0/24 } }      # TODO(owner) bastion/ops source
+	set mgmt_v6 { type ipv6_addr; flags interval; elements = { 2001:db8:1::/48 } }     # TODO(owner)
+
+	# Control plane / inference broker. The agent may reach ONLY (broker address, broker port).
+	set control_plane_v4 { type ipv4_addr; flags interval; elements = { 198.51.100.0/24 } }   # TODO(owner) whole control-plane range
+	set broker_v4 { type ipv4_addr . inet_service; elements = { 198.51.100.10 . 443 } }       # TODO(owner) ONE addr+port
+	set control_plane_v6 { type ipv6_addr; flags interval; elements = { 2001:db8:2::/48 } }   # TODO
+	set broker_v6 { type ipv6_addr . inet_service; elements = { 2001:db8:2::10 . 443 } }      # TODO
+
+	# Never-reachable-by-agent destinations (SSRF / lateral / metadata)
+	set deny_v4 {
+		type ipv4_addr; flags interval
+		elements = {
+			0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16,
+			172.16.0.0/12, 192.0.0.0/24, 192.168.0.0/16, 198.18.0.0/15,
+			224.0.0.0/4, 240.0.0.0/4
+		}
+	}
+	set deny_v6 {
+		type ipv6_addr; flags interval
+		elements = { ::/128, fc00::/7, fe80::/10, ff00::/8, fd00:ec2::254/128 }
+	}
+	# Provider-specific metadata/management addresses: MUST be listed per provider.
+	# TODO(owner): OVHcloud VPS - verify in provider documentation whether any metadata/
+	# management endpoint exists and add it. Link-local 169.254.0.0/16 already covers the AWS-style one.
+	set provider_meta_v4 { type ipv4_addr; flags interval; elements = { 192.0.2.1 } }        # PLACEHOLDER
+
+	# Ports the agent must not use outbound (spam, lateral, remote admin). 53/853 handled below.
+	set deny_ports { type inet_service; flags interval
+		elements = { 22, 23, 25, 110, 111, 135-139, 143, 445, 465, 587, 993, 995, 2049, 3306, 3389, 5432, 5900-5999, 6379, 6667-6669, 9200, 11211, 27017 } }
+
+	# Policy tier for web egress - OWNER DECISION (ADR-0065 section 10, decision 2):
+	#  A) deny-list (below, default): TCP 80/443 anywhere except the sets above. Friendly, weaker.
+	#  B) allow-list: remove the generic web accept and add `ip daddr @web_allow tcp dport {80,443} accept`
+	#     fed by a resolver job or, better, force traffic through a forward proxy that allow-lists by SNI.
+	set web_allow_v4 { type ipv4_addr; flags interval }   # unused in tier A
+
+	chain input {
+		type filter hook input priority filter; policy drop;
+		iif lo accept
+		ct state invalid drop
+		ct state established,related accept
+		# ICMP: keep PMTU and ping bounded
+		ip protocol icmp icmp type { destination-unreachable, time-exceeded, parameter-problem, echo-request } limit rate 5/second accept
+		ip6 nexthdr icmpv6 icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, echo-request, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } limit rate 10/second accept
+		# DHCP client (provider-assigned address), TODO(verify) whether the provider uses DHCP/static
+		udp sport 67 udp dport 68 accept
+		udp sport 547 udp dport 546 accept
+		# HTTPS to Caddy: only inbound service. Per-source new-connection rate limit.
+		tcp dport 443 ct state new limit rate over 40/second burst 80 packets drop
+		tcp dport 443 accept
+		# SSH only from the management source (also enforced by sshd AllowUsers + keys)
+		ip saddr @mgmt_v4 tcp dport 22 ct state new limit rate 6/minute accept
+		ip6 saddr @mgmt_v6 tcp dport 22 ct state new limit rate 6/minute accept
+		# Everything else (including 80, 5900, 6080, 49821, 9222 CDP) is dropped by policy.
+		# Optional: counter log prefix "jarvis-in-drop " limit rate 5/minute   # metadata only
+	}
+
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+	}
+
+	chain output {
+		type filter hook output priority filter; policy accept;
+		oif lo accept
+		ct state established,related accept
+
+		# 1) Metadata / link-local: blocked for EVERY uid. TODO(owner): if the provider's
+		#    cloud-init needs a metadata endpoint at first boot, allow it only for skuid 0
+		#    and only until cloud-init finished, then remove.
+		ip daddr 169.254.0.0/16 drop
+		ip6 daddr { fe80::/10, fd00:ec2::254 } drop
+		ip daddr @provider_meta_v4 drop
+
+		# 2) Agent uid: everything below applies ONLY to uid jarvis (and its children).
+		meta skuid != $AGENT_UID accept
+
+		# DNS: the agent resolves through the local stub (127.0.0.53, loopback, accepted above).
+		# Direct DNS / DoT / DoH-by-port from the agent is dropped so egress logging/filtering
+		# at the resolver cannot be bypassed (DoH over 443 is NOT preventable here: residual).
+		udp dport { 53, 853 } drop
+		tcp dport { 53, 853 } drop
+
+		# Control plane: only the single broker (addr . port), nothing else of that range.
+		ip daddr . tcp dport @broker_v4 accept
+		ip6 daddr . tcp dport @broker_v6 accept
+		ip daddr @control_plane_v4 drop
+		ip6 daddr @control_plane_v6 drop
+
+		# RFC1918 / CGNAT / loopback-range / multicast etc, and node-management addresses
+		ip daddr @deny_v4 drop
+		ip6 daddr @deny_v6 drop
+		ip daddr @mgmt_v4 drop
+		ip6 daddr @mgmt_v6 drop
+		# TODO: also drop this host's own public addresses (hairpin to 443/22 of itself).
+
+		# Dangerous ports
+		tcp dport @deny_ports drop
+		udp dport @deny_ports drop
+
+		# Rate limits: bound new connections/second from the agent (scans, floods, mining pools)
+		ct state new meta l4proto tcp limit rate over 60/second burst 120 packets drop
+		ct state new meta l4proto udp limit rate over 30/second burst 60 packets drop
+		# Per-destination-port fan-out limiting needs a meter; TODO(design): dynamic set with
+		# `add @fanout { ip daddr limit rate over 200/minute }` (distinct hosts/hour, ADR-0065 11.1).
+
+		# Web egress, tier A: TCP 80/443 (and QUIC is dropped so Chromium falls back to TCP,
+		# which keeps SNI-based inspection/logging possible later).
+		tcp dport { 80, 443 } accept
+		# udp dport 443 is intentionally NOT accepted.
+
+		# Default for the agent uid: drop (log metadata only, rate limited)
+		limit rate 5/minute counter log prefix "jarvis-agent-egress-drop " drop
+	}
+}

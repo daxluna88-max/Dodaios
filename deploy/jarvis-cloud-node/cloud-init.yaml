@@ -1,0 +1,315 @@
+#cloud-config
+# =============================================================================
+# Jarvis Cloud node - first-boot DEFINITION for ONE customer VPS (Ubuntu LTS).
+#
+# STATUS: DESIGNED, NOT RUN. Never passed to a provider, never booted, never
+# validated with `cloud-init schema`. Values marked TODO(...) depend on choices
+# the owner has not made. It contains NO secret: SSH public keys, the broker
+# token and the TLS hostname are injected at provisioning time by the control
+# plane (cloud-init user-data is readable from inside the guest on most
+# providers - never put a secret in it; ADR-0065 section 3.1).
+#
+# Target: Ubuntu 24.04 LTS, x86-64, 4 vCores / 8 GB RAM / 75 GB NVMe,
+# no GPU. Uses tabs nowhere; YAML 1.1 as parsed by cloud-init.
+# =============================================================================
+
+# ---- identity of the machine (TODO: set by the provisioner per customer) ----
+hostname: TODO-jarvis-cust-OPAQUEID      # opaque customer_id, never an email/name
+manage_etc_hosts: true
+timezone: UTC
+locale: en_US.UTF-8
+
+# ---- login policy: no password, no root, no default 'ubuntu' user -----------
+ssh_pwauth: false
+disable_root: true
+# `users:` WITHOUT the `default` entry removes the image's default user.
+users:
+  # Human/automation operator. Key-only. This is the ONLY interactive account.
+  # NOPASSWD sudo is unavoidable with a locked password; the control is the
+  # key + the sshd source restriction + the nftables SSH allow-list.
+  - name: jarvis-ops
+    gecos: Jarvis node operator
+    groups: [sudo]
+    shell: /bin/bash
+    lock_passwd: true
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      - "TODO(owner): management public key injected by the provisioner (ssh-ed25519 AAAA...)"
+  # The AGENT user. Non-root, no sudo, no shell login, no ssh, fixed uid.
+  # Shell is /bin/bash because the agent's shell tool needs one, but the
+  # account is locked and excluded from sshd (AllowUsers jarvis-ops).
+  - name: jarvis
+    uid: 2000
+    gecos: Jarvis agent (unprivileged)
+    homedir: /data/home
+    no_create_home: true             # created by jarvis-data-init.sh on the volume
+    shell: /bin/bash
+    lock_passwd: true
+    system: false
+    groups: []                       # NOT sudo, NOT adm, NOT docker, NOT systemd-journal
+  # The SUPERVISOR is NOT a login user. It is root + systemd (root-owned units
+  # in /etc/systemd/system, root-owned scripts in /opt/jarvis-supervisor).
+  # A separate account would add nothing: the supervisor needs root to create
+  # the data root, switch releases and own nftables. See README "Principals".
+
+# ---- packages: Ubuntu archive only (main/universe), no PPA, no snap ----------
+package_update: true
+package_upgrade: true
+package_reboot_if_required: false      # reboot is a supervisor decision (maintenance window)
+packages:
+  # base / security
+  - openssh-server
+  - nftables
+  - fail2ban
+  - unattended-upgrades
+  - apt-listchanges
+  - apparmor
+  - apparmor-utils
+  - chrony
+  - systemd-zram-generator
+  - ca-certificates
+  - curl
+  - git
+  - jq
+  - cryptsetup            # TODO(owner): only if a LUKS data volume is chosen (README "Volume")
+  # desktop substrate (lightweight, no display manager, no desktop environment)
+  - xvfb
+  - openbox
+  - x11vnc                # TODO(verify): -unixsock behaviour on the 24.04 build (see jarvis-vnc notes)
+  - novnc
+  - websockify
+  - xdotool
+  - x11-utils
+  - x11-xserver-utils
+  - dbus
+  - dbus-user-session
+  - at-spi2-core
+  - fonts-liberation
+  - fonts-noto-color-emoji
+  - fonts-dejavu-core
+  # runtime
+  - python3.12
+  - python3.12-venv
+  - python3-venv
+  - libportaudio2          # imports only (ADR-0065 D6); no audio device
+  # reverse proxy (universe, may be older than upstream: TODO(owner) pin/choose Caddy vs nginx)
+  - caddy
+  # NOT installed on purpose: chromium-browser (a snap shim on Ubuntu -> would be
+  # picked by session.py::system_chrome() and defeats the pinned Playwright build),
+  # google-chrome-*, snapd-based anything, build-essential, openssh-client config
+  # for the agent, docker, any compiler. Playwright's own system libraries are
+  # installed at IMAGE-BUILD time with `playwright install-deps chromium`
+  # (TODO: that step has never been run; list its apt dependencies in the build log).
+
+# ---- apt policy notes (PINNING) -------------------------------------------
+# * Sources: only the Ubuntu archive pockets noble, noble-updates, noble-security.
+#   No third-party repositories on the node. Chromium comes from the Playwright
+#   build in the release bundle, pinned in dodaios/society/browser/install.py
+#   (PLAYWRIGHT_VERSION), not from apt/snap.
+# * /etc/apt/preferences.d/99-jarvis-pin (written below): refuse snapd and the
+#   chromium/firefox snap shims, so a later `apt install chromium-browser` by
+#   mistake (or by the agent via a root tool, which it does not have) fails.
+# * Image reproducibility: for a golden image, freeze with `apt-get install pkg=version`
+#   from a dated snapshot mirror. TODO(owner): choose snapshot.ubuntu.com or a
+#   provider mirror; cloud-init `package_upgrade: true` is acceptable ONLY for the
+#   pilot, not for a signed image.
+
+write_files:
+  # ---------- apt pin ----------
+  - path: /etc/apt/preferences.d/99-jarvis-pin
+    owner: root:root
+    permissions: "0644"
+    content: |
+      # Keep the browser out of snap; Chromium is the pinned Playwright build.
+      Package: snapd chromium-browser chromium firefox
+      Pin: release *
+      Pin-Priority: -1
+
+  # ---------- unattended upgrades policy ----------
+  # Security pocket only, no automatic reboot (a reboot kills the always-on
+  # browser session and long jobs); reboot is done by the supervisor in a window.
+  - path: /etc/apt/apt.conf.d/52jarvis-unattended-upgrades
+    owner: root:root
+    permissions: "0644"
+    content: |
+      Unattended-Upgrade::Allowed-Origins {
+          "${distro_id}:${distro_codename}-security";
+          "${distro_id}ESMApps:${distro_codename}-apps-security";
+          "${distro_id}ESM:${distro_codename}-infra-security";
+      };
+      Unattended-Upgrade::Package-Blacklist { };
+      Unattended-Upgrade::AutoFixInterruptedDpkg "true";
+      Unattended-Upgrade::MinimalSteps "true";
+      Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+      Unattended-Upgrade::Remove-Unused-Dependencies "true";
+      Unattended-Upgrade::Automatic-Reboot "false";
+      // TODO(owner): Automatic-Reboot-Time "04:00" once a maintenance window and
+      // a customer-visible notice exist. Until then the supervisor reports
+      // /var/run/reboot-required to the control plane (metadata only).
+  - path: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root:root
+    permissions: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+
+  # ---------- sshd hardening (drop-in; wins over the main file by sort order) ----------
+  - path: /etc/ssh/sshd_config.d/00-jarvis-hardening.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      # First value wins in sshd: this file is read before 50-cloud-init.conf.
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PubkeyAuthentication yes
+      AuthenticationMethods publickey
+      PermitEmptyPasswords no
+      AllowUsers jarvis-ops
+      # TODO(owner): when a bastion exists, restrict by source (also done in nftables):
+      # Match Address TODO.BASTION.CIDR
+      #     AllowUsers jarvis-ops
+      X11Forwarding no
+      AllowAgentForwarding no
+      AllowTcpForwarding no
+      GatewayPorts no
+      PermitTunnel no
+      PermitUserEnvironment no
+      MaxAuthTries 3
+      MaxSessions 4
+      LoginGraceTime 20
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+      LogLevel VERBOSE
+      # Modern algorithms only; TODO(verify) the exact list against `sshd -T` on 24.04.
+      KexAlgorithms sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org
+      Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com
+      MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+
+  # ---------- fail2ban (rate-limit brute force on SSH; HTTPS auth lives in the gateway) ----------
+  - path: /etc/fail2ban/jail.d/jarvis.local
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [DEFAULT]
+      backend = systemd
+      banaction = nftables
+      bantime = 1h
+      findtime = 10m
+      maxretry = 4
+      # TODO(owner): ignoreip = management source CIDR (so ops cannot lock itself out)
+      [sshd]
+      enabled = true
+      mode = aggressive
+      # NOTE: the nftables SSH source allow-list is the primary control; fail2ban is the
+      # second layer if the management source is ever widened. Caddy/gateway failures:
+      # TODO a [caddy-auth] jail on the proxy access log (metadata only) - not defined.
+
+  # ---------- kernel / network sysctl hardening ----------
+  - path: /etc/sysctl.d/60-jarvis-hardening.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      kernel.kptr_restrict = 2
+      kernel.dmesg_restrict = 1
+      kernel.unprivileged_bpf_disabled = 1
+      kernel.yama.ptrace_scope = 1
+      fs.protected_hardlinks = 1
+      fs.protected_symlinks = 1
+      fs.protected_fifos = 2
+      fs.protected_regular = 2
+      fs.suid_dumpable = 0
+      net.ipv4.conf.all.rp_filter = 1
+      net.ipv4.conf.default.rp_filter = 1
+      net.ipv4.conf.all.accept_redirects = 0
+      net.ipv4.conf.default.accept_redirects = 0
+      net.ipv6.conf.all.accept_redirects = 0
+      net.ipv4.conf.all.send_redirects = 0
+      net.ipv4.conf.all.accept_source_route = 0
+      net.ipv4.tcp_syncookies = 1
+      net.ipv4.icmp_echo_ignore_broadcasts = 1
+      # Memory: zram only, see zram-generator.conf. 100 is the usual value when swap
+      # is compressed RAM (cheap to swap); TODO(measure) with a real browser load.
+      vm.swappiness = 100
+      vm.page-cluster = 0
+      # Unprivileged user namespaces: DELIBERATELY NOT set here. The Chromium sandbox
+      # needs them; the mitigation is a per-binary AppArmor profile, see
+      # apparmor/jarvis-chromium and docs/CHROMIUM-LAUNCH-PROFILE.md.
+      # kernel.apparmor_restrict_unprivileged_userns stays 1 (Ubuntu 24.04 default).
+
+  # ---------- swap / zram decision for 8 GB ----------
+  # DECISION (pilot): NO disk swap file (NVMe wear, latency spikes and a swapped-out
+  # browser stalls live view); zram of 25% of RAM (2 GB, zstd) as a pressure valve
+  # only. The real protection is per-unit MemoryMax (systemd/*.service) so the OOM
+  # killer hits the browser cgroup, not sshd/caddy/runtime. systemd-oomd is left
+  # enabled (Ubuntu default) and the browser unit sets ManagedOOMMemoryPressure=kill.
+  - path: /etc/systemd/zram-generator.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [zram0]
+      zram-size = ram / 4
+      compression-algorithm = zstd
+      swap-priority = 100
+
+  # ---------- time sync ----------
+  # chrony replaces systemd-timesyncd (installed by `packages`, timesyncd is
+  # then masked by the runcmd below). TODO(owner): NTS servers; Ubuntu pool is the default.
+  - path: /etc/chrony/conf.d/jarvis.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      makestep 1.0 3
+      # TODO(owner): server <nts-host> iburst nts
+      # Always-on VM: no suspend/restore here; if memory snapshots are ever used
+      # (ADR-0065 11.3) chrony must step on resume - not applicable to this baseline.
+
+  # ---------- journald: bounded, no content ----------
+  - path: /etc/systemd/journald.conf.d/jarvis.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Journal]
+      Storage=persistent
+      SystemMaxUse=512M
+      MaxRetentionSec=14day
+      RateLimitIntervalSec=30s
+      RateLimitBurst=2000
+
+  # ---------- mount hardening for /tmp (tmpfs, nosuid,nodev; exec kept for the browser) ----------
+  - path: /etc/systemd/system/tmp.mount.d/jarvis.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Mount]
+      Options=mode=1777,strictatime,nosuid,nodev,size=1G
+      # noexec deliberately NOT set: Chromium/Playwright and python wheels may mmap-exec
+      # from TMPDIR. TODO(test) per-service PrivateTmp + noexec on /dev/shm instead.
+
+runcmd:
+  # Everything below is a PLAN in order; none was executed. Each step must be idempotent.
+  - [ systemctl, mask, systemd-timesyncd.service ]
+  - [ systemctl, enable, --now, chrony.service ]
+  - [ systemctl, enable, --now, fail2ban.service ]
+  - [ systemctl, enable, --now, unattended-upgrades.service ]
+  - [ systemctl, daemon-reload ]
+  - [ systemctl, restart, systemd-zram-setup@zram0.service ]
+  - [ sysctl, --system ]
+  # sshd: validate BEFORE reload so a typo cannot lock the operator out.
+  - [ sh, -c, "sshd -t && systemctl reload ssh" ]
+  # Mounts the per-customer volume, creates the layout (see bin/jarvis-data-init.sh).
+  # TODO(owner): volume model - provider block volume vs the VPS root disk + LUKS.
+  - [ sh, -c, "install -d -m 0755 -o root -g root /opt/jarvis-supervisor /opt/jarvis/releases" ]
+  # TODO(owner): fetch the SIGNED release bundle from the control-plane artifact
+  # store and verify its signature BEFORE unpacking (docs/VOLUME-AND-UPDATES.md).
+  #   /opt/jarvis-supervisor/jarvis-release-activate <bundle> <detached-signature>
+  # TODO: copy systemd/*.service to /etc/systemd/system, proxy/Caddyfile.sample to
+  #   /etc/caddy/Caddyfile, nftables/jarvis-node.nft to /etc/nftables.conf,
+  #   apparmor/jarvis-chromium to /etc/apparmor.d/, then:
+  #   apparmor_parser -r /etc/apparmor.d/jarvis-chromium ; nft -c -f /etc/nftables.conf ; nft -f /etc/nftables.conf
+  #   systemctl enable --now nftables jarvis-xvfb jarvis-dbus jarvis-wm jarvis-runtime jarvis-vnc jarvis-novnc caddy
+  # Ordering rule: nftables BEFORE any jarvis-* unit (egress default must exist before
+  # the agent can run). The units declare Requires=nftables.service for that reason.
+
+final_message: "Jarvis node first boot definition finished (DESIGN ONLY - this file was never executed)."

@@ -1,0 +1,53 @@
+# DEFINITION - NOT RUN. The persistent virtual display (one per VPS) :10.
+# Display :10 (not :90+) so it never collides with agent_screen/providers/xvfb.py,
+# which picks free numbers from 90..129 for its own Xvfb (gap G4).
+[Unit]
+Description=Jarvis Xvfb virtual display :10
+Requires=nftables.service
+After=nftables.service jarvis-dbus.service
+
+[Service]
+Type=simple
+User=jarvis
+Group=jarvis
+EnvironmentFile=/etc/jarvis/node.env
+# -nolisten tcp: no X over TCP. -auth: access by MIT cookie in /run/jarvis/xauth is
+# TODO(owner) hardening (default Xvfb without -ac uses host-based local access only).
+ExecStart=/usr/bin/Xvfb :10 -screen 0 1600x900x24 -nolisten tcp -dpi 96 +extension RANDR
+Restart=on-failure
+RestartSec=2
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+# PrivateTmp: the X socket /tmp/.X11-unix/X10 lives in this unit's private /tmp.
+# wm/vnc/runtime/browser use JoinsNamespaceOf=jarvis-xvfb.service to share it.
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+ReadWritePaths=/run/jarvis
+MemoryMax=512M
+TasksMax=64
+CPUQuota=60%
+IPAddressDeny=any
+# Xvfb as an unprivileged user logs "could not open /dev/tty0" warnings - benign (TODO verify).
+
+[Install]
+WantedBy=multi-user.target

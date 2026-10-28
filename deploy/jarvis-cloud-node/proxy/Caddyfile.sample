@@ -1,0 +1,115 @@
+# DEFINITION - NOT RUN, never loaded by Caddy (no `caddy validate` executed).
+# Authenticated HTTPS front door for ONE customer VPS. Caddy is the ONLY listener on a
+# public port (443). Everything behind it is 127.0.0.1. There is no public VNC, websockify,
+# CDP, admin API or metrics port. TODO(owner): choose Caddy vs nginx; this is the Caddy form.
+#
+# Placeholders (injected by the provisioner into /etc/caddy/env, root:caddy 0640, NON-secret):
+#   JARVIS_PUBLIC_HOST   e.g. cust-OPAQUEID.TODO-domain.invalid
+#   JARVIS_AUTH_UPSTREAM e.g. 127.0.0.1:9100  (session-auth service, see below)
+{
+	# No admin endpoint exposed beyond the unix socket
+	admin unix//run/caddy/admin.sock
+	# TLS-ALPN-01 / HTTP-01: with only 443 open, issuance uses TLS-ALPN-01. If the owner
+	# prefers DNS-01 (no inbound validation), configure the DNS plugin: TODO(owner).
+	email TODO-ops-contact@invalid
+	servers {
+		protocols h1 h2
+	}
+}
+
+{$JARVIS_PUBLIC_HOST} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "microphone=(self), camera=(), geolocation=()"
+		# CSP for the Jarvis UI + noVNC; TODO(tune) after a real page load. connect-src needs wss: for noVNC.
+		Content-Security-Policy "default-src 'self'; connect-src 'self' wss://{$JARVIS_PUBLIC_HOST}; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+		-Server
+	}
+
+	# --- CSRF / Origin check -----------------------------------------------------
+	# Any request (and every WebSocket upgrade) that carries an Origin must carry OUR origin.
+	# Browsers always send Origin on cross-site WebSocket handshakes, so this blocks
+	# cross-site WebSocket hijacking of the live view and of /ws/audio.
+	# The app has its own Host/Origin/CSRF checks (ui/web/surface_security.py): they must be
+	# configured for the public host, not disabled (ADR-0065 D4). This is defence in depth.
+	@bad_origin {
+		header Origin *
+		not header Origin https://{$JARVIS_PUBLIC_HOST}
+	}
+	respond @bad_origin "forbidden" 403
+
+	# --- session authentication (HOOK PLACEHOLDER) -----------------------------
+	# forward_auth asks the account/session service (control-plane component, NOT written,
+	# gap G3) whether the cookie/Bearer is a valid, non-revoked session of THIS customer_id.
+	# It must: check the session record, bind to customer_id, enforce step-up for /live/*,
+	# rate-limit, and return 2xx + X-Jarvis-Customer on success. Anything else -> 401/302 login.
+	# The service may run on the control plane (https) or locally; if remote, nftables must
+	# allow that destination for the caddy user (see nftables ruleset, set control_plane).
+	@protected not path /auth/* /.well-known/*
+	forward_auth @protected {$JARVIS_AUTH_UPSTREAM} {
+		uri /v1/verify
+		copy_headers X-Jarvis-Customer
+	}
+
+	# --- live view: noVNC over WebSocket, takeover requires a fresh ticket -------
+	# /live/ -> noVNC static + websockify. A one-time ticket (T15, ADR-0065) is verified by
+	# the auth upstream via the "uri" above; TODO: dedicated /v1/verify-live with step-up.
+	handle_path /live/* {
+		reverse_proxy 127.0.0.1:6080 {
+			# WebSocket upgrade is handled transparently by Caddy's reverse_proxy.
+			transport http {
+				dial_timeout 3s
+				response_header_timeout 30s
+			}
+			flush_interval -1
+			header_up -Authorization
+			header_up -Cookie
+		}
+	}
+
+	# --- Jarvis UI + API + /ws/audio (voice) -> runtime admin port on loopback ---------
+	# Consumer admin port 49821 (ADR-0054 offset). The runtime keeps its own Control Key
+	# check; the proxy injects the node-internal key (gap G3) - NEVER shown to the browser.
+	handle {
+		reverse_proxy 127.0.0.1:49821 {
+			flush_interval -1
+			# DO NOT rewrite Host to 127.0.0.1: surface_security.py::is_loopback_request treats a
+			# loopback peer + loopback Host as a LOCAL request (more privileges). Behind this proxy the
+			# peer is always loopback, so the public Host must be preserved and X-Forwarded-* kept so
+			# _relay_indicator_present() can see a relay (gap G3/G11; behaviour never run).
+			# header_up Authorization "Bearer {env.JARVIS_NODE_CONTROL_KEY}"   # from a root credential, not from this file
+		}
+	}
+
+	# Explicitly dead ends (documentation of intent; unreachable anyway because nothing
+	# else listens publicly and nftables drops them):
+	@forbidden path /json /json/* /devtools/* /vnc* /websockify /api/metrics*
+	respond @forbidden 404
+
+	log {
+		# metadata only: no query string, no headers, no body (ADR-0065 11.4)
+		output file /var/log/caddy/access.log {
+			roll_size 20mb
+			roll_keep 5
+		}
+		format filter {
+			wrap json
+			fields {
+				request>uri delete
+				request>headers delete
+				resp_headers delete
+			}
+		}
+	}
+}
+
+# Anything addressed to the bare IP or another name is not served.
+:443 {
+	tls internal
+	respond 421
+}

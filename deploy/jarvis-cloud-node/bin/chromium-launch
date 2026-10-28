@@ -1,0 +1,21 @@
+#!/bin/bash
+# DEFINITION - NOT RUN. Thin launcher for the takeover browser (jarvis-browser@.service) that
+# resolves the Playwright Chromium path of the ACTIVE release and execs it with the sandbox ON.
+# bash -n only. It refuses --no-sandbox in its arguments.
+set -euo pipefail
+base="${PLAYWRIGHT_BROWSERS_PATH:-/opt/jarvis/current/browsers}"
+shopt -s nullglob
+cands=("$base"/chromium-*/chrome-linux*/chrome)
+if [ "${#cands[@]}" -ne 1 ]; then
+  echo "chromium-launch: expected exactly one Chromium build under $base, found ${#cands[@]}" >&2
+  exit 78
+fi
+for a in "$@"; do
+  case "$a" in
+    --no-sandbox|--disable-setuid-sandbox|--disable-gpu-sandbox|--remote-debugging-port*|--remote-debugging-address*|--load-extension*|--allow-file-access-from-files)
+      echo "chromium-launch: refused flag: $a" >&2
+      exit 64
+      ;;
+  esac
+done
+exec "${cands[0]}" "$@"
