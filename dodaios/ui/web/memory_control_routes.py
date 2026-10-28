@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +29,12 @@ from pydantic import BaseModel, Field
 
 from dodaios.memory.control import deletion
 from dodaios.memory.control.export import ExportError, build_export
-from dodaios.memory.control.proposals import ProposalError, ProposalStore, current_product_name
+from dodaios.memory.control.proposals import (
+    OPEN_STATES,
+    ProposalError,
+    ProposalStore,
+    current_product_name,
+)
 from dodaios.ui.web.wiki_routes import _resolve_vault_root
 
 log = logging.getLogger(__name__)
@@ -122,7 +128,8 @@ async def get_status(request: Request) -> dict[str, Any]:
 
 @router.get("/proposals")
 async def list_proposals(request: Request) -> dict[str, Any]:
-    items = await asyncio.to_thread(_store(request).items)
+    # Open = waiting, being applied (or interrupted) and "apply unknown": all are shown.
+    items = await asyncio.to_thread(partial(_store(request).items, states=OPEN_STATES))
     return {"ok": True, "product": current_product_name(), "proposals": [p.public() for p in items]}
 
 
@@ -131,8 +138,13 @@ async def approve(proposal_id: str, payload: ApproveBody, request: Request) -> d
     notebook = _notebook(request)
     store = ProposalStore(notebook.folder)
     try:
+        # ``store`` shares one process-wide lock per proposals file (ADR-0061 block 17, H4a), so
+        # concurrent requests cannot both apply the same proposal.
         item = await asyncio.to_thread(
-            store.approve, proposal_id, notebook.apply, text=payload.text
+            partial(
+                store.approve, proposal_id, notebook.apply, text=payload.text,
+                probe=notebook.probe_applied,
+            )
         )
     except ProposalError as exc:
         raise _fail(exc) from exc

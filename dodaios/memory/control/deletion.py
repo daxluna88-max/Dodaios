@@ -24,10 +24,12 @@ import datetime as _dt
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import shutil
 import sqlite3
+import stat as _stat
 import tarfile
 import time
 import uuid
@@ -82,6 +84,61 @@ class DeletionReport:
 # ------------------------------------------------------------------ paths
 
 
+def _is_linked(path: Path) -> bool:
+    """A symlink, a Windows junction or any other reparse point (``lstat``, never followed)."""
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return False
+    return _stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & 0x400)
+
+
+def canonical_rel(value: Any) -> str:
+    """A page path exactly as this module writes it: relative, ``/`` separated, no ``..``, no
+    empty part, no drive, no backslash, not in a reserved or dot folder. Raises ``ValueError``."""
+    if not isinstance(value, str) or not value or len(value) > 512 or "\x00" in value:
+        raise ValueError("not a path")
+    if "\\" in value or value.startswith("/") or re.match(r"^[A-Za-z]:", value):
+        raise ValueError("absolute or drive path")
+    parts = value.split("/")
+    if any(p in ("", ".", "..") or p != p.strip() or p.endswith(".") for p in parts):
+        raise ValueError("unsafe path part")
+    if parts[0] in (TRASH_DIR, "_archive") or any(p.startswith(".") for p in parts):
+        raise ValueError("reserved path")
+    if not value.lower().endswith(".md"):
+        raise ValueError("not a page")
+    return value
+
+
+def _confine(base: Path, rel: str, *, must_exist: bool = False) -> Path:
+    """``base / rel`` proven to stay inside ``base``: the base is strictly resolved, every
+    existing component below it must be a real (not linked) entry, and the strict resolution of
+    the deepest existing part must still be inside ``base``. Raises :class:`DeletionError`."""
+    parts = rel.split("/") if rel else []
+    try:
+        root = base.resolve(strict=True)
+    except OSError as exc:
+        raise DeletionError("The memory vault is not available.", status=404) from exc
+    current = root
+    for part in parts:
+        current = current / part
+        if not os.path.lexists(current):
+            break
+        if _is_linked(current):
+            raise DeletionError("That path goes through a link; refused.", status=422)
+    probe = current
+    while not os.path.lexists(probe) and probe != root:
+        probe = probe.parent
+    try:
+        probe.resolve(strict=True).relative_to(root)
+    except (OSError, ValueError) as exc:
+        raise DeletionError("That path is outside the memory vault.", status=422) from exc
+    target = root.joinpath(*parts)
+    if must_exist and not (target.is_file() and not _is_linked(target)):
+        raise DeletionError("No such page.", status=404)
+    return target
+
+
 def _safe_page(vault_root: Path, rel_path: str) -> tuple[Path, str]:
     rel = (rel_path or "").replace("\\", "/").strip("/")
     if not rel or not rel.lower().endswith(".md"):
@@ -89,19 +146,80 @@ def _safe_page(vault_root: Path, rel_path: str) -> tuple[Path, str]:
     parts = rel.split("/")
     if any(p in ("", ".", "..") for p in parts) or parts[0] in (TRASH_DIR, "_archive"):
         raise DeletionError("That path is not a live memory page.", status=422)
-    root = vault_root.resolve()
-    target = (root / rel).resolve()
-    try:
-        target.relative_to(root)
-    except ValueError as exc:
-        raise DeletionError("That path is outside the memory vault.", status=422) from exc
-    if target.is_symlink() or not target.is_file():
-        raise DeletionError("No such page.", status=404)
+    target = _confine(vault_root, rel, must_exist=True)
     return target, rel
 
 
 def _trash_root(vault_root: Path) -> Path:
     return vault_root.resolve() / TRASH_DIR
+
+
+def _checked_trash_root(vault_root: Path) -> Path | None:
+    """The trash folder when it exists, is a real directory and is not linked; else None."""
+    root = _trash_root(vault_root)
+    if not os.path.lexists(root):
+        return None
+    if _is_linked(root) or not root.is_dir():
+        raise DeletionError("The trash folder is not a plain folder; refused.", status=422)
+    return root
+
+
+def _body_hash(path: Path) -> str:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
+
+
+def _current_product() -> str:
+    from dodaios.memory.control.proposals import current_product_name
+
+    try:
+        return current_product_name()
+    except Exception:  # noqa: BLE001 - an unreadable product means "do not vouch"
+        return ""
+
+
+def _validate_manifest(vault_root: Path, folder: Path, trash_id: str, data: Any) -> dict[str, Any]:
+    """The manifest as a trusted record, or :class:`DeletionError` (404, nothing leaked).
+
+    Checks: schema and types, ``id`` equals the directory name and the requested id, a canonical
+    relative page path, the product that deleted it (when recorded) is the current one, finite
+    timestamps, and the trash folder itself is a real folder inside this vault's trash."""
+    reason = ""
+    if not isinstance(data, dict):
+        reason = "manifest is not an object"
+    elif data.get("id") != trash_id or folder.name != trash_id:
+        reason = "manifest id does not match its folder"
+    else:
+        for key in ("deleted_at", "restore_until"):
+            value = data.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(
+                value
+            ):
+                reason = f"bad {key}"
+        sha = data.get("sha256")
+        if sha is not None and not (isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{64}", sha)):
+            reason = "bad sha256"
+        product = data.get("product")
+        if not reason and product is not None and product != _current_product():
+            reason = "entry belongs to another product"
+        if not reason:
+            try:
+                canonical_rel(data.get("path"))
+            except ValueError as exc:
+                reason = f"bad path ({exc})"
+    if not reason:
+        try:
+            trash = _checked_trash_root(vault_root)
+            if trash is None or _is_linked(folder) or not folder.is_dir():
+                reason = "trash folder is missing or linked"
+            else:
+                folder.resolve(strict=True).relative_to(trash.resolve(strict=True))
+        except (DeletionError, OSError, ValueError):
+            reason = "trash folder is not inside this vault's trash"
+    if reason:
+        log.warning("memory delete: trash entry %s refused (%s)", trash_id, reason)
+        raise DeletionError("Unknown trash entry.", status=404)
+    return data
 
 
 # ------------------------------------------------------------------ stores
@@ -305,10 +423,19 @@ def logical_delete(
     stamp = now if now is not None else time.time()
     body = target.read_text(encoding="utf-8", errors="replace")
     derived = find_derived(vault_root, rel, body)
+    try:
+        canonical_rel(rel)
+    except ValueError as exc:
+        raise DeletionError("That path is not a live memory page.", status=422) from exc
     trash_id = uuid.uuid4().hex[:12]
-    folder = _trash_root(vault_root) / trash_id
-    dest = folder / rel
+    trash = _trash_root(vault_root)
+    if _checked_trash_root(vault_root) is None:
+        trash.mkdir(parents=True, exist_ok=True)
+        _checked_trash_root(vault_root)
+    folder = trash / trash_id
+    dest = _confine(trash, f"{trash_id}/{rel}")
     dest.parent.mkdir(parents=True, exist_ok=True)
+    _confine(trash, f"{trash_id}/{rel}")  # re-check after creating the folders
     restore_until = stamp + RETENTION_DAYS * 86400
     manifest = {
         "id": trash_id,
@@ -316,9 +443,15 @@ def logical_delete(
         "deleted_at": stamp,
         "restore_until": restore_until,
         "sha256": hashlib.sha256(body.encode("utf-8", "replace")).hexdigest(),
+        "product": _current_product(),
     }
-    os.replace(target, dest)
+    # Manifest first: a page in the trash must never exist without its record.
     (folder / MANIFEST).write_text(json.dumps(manifest), encoding="utf-8")
+    try:
+        os.replace(target, dest)
+    except OSError:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
     report = DeletionReport("logical", rel, trash_id=trash_id, restore_until=restore_until)
     moved = f"moved to the trash, restorable until {_fmt(restore_until)}"
     report.stores.append(StoreResult("page file", True, moved))
@@ -330,14 +463,26 @@ def logical_delete(
 
 
 def list_trash(vault_root: Path) -> list[dict[str, Any]]:
+    """Trash entries whose manifest passes :func:`_validate_manifest`. A corrupted, edited or
+    foreign entry is NOT listed (and so can be neither restored nor purged through its id)."""
     out = []
-    root = _trash_root(vault_root)
-    if not root.is_dir():
+    try:
+        root = _checked_trash_root(vault_root)
+    except DeletionError:
+        return out
+    if root is None:
         return out
     for folder in sorted(root.iterdir()):
+        if _is_linked(folder) or not folder.is_dir():
+            continue
+        if not re.fullmatch(r"[0-9a-f]{12}", folder.name):
+            continue
         try:
-            data = json.loads((folder / MANIFEST).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            data = _validate_manifest(
+                vault_root, folder, folder.name,
+                json.loads((folder / MANIFEST).read_text(encoding="utf-8")),
+            )
+        except (OSError, ValueError, DeletionError):
             continue
         out.append({k: data.get(k) for k in ("id", "path", "deleted_at", "restore_until")})
     return sorted(out, key=lambda d: -(d.get("deleted_at") or 0))
@@ -347,37 +492,66 @@ def _trash_entry(vault_root: Path, trash_id: str) -> tuple[Path, dict[str, Any]]
     if not re.fullmatch(r"[0-9a-f]{12}", trash_id or ""):
         raise DeletionError("Unknown trash entry.", status=404)
     folder = _trash_root(vault_root) / trash_id
+    if _is_linked(folder):
+        log.warning("memory delete: trash entry %s is a link, refused", trash_id)
+        raise DeletionError("Unknown trash entry.", status=404)
     try:
         data = json.loads((folder / MANIFEST).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise DeletionError("Unknown trash entry.", status=404) from exc
-    return folder, data
+    return folder, _validate_manifest(vault_root, folder, trash_id, data)
 
 
 def restore(vault_root: Path, trash_id: str, *, now: float | None = None) -> str:
-    """Put a logically deleted page back, if its window is open and the path is free."""
+    """Put a logically deleted page back, if its window is open and the path is free.
+
+    Everything is confined first: the manifest is validated, the trash copy must be a real file
+    inside ``.trash/<id>`` and match the recorded hash, and the destination must lie inside this
+    vault with no linked ancestor."""
     folder, data = _trash_entry(vault_root, trash_id)
     if (now if now is not None else time.time()) > float(data["restore_until"]):
         raise DeletionError("The restore window has ended.", status=410)
     rel = data["path"]
-    source = folder / rel
-    target = vault_root.resolve() / rel
-    if target.exists():
+    source = _confine(_trash_root(vault_root), f"{trash_id}/{rel}", must_exist=True)
+    expected = data.get("sha256")
+    if expected and _body_hash(source) != expected:
+        raise DeletionError(
+            "The trashed copy changed after it was deleted; not restored.", status=409
+        )
+    target = _confine(vault_root, rel)
+    if os.path.lexists(target):
         raise DeletionError("A page with that name exists now. Rename or delete it.", status=409)
     target.parent.mkdir(parents=True, exist_ok=True)
+    target = _confine(vault_root, rel)  # re-check after creating the folders
+    if os.path.lexists(target):
+        raise DeletionError("A page with that name exists now. Rename or delete it.", status=409)
     os.replace(source, target)
     shutil.rmtree(folder, ignore_errors=True)
     _clear_caches(vault_root)
     return rel
 
 
+def _remove_trash_folder(vault_root: Path, trash_id: str) -> bool:
+    """Remove ONE validated trash folder; False if it is not a valid entry or could not go."""
+    try:
+        folder, _data = _trash_entry(vault_root, trash_id)
+    except DeletionError:
+        return False
+    shutil.rmtree(folder, ignore_errors=True)
+    return not os.path.lexists(folder)
+
+
 def purge_expired(vault_root: Path, *, now: float | None = None) -> int:
-    """Remove trash entries whose window ended. Returns how many were removed."""
+    """Remove trash entries whose window ended. Returns how many were removed.
+
+    Only entries that pass manifest validation are touched; an invalid one is left alone (and is
+    not listed), never deleted on the strength of its own say-so."""
     stamp = now if now is not None else time.time()
     removed = 0
     for entry in list_trash(vault_root):
-        if stamp > float(entry["restore_until"] or 0):
-            shutil.rmtree(_trash_root(vault_root) / entry["id"], ignore_errors=True)
+        if stamp > float(entry["restore_until"] or 0) and _remove_trash_folder(
+            vault_root, str(entry["id"])
+        ):
             removed += 1
     return removed
 
@@ -392,9 +566,11 @@ def permanent_delete(
     if trash_id:
         folder, data = _trash_entry(vault_root, trash_id)
         rel = data["path"]
-        copy = folder / rel
-        if copy.is_file():
+        try:
+            copy = _confine(_trash_root(vault_root), f"{trash_id}/{rel}", must_exist=True)
             body = copy.read_text(encoding="utf-8", errors="replace")
+        except DeletionError:
+            log.info("memory delete: the trash entry had no readable page copy")
         shutil.rmtree(folder)
         file_detail = "trash copy unlinked"
     else:
@@ -407,17 +583,21 @@ def permanent_delete(
     # a permanent delete must take those copies too.
     extra = 0
     for entry in list_trash(vault_root):
-        if entry["path"] == rel:
-            shutil.rmtree(_trash_root(vault_root) / entry["id"], ignore_errors=True)
+        if entry["path"] == rel and _remove_trash_folder(vault_root, str(entry["id"])):
             extra += 1
     archived_hits = 0
-    archived = root / "_archive" / rel
-    if archived.is_file() and not archived.is_symlink():
-        try:
+    try:
+        archive_dir = root / "_archive"
+        if os.path.lexists(archive_dir):
+            if _is_linked(archive_dir) or not archive_dir.is_dir():
+                raise DeletionError("The archive folder is not a plain folder.", status=422)
+            archived = _confine(archive_dir, rel, must_exist=True)
             archived.unlink()
             archived_hits = 1
-        except OSError:
-            log.info("memory delete: could not remove archived copy %s", archived)
+    except DeletionError:
+        log.info("memory delete: no confined archived copy of %s removed", rel)
+    except OSError:
+        log.info("memory delete: could not remove the archived copy of %s", rel)
     if extra:
         file_detail += f"; {extra} older trash copy(ies) unlinked"
     if archived_hits:
@@ -434,11 +614,16 @@ def permanent_delete(
 
 
 def delete_notebook_entry(notebook: Any, target: str, entry_id: str) -> DeletionReport:
-    """Permanently remove one learned note (USER.md / MEMORY.md) and scrub the learning ledger.
+    """Permanently remove one learned note (USER.md / MEMORY.md / SOUL.md) from the stores below.
 
-    The ledger keeps the old and new text of every change; leaving it would keep the note, so
-    its lines for this note are removed from the ledger and its rotated copy. Approved records
-    in the proposal store that carry the same text are cleared too.
+    The note leaves the notebook first (if that fails nothing was erased and the error is
+    raised). Then each other store is cleared on its own and reported on its own: the learning
+    ledger (it keeps old/new text of every change, so its lines for this note are removed from
+    the file and its rotated copy) and the proposal store (``.memory-proposals.json``: text,
+    evidence and before-text of every matching record, decided ones included; a matching OPEN
+    proposal is dismissed, keeping only its hash). A store that failed or was not touched is
+    reported ``done=False`` and the residual list says the note may still be there; this function
+    never states the note is erased from a store it did not clear.
     """
     entries = notebook.entries()
     match = [e for e in entries.get(target, []) if e.id == entry_id]
@@ -449,11 +634,34 @@ def delete_notebook_entry(notebook: Any, target: str, entry_id: str) -> Deletion
     notebook.apply(target=target, operation="remove", entry_id=entry_id, expected=text,
                    source="deleted by owner", enforce_budget=False)
     report.stores.append(StoreResult("notebook entry", True, "removed from the notebook file"))
-    scrubbed = _scrub_ledger(notebook, entry_id, text)
-    note = f"{scrubbed} line(s) removed (including the deletion's own)"
-    report.stores.append(StoreResult("learning ledger", True, note))
-    notebook.invalidate()
-    report.stores.append(StoreResult("in-memory caches", True, "notebook prompt cache cleared"))
+    failed: list[str] = []
+    try:
+        scrubbed = _scrub_ledger(notebook, entry_id, text)
+        note = f"{scrubbed} line(s) removed (including the deletion's own)"
+        report.stores.append(StoreResult("learning ledger", True, note))
+    except (OSError, ValueError) as exc:
+        report.stores.append(StoreResult("learning ledger", False, f"NOT cleared: {exc}"))
+        failed.append("learning ledger")
+    try:
+        from dodaios.memory.control.proposals import ProposalError, ProposalStore
+
+        try:
+            count, dismissed = ProposalStore(notebook.folder).scrub_note(target, entry_id, text)
+        except ProposalError as exc:
+            raise OSError(str(exc)) from exc
+        detail = f"{count} record(s) scrubbed (text, evidence, before-text and hash)"
+        if dismissed:
+            detail += f"; {dismissed} open proposal(s) of the same note dismissed"
+        report.stores.append(StoreResult("proposal records", True, detail))
+    except (OSError, ValueError) as exc:
+        report.stores.append(StoreResult("proposal records", False, f"NOT cleared: {exc}"))
+        failed.append("proposal records")
+    try:
+        notebook.invalidate()
+        report.stores.append(StoreResult("in-memory caches", True, "notebook prompt cache cleared"))
+    except Exception as exc:  # noqa: BLE001 - reported, not hidden
+        report.stores.append(StoreResult("in-memory caches", False, f"NOT cleared: {exc}"))
+        failed.append("in-memory caches")
     report.residual = [
         "Backups of the notebook folder, if any, keep their copy until they rotate.",
         "Exports you already made keep their copy.",
@@ -461,6 +669,12 @@ def delete_notebook_entry(notebook: Any, target: str, entry_id: str) -> Deletion
         "A running voice session keeps the instructions it started with until it is renewed.",
         "The disk may still hold the old bytes in free space.",
     ]
+    if failed:
+        report.residual.insert(
+            0,
+            "The note may STILL be present in: " + ", ".join(failed)
+            + ". It was removed from the notebook only.",
+        )
     return report
 
 

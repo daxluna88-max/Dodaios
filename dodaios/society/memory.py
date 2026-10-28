@@ -193,6 +193,22 @@ class _Page:
     updated_ms: int
 
 
+_LEAD_NOTEBOOK_PAGES = ("society/jarvis/memory.md", "society/jarvis/user.md")
+
+
+def _shareable_notebook_body(rel: str, body: str) -> str:
+    """For the lead's USER.md / MEMORY.md, only the entries explicitly marked remote-shareable.
+    Any other page is returned as it is. An unreadable notebook yields nothing (fail closed)."""
+    if str(rel or "").replace("\\", "/").lower() not in _LEAD_NOTEBOOK_PAGES:
+        return body
+    from .notebook import parse, visible_entries
+
+    try:
+        return "\n\n".join(e.text for e in visible_entries(parse(body), remote=True))
+    except (ValueError, KeyError):
+        return ""
+
+
 class SocietyMemory:
     """See the module docstring. ``runtime`` gives the store, roster and approvals;
     ``vault_root`` resolves lazily because the config is."""
@@ -483,13 +499,22 @@ class SocietyMemory:
             return books[target]
         return [*books["user"], *books["memory"]]
 
-    def head(self, agent: AgentRecord, *, root: Path | None = None) -> str:
-        """Fresh, separately bounded profile and experience sections for every turn."""
+    def head(self, agent: AgentRecord, *, root: Path | None = None, remote: bool = True) -> str:
+        """Fresh, separately bounded profile and experience sections for every turn.
+
+        ADR-0061 block 17 (H2): the LEAD agent's notebooks are the ones the owner's approvals
+        write into, so for the lead the head lists only entries explicitly marked
+        remote-shareable unless the caller proves a local destination with ``remote=False``.
+        Other agents' notebooks carry no owner-approved material and are unchanged (their entry
+        labels are an open item in the ADR).
+        """
         from .memory_books import PROMPT_BUDGETS
-        from .notebook import briefing, select_entries
+        from .notebook import briefing, select_entries, visible_entries
         from .working_rules import PREFIX, render_guidance
 
         books = self.notebooks(agent, root=root)
+        if remote and getattr(agent, "agent_id", "") == "jarvis":
+            books = {target: visible_entries(rows, remote=True) for target, rows in books.items()}
         lines = []
         for target, title in (("user", "Your user profile"), ("memory", "Your memory")):
             selected, omitted = select_entries(books[target], max_chars=PROMPT_BUDGETS[target])
@@ -519,8 +544,16 @@ class SocietyMemory:
         )
 
     async def recall(
-        self, agent: AgentRecord, query: str, *, k: int = 5, root: Path | None = None
+        self,
+        agent: AgentRecord,
+        query: str,
+        *,
+        k: int = 5,
+        root: Path | None = None,
+        remote: bool = True,
     ) -> list[MemoryHit]:
+        """Search memory pages. ``remote`` (default, fail closed; ADR-0061 block 17) hides every
+        lead-notebook entry not explicitly marked remote-shareable from tokens and snippets."""
         query = str(query or "").strip()
         if not query:
             return []
@@ -534,7 +567,8 @@ class SocietyMemory:
         for page in self._pages(vault, agent_id=agent.agent_id):
             scope = self._scope_of(page, agent.agent_id)
             title = page.fm.get("title") or page.path.stem
-            ptokens = _tokens(title + "\n" + page.body)
+            page_body = _shareable_notebook_body(page.rel, page.body) if remote else page.body
+            ptokens = _tokens(title + "\n" + page_body)
             matched = len(qtokens & ptokens)
             if not qtokens or matched == 0:
                 continue
@@ -551,7 +585,7 @@ class SocietyMemory:
                     reviewed=reviewed or scope in ("own", "shared", "user"),
                     author=page.fm.get("author", ""),
                     score=round(score, 4),
-                    snippet=self._snippet(page.body, qtokens),
+                    snippet=self._snippet(page_body, qtokens),
                     updated_ms=page.updated_ms,
                 )
             )

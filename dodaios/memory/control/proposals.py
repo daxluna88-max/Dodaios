@@ -12,8 +12,16 @@ store never lists, approves or rejects another product's record.
 Provenance: ``local_only`` is True for every proposal. ``provenance`` is ``restricted`` when the
 conversation material carried a positive local-only signal and ``unlabelled`` otherwise (a
 background review has no per-turn label; absence of a label is never read as "shareable").
-The notebook itself has no per-entry label, so the label is kept on the record and shown, and
-is NOT enforced after approval (ADR-0061, limits).
+Block 17 (H2): approval carries the label INTO the notebook entry (``local_only=True`` and the
+typed provenance, never "unrestricted"), so an approved note stays out of every remote prompt.
+Approval to remember is not consent to send remotely.
+
+Block 17 (H4a): every decision is one transaction. All stores of the same file share one
+process-wide lock (registry keyed by path) plus a cross-process file lock, and approval writes an
+``applying`` reservation (with an idempotency ``apply_id``) BEFORE it touches the notebook. A crash
+leaves the record ``applying``; the next approve asks the notebook whether the change landed
+(``probe``) and either finishes it, hands it back as ``proposed`` (nothing was written) or marks it
+``apply_unknown`` for the owner. It is never applied a second time silently.
 """
 
 from __future__ import annotations
@@ -26,7 +34,8 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Final
@@ -37,6 +46,13 @@ FILE_NAME: Final[str] = ".memory-proposals.json"
 PROPOSED: Final[str] = "proposed"
 APPROVED: Final[str] = "approved"
 REJECTED: Final[str] = "rejected"
+#: Reserved before the notebook is touched; found on disk it means a crash or a failed final write.
+APPLYING: Final[str] = "applying"
+#: A recovery could not prove whether the change landed. Shown to the owner, never re-applied.
+UNKNOWN: Final[str] = "apply_unknown"
+OPEN_STATES: Final[tuple[str, ...]] = (PROPOSED, APPLYING, UNKNOWN)
+#: Seconds to wait for the cross-process lock before giving up with a 503.
+_FILE_LOCK_TIMEOUT_S: Final[float] = 10.0
 #: Open proposals kept per product; further ones are dropped (logged), never queued silently.
 MAX_PENDING: Final[int] = 100
 #: Decided records and rejected hashes kept.
@@ -78,9 +94,35 @@ class Proposal:
     decided: float = 0.0
     edited: bool = False
     hash: str = ""
+    #: Idempotency identity of the approval attempt (also written to the notebook ledger).
+    apply_id: str = ""
+    #: The exact text being applied while ``applying`` (kept so a recovery can compare).
+    applying_text: str = ""
+    #: A human-readable note about an interrupted/unknown approval; shown to the owner.
+    recovery: str = ""
+    #: True once a note deletion scrubbed this record's content.
+    scrubbed: bool = False
 
     def public(self) -> dict[str, Any]:
         return asdict(self)
+
+
+_REGISTRY_LOCK = threading.Lock()
+_PATH_LOCKS: dict[str, threading.RLock] = {}
+
+
+def _path_lock(path: Path) -> threading.RLock:
+    """The ONE process-wide lock for a proposals file (every ``ProposalStore`` on it shares it)."""
+    key = os.path.normcase(os.path.realpath(str(path)))
+    with _REGISTRY_LOCK:
+        lock = _PATH_LOCKS.get(key)
+        if lock is None:
+            lock = _PATH_LOCKS[key] = threading.RLock()
+        return lock
+
+
+def _norm(text: str) -> str:
+    return " ".join((text or "").lower().split())
 
 
 class ProposalError(Exception):
@@ -97,7 +139,22 @@ class ProposalStore:
     def __init__(self, folder: Path, *, product: str | None = None) -> None:
         self._path = Path(folder) / FILE_NAME
         self.product = product or current_product_name()
-        self._lock = threading.Lock()
+        # Shared by every store instance on this file (the routes build one per request).
+        self._lock = _path_lock(self._path)
+
+    @contextmanager
+    def _txn(self) -> Iterator[None]:
+        """One decision at a time: process-wide lock, then a cross-process file lock."""
+        from filelock import FileLock, Timeout
+
+        with self._lock:
+            try:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                guard = FileLock(str(self._path) + ".lock", timeout=_FILE_LOCK_TIMEOUT_S)
+                with guard:
+                    yield
+            except Timeout as exc:
+                raise ProposalError("The proposals are busy. Try again.", status=503) from exc
 
     # -- file ------------------------------------------------------------
 
@@ -164,13 +221,13 @@ class ProposalStore:
     ) -> Proposal | None:
         """Add a proposal; ``None`` if rejected before, already open, or the queue is full."""
         digest = content_hash(target, operation, entry_id, text)
-        with self._lock:
+        with self._txn():
             data = self._read()
             if digest in data["rejected"].get(self.product, {}):
                 log.info("memory proposals: identical to a rejected one, not proposed again")
                 return None
             mine = self._mine(data)
-            if any(p.hash == digest and p.state == PROPOSED for p in mine):
+            if any(p.hash == digest and p.state in OPEN_STATES for p in mine):
                 return None
             if sum(1 for p in mine if p.state == PROPOSED) >= MAX_PENDING:
                 log.warning("memory proposals: %d open, dropping a new one", MAX_PENDING)
@@ -197,10 +254,17 @@ class ProposalStore:
             self._write(data)
             return item
 
-    def items(self, *, state: str | None = PROPOSED) -> list[Proposal]:
-        with self._lock:
+    def items(
+        self, *, state: str | None = PROPOSED, states: tuple[str, ...] | None = None
+    ) -> list[Proposal]:
+        """This product's records. ``state`` one state (None = all); ``states`` several."""
+        if not self._path.parent.is_dir():
+            return []  # reading never creates the notebook folder
+        with self._txn():
             items = self._mine(self._read())
-        if state is not None:
+        if states is not None:
+            items = [p for p in items if p.state in states]
+        elif state is not None:
             items = [p for p in items if p.state == state]
         return sorted(items, key=lambda p: -p.created)
 
@@ -211,23 +275,41 @@ class ProposalStore:
                 return index, item
         raise ProposalError("No such proposal for this product.", status=404)
 
+    @staticmethod
+    def _entry_provenance(item: Proposal) -> str:
+        """The typed label stored with the approved ENTRY. Never ``unrestricted``: nothing here
+        can declare a proposal remote-shareable."""
+        return "restricted" if item.provenance == "restricted" else "unavailable"
+
     def approve(
         self,
         proposal_id: str,
         apply: Callable[..., Any],
         *,
         text: str | None = None,
+        probe: Callable[..., str] | None = None,
     ) -> Proposal:
         """Approve ONE proposal. ``text`` is the owner's edit (edit + approve).
 
-        ``apply`` is the notebook's ``apply``. The record becomes ``approved`` only after the
-        write succeeded; a refusal leaves it ``proposed`` and raises :class:`ProposalError`.
+        ``apply`` is the notebook's ``apply``; ``probe`` its ``probe_applied`` (recovery). One
+        transaction: ``applying`` is written to disk BEFORE ``apply`` is called, the record
+        becomes ``approved`` only after the write succeeded, and a refusal puts it back to
+        ``proposed``. A record found ``applying`` (crash, or a failed final write) is never
+        applied again: it is resolved by asking the notebook (:meth:`_recover`).
         """
         from dodaios.memory.learning.guard import refusal
 
-        with self._lock:
+        with self._txn():
             data = self._read()
             index, item = self._find(data, proposal_id)
+            if item.state == APPLYING:
+                return self._recover(data, index, item, probe)
+            if item.state == UNKNOWN:
+                raise ProposalError(
+                    "Whether this note was saved could not be proven. Check the notebook, "
+                    "then dismiss this proposal.",
+                    status=409,
+                )
             if item.state != PROPOSED:
                 raise ProposalError(f"This proposal is already {item.state}.")
             final = " ".join(text.split()) if text is not None else item.text
@@ -238,11 +320,22 @@ class ProposalStore:
                 reason = refusal(final)
                 if reason:
                     raise ProposalError(f"Not accepted: {reason}", status=422)
+            applied_text = final if item.operation != "remove" else ""
+            original = asdict(item)
+            item.state = APPLYING
+            item.apply_id = uuid.uuid4().hex[:16]
+            item.applying_text = applied_text
+            item.recovery = ""
+            data["proposals"][index] = asdict(item)
+            try:
+                self._write(data)  # the reservation is durable BEFORE the notebook is touched
+            except OSError as exc:
+                raise ProposalError(f"Not saved: {exc}", status=500) from exc
             try:
                 apply(
                     target=item.target,
                     operation=item.operation,
-                    text=final if item.operation != "remove" else "",
+                    text=applied_text,
                     entry_id=item.entry_id,
                     importance=item.importance,
                     origin="review",
@@ -250,41 +343,214 @@ class ProposalStore:
                     source="approved by owner" + (" (edited)" if edited else ""),
                     expected=item.before if item.operation != "add" else None,
                     seat=item.seat,
+                    local_only=True,
+                    provenance=self._entry_provenance(item),
+                    apply_id=item.apply_id,
                 )
-            except (ValueError, OSError) as exc:
+            except ValueError as exc:
+                # Refused before anything was written (guard, stale entry, full notebook).
+                data["proposals"][index] = original
+                self._write_quietly(data)
                 raise ProposalError(f"Not saved: {exc}") from exc
+            except OSError as exc:
+                # A write error is ambiguous (it may have landed): ask, never guess.
+                return self._after_failure(data, index, item, original, probe, exc)
             item.state = APPROVED
             item.decided = time.time()
             item.edited = edited
+            item.applying_text = ""
             if edited:
                 item.text = final
             data["proposals"][index] = asdict(item)
             self._trim(data)
-            self._write(data)
+            try:
+                self._write(data)
+            except OSError as exc:
+                # The note IS saved; the record still says ``applying`` and approve finishes it.
+                raise ProposalError(
+                    "The note was saved but its record could not be updated. "
+                    "Approve again to finish it; it will not be saved twice.",
+                    status=500,
+                ) from exc
             return item
 
+    def _write_quietly(self, data: dict[str, Any]) -> None:
+        try:
+            self._write(data)
+        except OSError:
+            log.warning("memory proposals: could not restore the record after a refusal")
+
+    def _after_failure(
+        self,
+        data: dict[str, Any],
+        index: int,
+        item: Proposal,
+        original: dict[str, Any],
+        probe: Callable[..., str] | None,
+        exc: Exception,
+    ) -> Proposal:
+        verdict = self._verdict(item, probe)
+        if verdict == "applied":
+            return self._finish(data, index, item, "saved although the write reported an error")
+        if verdict == "not_applied":
+            data["proposals"][index] = original
+            self._write_quietly(data)
+            raise ProposalError(f"Not saved: {exc}") from exc
+        self._mark_unknown(data, index, item, f"the write failed ({exc}); outcome not provable")
+        raise ProposalError(
+            "Not saved, or saved: this could not be proven. The proposal is marked unknown.",
+            status=409,
+        ) from exc
+
+    @staticmethod
+    def _verdict(item: Proposal, probe: Callable[..., str] | None) -> str:
+        if probe is None:
+            return "unknown"
+        try:
+            return str(
+                probe(
+                    apply_id=item.apply_id,
+                    target=item.target,
+                    operation=item.operation,
+                    entry_id=item.entry_id,
+                    text=item.applying_text,
+                    before=item.before,
+                )
+            )
+        except Exception:  # noqa: BLE001 - a probe fault proves nothing
+            log.warning("memory proposals: recovery probe failed", exc_info=True)
+            return "unknown"
+
+    def _finish(self, data: dict[str, Any], index: int, item: Proposal, note: str) -> Proposal:
+        item.edited = bool(item.applying_text) and item.applying_text != item.text
+        if item.applying_text:
+            item.text = item.applying_text
+        item.state = APPROVED
+        item.decided = time.time()
+        item.applying_text = ""
+        item.recovery = note
+        data["proposals"][index] = asdict(item)
+        self._trim(data)
+        self._write(data)
+        return item
+
+    def _mark_unknown(self, data: dict[str, Any], index: int, item: Proposal, note: str) -> None:
+        item.state = UNKNOWN
+        item.recovery = note
+        data["proposals"][index] = asdict(item)
+        self._write_quietly(data)
+
+    def _recover(
+        self, data: dict[str, Any], index: int, item: Proposal, probe: Callable[..., str] | None
+    ) -> Proposal:
+        """Resolve a record found ``applying``. Never calls ``apply``."""
+        verdict = self._verdict(item, probe)
+        if verdict == "applied":
+            return self._finish(data, index, item, "finished after an interrupted approval")
+        if verdict == "not_applied":
+            item.state = PROPOSED
+            item.apply_id = ""
+            item.applying_text = ""
+            item.recovery = (
+                "An earlier approval was interrupted before anything was written. "
+                "Review it and approve again."
+            )
+            data["proposals"][index] = asdict(item)
+            self._write(data)
+            raise ProposalError(item.recovery, status=409)
+        self._mark_unknown(
+            data, index, item,
+            "An earlier approval was interrupted; whether it was saved is unknown.",
+        )
+        raise ProposalError(
+            "An earlier approval was interrupted and whether it was saved could not be proven. "
+            "Check the notebook, then dismiss this proposal.",
+            status=409,
+        )
+
     def reject(self, proposal_id: str) -> Proposal:
-        """Reject ONE proposal and remember its hash so it is not proposed again."""
-        with self._lock:
+        """Reject ONE proposal and remember its hash so it is not proposed again.
+
+        Also the way to dismiss a record left ``apply_unknown``. A record being applied (or
+        interrupted mid-apply) is not rejected: approve resolves it first.
+        """
+        with self._txn():
             data = self._read()
             index, item = self._find(data, proposal_id)
-            if item.state != PROPOSED:
+            if item.state == APPLYING:
+                raise ProposalError(
+                    "This proposal is being saved or an approval was interrupted. "
+                    "Approve it to finish or resolve it first.",
+                    status=409,
+                )
+            if item.state not in (PROPOSED, UNKNOWN):
                 raise ProposalError(f"This proposal is already {item.state}.")
-            item.state = REJECTED
-            item.decided = time.time()
-            hashes = data["rejected"].setdefault(self.product, {})
-            hashes[item.hash] = item.decided
-            if len(hashes) > MAX_REJECTED_HASHES:
-                for old in sorted(hashes, key=hashes.get)[: len(hashes) - MAX_REJECTED_HASHES]:
-                    del hashes[old]
-            # The rejected text itself is not kept: only its hash.
-            item.text = ""
-            item.evidence = ""
-            item.before = ""
-            data["proposals"][index] = asdict(item)
+            self._reject_record(data, index, item)
             self._trim(data)
             self._write(data)
             return item
+
+    def _reject_record(self, data: dict[str, Any], index: int, item: Proposal) -> None:
+        item.state = REJECTED
+        item.decided = time.time()
+        hashes = data["rejected"].setdefault(self.product, {})
+        hashes[item.hash] = item.decided
+        if len(hashes) > MAX_REJECTED_HASHES:
+            for old in sorted(hashes, key=hashes.get)[: len(hashes) - MAX_REJECTED_HASHES]:
+                del hashes[old]
+        # The rejected text itself is not kept: only its hash.
+        item.text = ""
+        item.evidence = ""
+        item.before = ""
+        item.applying_text = ""
+        data["proposals"][index] = asdict(item)
+
+    def scrub_note(self, target: str, entry_id: str, text: str) -> tuple[int, int]:
+        """Remove a deleted note from EVERY record of this file (all states, all products).
+
+        A record matches on its entry id for this target, or when its text, applying text or
+        before-text equals the note, or its evidence contains it. Decided and unknown records are
+        blanked (text, evidence, before, applying text, hash). An open ``proposed`` match is
+        turned into a rejection (only its hash is kept, so it is not proposed again) rather than
+        left in the queue. Returns ``(records scrubbed, open proposals dismissed)``. Raises
+        ``OSError`` on a failed write: the caller must report the store as NOT cleared.
+        """
+        wanted = _norm(text)
+        scrubbed = dismissed = 0
+        with self._txn():
+            data = self._read()
+            for index, raw in enumerate(list(data["proposals"])):
+                item = self._load(raw)
+                if item is None:
+                    continue
+                hit = (
+                    bool(entry_id) and item.target == target and item.entry_id == entry_id
+                ) or bool(wanted) and (
+                    _norm(item.text) == wanted
+                    or _norm(item.before) == wanted
+                    or _norm(item.applying_text) == wanted
+                    or wanted in _norm(item.evidence)
+                )
+                if not hit:
+                    continue
+                if item.state == PROPOSED:
+                    saved = self.product
+                    self.product = item.product
+                    try:
+                        self._reject_record(data, index, item)
+                    finally:
+                        self.product = saved
+                    dismissed += 1
+                elif item.state == APPLYING:
+                    continue  # being saved right now; reported by the caller as not cleared
+                item.text = item.evidence = item.before = item.applying_text = ""
+                item.hash = ""
+                item.scrubbed = True
+                data["proposals"][index] = asdict(item)
+                scrubbed += 1
+            if scrubbed:
+                self._write(data)
+        return scrubbed, dismissed
 
     def _trim(self, data: dict[str, Any]) -> None:
         decided = [
@@ -298,7 +564,7 @@ class ProposalStore:
 
     def forget_all_for_product(self) -> int:
         """Drop every record and rejected hash of THIS product (used by a full memory delete)."""
-        with self._lock:
+        with self._txn():
             data = self._read()
             keep = [r for r in data["proposals"] if r.get("product") != self.product]
             removed = len(data["proposals"]) - len(keep)

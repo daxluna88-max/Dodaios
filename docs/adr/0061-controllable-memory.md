@@ -139,3 +139,105 @@ Not written: route tests (auth/CSRF), notebook-entry ledger scrub, vitest for th
 Manual checklist (all open): approve / edit / reject one note; confirm a pending note is absent from the realtime
 prompt; logical delete then restore; permanent delete then search for a phrase; export opens and lists only own
 product; two products side by side.
+
+## Block 17: GPT round 4 (H2, H3, H4)
+
+**Nothing was run**: no pytest, no CI, no app, no filesystem experiment. Python was only read, edited,
+`py_compile`d and `ruff check`ed. The new tests (`tests/unit/memory/control/test_block17_gpt4.py`) are **written, not
+run**. Existing tests that assert the old behaviour were **not** updated and will likely fail until the owner runs and
+adjusts them (see "Expected test fallout"). No locale keys were added: no new user-facing string (API messages are
+English, like the rest of the module). This section supersedes the Limits bullet "The approved note carries no per-entry
+privacy label".
+
+### H2 (HIGH) approved note kept its local-only label only on the proposal: **fixed for the Jarvis notebooks, partial overall**
+
+- **Entry format** (`society/notebook.py`): `Entry` gains `local_only` (default True) and `provenance` (default
+  `unavailable`), stored in the entry marker only when not default, so an unlabelled entry stays byte-identical and
+  every old or hand-written entry reads as local-only/UNAVAILABLE. Only `local_only` literally `false` together with
+  provenance `unrestricted` is shareable (`remote_shareable`); any malformed or partial pair collapses to local-only.
+  `change()` takes the labels of the text being written, so a replace never inherits an old entry's label.
+- **Write**: `JarvisNotebook.apply(local_only=True, provenance="unavailable", apply_id="")` stores the label (user,
+  memory and soul targets) and records it in the ledger. `ProposalStore.approve` always passes `local_only=True` and
+  `restricted` or `unavailable`, never `unrestricted`: approval to remember is not consent to send remotely. Nothing in
+  this block lets the owner mark a note shareable (open item, no UI). `keep_explicit` (remember tool) stores the label
+  from the turn channel (`storage_label`, positive UNRESTRICTED only); the post-turn fallback save is local-only.
+- **Read doors**: `snapshot_block`, `memory_block`, `dated_notes` default to `remote=True` (fail closed: shareable
+  entries only, no header and no "N notes not shown" counts when none qualifies). `remote=False` is for a PROVEN local
+  destination and marks the current turn RESTRICTED when the text includes a local-only entry, so the answer cannot be
+  spoken by a remote TTS or replayed to a remote engine. `brain/manager.py`, `realtime/session.py` and `live/session.py`
+  (not edited) use the default, so they are remote-safe. `Soul.render_for_prompt(remote=True)` withholds unlabelled
+  learned SOUL notes. `SocietyMemory.head` and `recall` hide unlabelled entries of the LEAD notebooks
+  (`society/jarvis/{USER,MEMORY}.md`). The review and compaction seats are treated as remote (no positive `is_local`
+  signal exists) and are shown shareable entries only. `proactivity.upcoming_notes` (the owner's own page) uses
+  `remote=False`.
+- **Choice**: fail closed everywhere the notebook has no destination knowledge. Cost: with no way to mark an entry
+  shareable yet, a remote engine and the manager's system prompt see **no** learned notebook entries, local engines
+  included (the manager builds one prompt for all engines); the reviewer cannot see or merge local-only notes.
+- **Residual / open**: (1) the curator/wiki write paths that bypass proposals are a **separate declared open item** and
+  are unchanged; (2) other agents' notebooks and agent writes through `SocietyMemory.write` get the default local-only
+  label but their read paths are not filtered; (3) the notebook files are vault pages: wiki search, FTS/embedding
+  indexing and the turn-memory provider can still surface their raw text to a remote engine (the provider's own labels
+  decide; the files themselves carry markers but the index does not); (4) the LEAD's own tool results are not
+  destination-aware; (5) no UI to share a note remotely; (6) the exported zip includes the markers as written.
+
+### H3 (HIGH) trash manifests trusted as paths: **fixed in code, not exercised**
+
+`memory/control/deletion.py`: `_validate_manifest` (object schema; `id` equals the folder name and the requested id;
+finite non-bool timestamps; optional `sha256` shape; the `product` recorded at deletion, new field, must be the current
+one, legacy manifests without it are accepted; canonical relative `.md` path via `canonical_rel`: no `..`, empty or `.`
+part, absolute, drive, backslash, NUL, dot or reserved first part), `_is_linked` (`lstat`: symlink, junction or any
+reparse point), `_confine` (strict resolve of the base, every existing component must be a real entry, strict resolve
+of the deepest existing part must stay inside the base). Used by `_trash_entry`, `list_trash` (invalid entries are not
+listed), `restore` (source and destination confined, linked trash root/folder/ancestors refused, the trashed file's
+SHA-256 must equal the manifest's, destination re-checked after `mkdir`), `permanent_delete` (trash copy, older trash
+copies via validated ids, `_archive/<rel>` confined; linked archive refused), `purge_expired` (acts only on validated
+ids, an invalid entry is left alone), `_safe_page` and `logical_delete` (manifest written before the page moves; an
+undeleted move failure removes the empty trash folder). Invalid entries answer 404 "Unknown trash entry".
+- **Residual**: a TOCTOU window remains between the checks and `os.replace`/`rmtree` (another local process swapping a
+  directory for a link); no handle-based (`openat`) walk. `shutil.rmtree` is not given a no-follow guarantee beyond its
+  own symlink handling. A corrupt entry stays on disk forever (listed nowhere) until removed by hand.
+  `canonical_rel` also rejects live pages under dot folders or with a part ending in `.` or space (none are walked as
+  pages anyway).
+
+### H4 (HIGH) (a) proposal approval not atomic; (b) note deletion never scrubbed proposals: **(a) fixed in code, partial for process death at the final write; (b) fixed**
+
+- **(a)** `memory/control/proposals.py`: all stores of one file share one process-wide `RLock` from a registry keyed by
+  the real path, plus a cross-process `filelock` on `.memory-proposals.json.lock` (10 s, then 503). `approve` writes the
+  record as `applying` with a fresh `apply_id` and the exact text **before** calling `apply` (durable, fsynced
+  replace), passes `apply_id` (also written to the notebook ledger) and, on success, writes `approved`. `ValueError`
+  from `apply` (refused before any write) restores `proposed`. An `OSError` is ambiguous and goes through the probe.
+  A record found `applying` is resolved by `JarvisNotebook.probe_applied` (ledger line with the id is definitive;
+  otherwise the notebook text is compared): `applied` finishes it as `approved` (note shows the recovery), `not_applied`
+  returns it to `proposed` and tells the owner to approve again, anything else becomes `apply_unknown`, shown with
+  its recovery text and only dismissable (`reject`). `apply` is **never** called for a record that was already
+  `applying`. `approve` for two concurrent requests applies once (the second sees `approved`/`applying`). The route
+  lists `proposed`, `applying` and `apply_unknown` and passes the probe. `reject` is refused while `applying`.
+- **Residual**: the probe for `remove`, and for a `replace` whose new text equals the old, cannot prove an outcome and
+  ends in `apply_unknown`; a crash between the notebook write and the ledger append falls back to the text compare;
+  a stale `.lock` file is harmless but stays; the front end shows the new states as raw state names (UI source is not
+  rebuilt and not live).
+- **(b)** `deletion.delete_notebook_entry` now calls `ProposalStore.scrub_note` for every record of the file (all
+  states and products): matching text, applying text, before-text, evidence containing the note, or entry id; the text,
+  evidence, before, applying text and hash are blanked (`scrubbed=true`); a matching **open** proposal is dismissed
+  (only its hash remains, so it is not proposed again). Each store (notebook, ledger, proposals, caches) is reported on
+  its own; a failure reports `done=false` and puts "The note may STILL be present in: ..." first in `residual`. The
+  note is never reported erased from a store that failed or was not touched.
+- **Residual**: matching is normalised-text equality or substring in evidence, so a paraphrase in another record is
+  missed; the rejected-hash map keeps hashes of rejected texts (hashes, not text); a record `applying` at that moment is
+  not scrubbed (reported by the count only); notebook folder backups and exports keep their copy.
+
+### Expected test fallout (not run, not edited)
+
+Tests that build a `JarvisNotebook`, write unlabelled entries and then assert them in `snapshot_block`/`memory_block`/
+`dated_notes`/`Soul.render_for_prompt`/`SocietyMemory.head`/`recall` or in the reviewer prompt now see nothing unless
+they pass `remote=False` or write with `local_only=False, provenance="unrestricted"`. Tests that fake `apply` with a
+fixed signature need `**kwargs`. Tests that hand-write a trash manifest need `id` equal to the folder name.
+
+### Controls prepared, NOT RUN
+
+`tests/unit/memory/control/test_block17_gpt4.py` (label parse/render/roundtrip and malformed-label fail-closed,
+replace not inheriting, remote selection, approval passing `local_only=True`, notebook and `snapshot_block` remote
+default, turn taint on a local view, lead-notebook body filter; manifest path/id/timestamp/product/hash/linked
+folder/root/ancestor/archive cases; shared lock, concurrent approvals applying once, reservation on disk before apply,
+crash recovery applied / not applied / unknown, refused apply restoring; probe; proposal scrub and per-store failure
+reporting). Not written: route tests, a handle-based traversal test, a Windows junction test, vitest for the new states.

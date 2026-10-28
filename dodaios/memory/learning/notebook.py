@@ -153,11 +153,13 @@ class JarvisNotebook:
             **(budgets or {}),
         }
         self._lock = threading.Lock()
-        self._cache: dict[bool, str] = {}
+        #: ``(compact, remote) -> (rendered text, includes a local-only entry)``.
+        self._cache: dict[tuple[bool, bool], tuple[str, bool]] = {}
         self._signature: tuple[float, ...] | None = None
         self._checked_at = 0.0
         #: ``(file signature, checked at, [(date, note text)])`` for :meth:`dated_notes`.
-        self._dated: tuple[tuple[float, ...], float, list[tuple[date, str]]] | None = None
+        #: One slot per ``remote`` flag (a remote view lists shareable entries only).
+        self._dated: dict[bool, tuple[tuple[float, ...], float, list[tuple[date, str]]]] = {}
         #: ``(monotonic time, saved content, what the user said)`` per tool save.
         self._tool_saves: list[tuple[float, str, str]] = []
 
@@ -230,6 +232,9 @@ class JarvisNotebook:
         expected: str | None = None,
         enforce_budget: bool = True,
         seat: dict[str, str] | None = None,
+        local_only: bool = True,
+        provenance: str = "unavailable",
+        apply_id: str = "",
     ) -> Change | None:
         """Write one change; ``None`` when it changed nothing (a duplicate).
 
@@ -242,9 +247,19 @@ class JarvisNotebook:
         Every applied change is appended to a ledger with its old and new text,
         so nothing the loop replaces or removes is ever unrecoverable. ``seat``
         (seat, runner, billing) names the model call that proposed it.
+
+        ``local_only`` / ``provenance`` (ADR-0061 block 17, H2) are the ENTRY-LEVEL label stored
+        with the written text. The default is local-only / unavailable: approval to remember is
+        NOT consent to send remotely, so only a caller that positively declares
+        ``local_only=False, provenance="unrestricted"`` makes an entry reachable by a remote
+        destination. A replace takes the labels of the NEW text. ``apply_id`` is an idempotency
+        identity recorded in the ledger so a retry after a crash can tell the change landed.
         """
         from dodaios.memory.write_feedback import announce_write
         from dodaios.society.memory_books import edit_book
+        from dodaios.society.notebook import normalise_labels
+
+        local_only, provenance = normalise_labels(local_only, provenance)
 
         if target not in TARGETS:
             raise ValueError("target must be user, memory or soul")
@@ -270,12 +285,18 @@ class JarvisNotebook:
                     entry_id=entry_id,
                     importance=importance,
                     origin=origin,
+                    local_only=local_only,
+                    provenance=provenance,
                 )
             if not receipt.changed:
                 return None
             after = text if operation != "remove" else ""
             change = Change(target, operation, entry_id, before, after)
-            self._append_ledger(change, evidence=evidence, source=source, seat=seat)
+            self._append_ledger(
+                change, evidence=evidence, source=source, seat=seat,
+                labels=(local_only, provenance), apply_id=apply_id,
+            )
+            self.invalidate()
             return change
         with announce_write(OWNER_ID, self._file_name(target), operation=operation) as receipt:
             for attempt in range(_REPLACE_ATTEMPTS):
@@ -289,6 +310,8 @@ class JarvisNotebook:
                         entry_id=entry_id,
                         importance=max(1, min(10, int(importance))),
                         origin=origin,
+                        local_only=local_only,
+                        provenance=provenance,
                     )
                     break
                 except PermissionError:
@@ -301,9 +324,60 @@ class JarvisNotebook:
         if not result.changed:
             return None
         change = Change(target, operation, entry_id, before, text if operation != "remove" else "")
-        self._append_ledger(change, evidence=evidence, source=source, seat=seat)
+        self._append_ledger(
+            change, evidence=evidence, source=source, seat=seat,
+            labels=(local_only, provenance), apply_id=apply_id,
+        )
         self.invalidate()
         return change
+
+    def probe_applied(
+        self,
+        *,
+        apply_id: str,
+        target: str,
+        operation: str,
+        entry_id: str,
+        text: str,
+        before: str,
+    ) -> str:
+        """Did the change a crashed approval attempted land? ``applied``, ``not_applied`` or
+        ``unknown``. Read only; never writes. The ledger line carrying ``apply_id`` is definitive;
+        otherwise the notebook text is compared with what the change would have produced, and
+        anything ambiguous is ``unknown`` (the caller must not re-apply it silently)."""
+        if apply_id and self._ledger_has(apply_id):
+            return "applied"
+        try:
+            rows = self.entries().get(target, [])
+        except Exception:  # noqa: BLE001 - an unreadable notebook cannot prove anything
+            return "unknown"
+        norm = " ".join((text or "").split())
+        if operation == "add":
+            hit = any(" ".join(e.text.split()) == norm for e in rows)
+            return "applied" if hit else "not_applied"
+        found = [e for e in rows if e.id == entry_id]
+        if operation == "remove":
+            return "not_applied" if found else "unknown"
+        if len(found) != 1:
+            return "unknown"
+        now = " ".join(found[0].text.split())
+        if now == " ".join((before or "").split()) and now != norm:
+            return "not_applied"
+        if now == norm and now != " ".join((before or "").split()):
+            return "applied"
+        return "unknown"
+
+    def _ledger_has(self, apply_id: str) -> bool:
+        for name in (LEDGER_NAME, LEDGER_NAME + ".1"):
+            path = self.folder / name
+            try:
+                if path.is_file() and f'"apply_id": "{apply_id}"' in path.read_text(
+                    encoding="utf-8", errors="replace"
+                ):
+                    return True
+            except OSError:
+                continue
+        return False
 
     def keep_explicit(
         self,
@@ -340,6 +414,13 @@ class JarvisNotebook:
             raise ValueError(reason)
         if not via_tool and self._saved_by_tool(content, evidence):
             return None
+        # The label comes from the turn channel only (a POSITIVE UNRESTRICTED declaration); a
+        # fallback save made after the turn has no channel and stays local-only (fail closed).
+        label = "unavailable"
+        if via_tool:
+            from dodaios.brain.provenance import storage_label
+
+            label = storage_label(text).value
         change = self.apply(
             target="memory",
             operation="add",
@@ -349,6 +430,8 @@ class JarvisNotebook:
             evidence=evidence,
             source=source,
             enforce_budget=False,
+            local_only=label != "unrestricted",
+            provenance=label,
         )
         if via_tool:
             now = time.monotonic()
@@ -376,7 +459,15 @@ class JarvisNotebook:
         return False
 
     def _edit_soul(
-        self, text: str, *, operation: str, entry_id: str, importance: int, origin: str
+        self,
+        text: str,
+        *,
+        operation: str,
+        entry_id: str,
+        importance: int,
+        origin: str,
+        local_only: bool = True,
+        provenance: str = "unavailable",
     ) -> bool:
         """One change to SOUL.md's learned section, under its lock."""
         from dodaios.memory.soul import edit_soul
@@ -394,6 +485,8 @@ class JarvisNotebook:
                 entry_id=entry_id,
                 importance=max(1, min(10, int(importance))),
                 origin=origin,
+                local_only=local_only,
+                provenance=provenance,
             )
             if updated == current:
                 return False
@@ -453,6 +546,8 @@ class JarvisNotebook:
         evidence: str,
         source: str,
         seat: dict[str, str] | None = None,
+        labels: tuple[bool, str] | None = None,
+        apply_id: str = "",
     ) -> None:
         from dodaios.memory.learning.guard import contains_secret
 
@@ -468,6 +563,10 @@ class JarvisNotebook:
             "evidence": "[withheld]" if contains_secret(evidence) else evidence,
             **(seat or {}),
         }
+        if labels is not None:
+            record["local_only"], record["provenance"] = labels
+        if apply_id:
+            record["apply_id"] = apply_id
         self._write_ledger(record)
 
     def _write_ledger(self, record: dict[str, Any]) -> None:
@@ -492,7 +591,7 @@ class JarvisNotebook:
             self._cache.clear()
             self._signature = None
             self._checked_at = 0.0
-            self._dated = None
+            self._dated = {}
 
     def _file_signature(self) -> tuple[float, ...]:
         folder = self.folder
@@ -530,63 +629,95 @@ class JarvisNotebook:
         except Timeout:  # a writer holds the books: None tells the caller to skip this read
             return None
 
-    def render(self, *, compact: bool = False, books: dict[str, list[Any]] | None = None) -> str:
-        """The prompt block; empty while nothing has been learned."""
-        from dodaios.society.notebook import select_entries
+    def render(
+        self,
+        *,
+        compact: bool = False,
+        books: dict[str, list[Any]] | None = None,
+        remote: bool = False,
+    ) -> str:
+        """The prompt block; empty while nothing has been learned.
+
+        ``remote=True`` renders ONLY entries explicitly marked remote-shareable (ADR-0061
+        block 17, H2); the default renders everything for a local destination.
+        """
+        return self._render(compact=compact, books=books, remote=remote)[0]
+
+    def _render(
+        self,
+        *,
+        compact: bool,
+        books: dict[str, list[Any]] | None,
+        remote: bool,
+    ) -> tuple[str, bool]:
+        """``(text, tainted)``: ``tainted`` is True when a local-only entry is in the text."""
+        from dodaios.society.notebook import remote_shareable, select_entries
 
         books = books if books is not None else self.entries()
         # SOUL.md reaches the prompt whole through dodaios.brain.identity.
         if not any(books.get(target) for target in BOOK_TARGETS):
-            return ""
+            return "", False
+        shown: list[Any] = []
         parts = [_HEADER]
         # What the user asked to be remembered comes first and never competes
         # with what a review inferred for the regular budget.
         explicit = [e for e in books.get("memory", []) if e.origin == EXPLICIT_ORIGIN]
         if explicit:
             allowance = EXPLICIT_PROMPT_CHARS // (2 if compact else 1)
-            selected, omitted = select_entries(explicit, max_chars=allowance)
+            selected, omitted = select_entries(explicit, max_chars=allowance, remote=remote)
             selected.sort(key=lambda e: e.revision)
-            parts.append(_EXPLICIT_TITLE)
-            parts.append("\n".join("- " + " ".join(e.text.split()) for e in selected))
+            if selected:
+                parts.append(_EXPLICIT_TITLE)
+                parts.append("\n".join("- " + " ".join(e.text.split()) for e in selected))
+                shown += selected
             if omitted:
                 parts.append(f"({omitted} older requests are not shown.)")
         for target in BOOK_TARGETS:
             budget = self.budgets[target] // (2 if compact else 1)
             rows = [e for e in books[target] if e.origin != EXPLICIT_ORIGIN or target != "memory"]
-            selected, omitted = select_entries(rows, max_chars=budget)
+            selected, omitted = select_entries(rows, max_chars=budget, remote=remote)
             if not selected:
                 continue
             # Oldest first within what fits: the notebook reads as a story.
             selected.sort(key=lambda e: e.revision)
             parts.append(_TITLES[target])
             parts.append("\n".join("- " + " ".join(e.text.split()) for e in selected))
+            shown += selected
             if omitted:
                 parts.append(f"({omitted} less important notes are not shown.)")
-        return "\n".join(parts)
+        if not shown:
+            # Nothing may be shown (remote view with no shareable entry): no header, no counts.
+            return "", False
+        return "\n".join(parts), any(not remote_shareable(e) for e in shown)
 
-    def snapshot(self, *, compact: bool = False) -> str:
+    def snapshot(self, *, compact: bool = False, remote: bool = False) -> str:
         """Cached ``render`` that follows edits made anywhere (UI, Obsidian).
 
         Never waits on a writer and never caches a failed read: a busy or
         unreadable notebook serves the last good text and is retried on the
-        next call.
+        next call. ``remote`` selects the shareable-only view (cached separately).
         """
+        return self.snapshot_labelled(compact=compact, remote=remote)[0]
+
+    def snapshot_labelled(self, *, compact: bool = False, remote: bool = False) -> tuple[str, bool]:
+        """:meth:`snapshot` plus whether the text includes a local-only entry."""
+        key = (compact, remote)
         now = time.monotonic()
         with self._lock:
-            if now - self._checked_at < _STAT_INTERVAL_S and compact in self._cache:
-                return self._cache[compact]
-            stale = self._cache.get(compact, "")
+            if now - self._checked_at < _STAT_INTERVAL_S and key in self._cache:
+                return self._cache[key]
+            stale = self._cache.get(key, ("", False))
             known = self._signature
         try:
             signature = self._file_signature()
-            if signature == known and compact in self._cache:
+            if signature == known and key in self._cache:
                 with self._lock:
                     self._checked_at = now
                 return stale
             books = self._read_quietly()
             if books is None:
                 return stale  # A writer is busy; its invalidate() brings the new text.
-            text = self.render(compact=compact, books=books)
+            result = self._render(compact=compact, books=books, remote=remote)
         except Exception:  # noqa: BLE001 — a bad notebook must never break a prompt build
             log.warning("learning: could not render the notebooks", exc_info=True)
             return stale
@@ -594,27 +725,28 @@ class JarvisNotebook:
             if signature != self._signature:
                 self._cache.clear()
                 self._signature = signature
-            self._cache[compact] = text
+            self._cache[key] = result
             self._checked_at = now
-        return text
+        return result
 
-    def dated_notes(self) -> list[tuple[date, str]]:
+    def dated_notes(self, *, remote: bool = False) -> list[tuple[date, str]]:
         """``(date, note)`` for every date written in USER.md or MEMORY.md.
 
         The prompt path's view of the person's dated goals and plans. Cached
         on the files' mtimes like :meth:`snapshot`, never waits on a writer
-        (a busy notebook serves the last list) and never raises.
+        (a busy notebook serves the last list) and never raises. ``remote=True`` lists only
+        entries explicitly marked remote-shareable.
         """
         now = time.monotonic()
         with self._lock:
-            cached = self._dated
+            cached = self._dated.get(remote)
         if cached is not None and now - cached[1] < _STAT_INTERVAL_S:
             return cached[2]
         try:
             signature = self._file_signature()
             if cached is not None and cached[0] == signature:
                 with self._lock:
-                    self._dated = (signature, now, cached[2])
+                    self._dated[remote] = (signature, now, cached[2])
                 return cached[2]
             books = self._read_quietly()
         except Exception:  # noqa: BLE001 — a bad notebook must never break a prompt build
@@ -627,16 +759,18 @@ class JarvisNotebook:
             # kept, so the next check after the interval reads the new files.
             stale = cached[2] if cached is not None else []
             with self._lock:
-                self._dated = (cached[0] if cached is not None else (), now, stale)
+                self._dated[remote] = (cached[0] if cached is not None else (), now, stale)
             return stale
+        from dodaios.society.notebook import visible_entries
+
         notes = [
             (day, " ".join(entry.text.split()))
             for target in BOOK_TARGETS
-            for entry in books.get(target, [])
+            for entry in visible_entries(books.get(target, []), remote=remote)
             for day in note_dates(entry.text)
         ]
         with self._lock:
-            self._dated = (signature, now, notes)
+            self._dated[remote] = (signature, now, notes)
         return notes
 
     def warm(self) -> None:
@@ -652,7 +786,8 @@ class JarvisNotebook:
         self.paths()
         self.invalidate()
         for compact in (False, True):
-            self.snapshot(compact=compact)
+            for remote in (False, True):
+                self.snapshot(compact=compact, remote=remote)
 
 
 # ── the process-wide active notebook ────────────────────────────────────────
@@ -671,27 +806,50 @@ def active() -> JarvisNotebook | None:
     return _active
 
 
-def snapshot_block(*, compact: bool = False) -> str:
-    """What every prompt builder appends; ``""`` when the loop is not running."""
+def snapshot_block(*, compact: bool = False, remote: bool = True) -> str:
+    """What every prompt builder appends; ``""`` when the loop is not running.
+
+    ``remote`` defaults to True (FAIL CLOSED, ADR-0061 block 17, H2): a caller that does not say
+    its destination is local gets only entries explicitly marked remote-shareable. A caller
+    whose destination is PROVEN local passes ``remote=False`` and receives every entry; if that
+    text includes a local-only entry the current turn is marked RESTRICTED, so the answer cannot
+    be spoken by a remote synthesizer or replayed to a remote engine.
+    """
     notebook = _active
     if notebook is None:
         return ""
-    return notebook.snapshot(compact=compact)
+    text, tainted = notebook.snapshot_labelled(compact=compact, remote=remote)
+    if tainted and not remote:
+        _taint_turn()
+    return text
 
 
-def dated_notes() -> list[tuple[date, str]]:
-    """The active notebook's dated notes; ``[]`` when the loop is not running."""
+def _taint_turn() -> None:
+    try:
+        from dodaios.brain import provenance
+
+        provenance.set_turn_provenance(provenance.Provenance.RESTRICTED)
+    except Exception:  # noqa: BLE001 - a label failure must not break a prompt build
+        log.debug("learning: could not mark the turn restricted", exc_info=True)
+
+
+def dated_notes(*, remote: bool = True) -> list[tuple[date, str]]:
+    """The active notebook's dated notes; ``[]`` when the loop is not running.
+
+    ``remote`` defaults to True (fail closed): only remote-shareable entries. The assistant
+    page, which shows the owner their own notes on this machine, passes ``remote=False``.
+    """
     notebook = _active
     if notebook is None:
         return []
-    return notebook.dated_notes()
+    return notebook.dated_notes(remote=remote)
 
 
-def memory_block(*, compact: bool = False) -> str:
+def memory_block(*, compact: bool = False, remote: bool = True) -> str:
     """:data:`REMEMBER_DIRECTIVE` plus the snapshot, for a surface with the remember tool."""
     if _active is None:
         return ""
-    learned = snapshot_block(compact=compact)
+    learned = snapshot_block(compact=compact, remote=remote)
     return REMEMBER_DIRECTIVE + ("\n\n" + learned if learned else "")
 
 
