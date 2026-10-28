@@ -539,3 +539,5 @@ Anything not documented by the provider in writing is recorded as "unknown", not
 ---
 
 Pointer (2026-10-28): a local environment definition for the one-VPS-per-customer baseline is in `deploy/jarvis-cloud-node/` (cloud-init, systemd units, Caddy, nftables, AppArmor, Chromium profile, D1-D20 status in `DEPENDENCY-MAP.md`). Status: **designed, NOT RUN** - nothing was built, booted or tested; it revises D9 (Chromium sandbox kept, no `--no-sandbox`).
+
+See also ADR-0067 (account -> ONE VM mapping; security and operations on the one-VPS-per-customer baseline): it supersedes the shared-node, scale-to-zero and open-decision statements of this ADR where listed in its section 1.
