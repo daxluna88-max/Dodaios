@@ -547,9 +547,17 @@ class DesktopRealtimePlayback:
             self._task.add_done_callback(self._observe_playback_result)
         assert self._queue is not None
         generation = getattr(self._player, "output_generation", 0)
-        await self._queue.put((generation,
+        item = (generation,
             AudioChunk(pcm=bytes(pcm), sample_rate=self._sample_rate, timestamp_ns=0)
-        ))
+        )
+        # ``stale()`` was read above with no await since: on a queue with room, ``put_nowait``
+        # enqueues in the same synchronous step (ADR-0058 block 18). A FULL queue makes ``put``
+        # suspend before the chunk is enqueued; STOP can land then. That chunk is not recalled:
+        # ``_chunks`` drops stale chunks at dequeue instead.
+        try:
+            self._queue.put_nowait(item)
+        except asyncio.QueueFull:
+            await self._queue.put(item)
 
     def set_sample_rate(self, sample_rate: int) -> None:
         """Set the rate announced by the accepted provider handshake.

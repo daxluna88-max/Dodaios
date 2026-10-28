@@ -554,3 +554,81 @@ Static review only. Nothing was run: no test, no CI, no service, no audio device
   dropped by design).
 - Not covered: STOP during the awaited native emit through a real `NativeLiveVoiceSession`, `_emit_audio` with a real session,
   and the physical result in a browser. A human check with a real call would be needed for those.
+
+## Block 18: GPT round 5 (I4, H8 audit)
+
+Static review only. NOTHING WAS RUN: no pytest, no CI, no service, no app, no audio device, no network. Only reading, edits,
+`python3 -m py_compile` and `ruff check` (no `ruff format`). Tests were written, not run. Ruff: no new finding class beyond the
+pre-existing ones in the touched files (compared by message against the previous tree).
+
+### I4 (MEDIUM) avatar accepted missing identity and had no start ordering: fixed in code, not run (producer coverage partial)
+
+- **Problem.** `_matches_turn` rejected a different id only when both ids were non-empty, so an `AudioOutFirst` / `VoiceTurnCompleted`
+  with the current generation and a MISSING `turn_id` / `session_id` was accepted. Several turns share one STOP generation, and
+  `_on_turn_started` adopted any same-generation start, so an older start arriving after a newer one retargeted the bridge. The
+  identity-free `SystemStateChanged` ended the current turn's speech even after a newer turn began.
+- **Order identity.** `core/events.py` `next_turn_seq()` is the single admission point: a process-wide strictly increasing counter
+  (`itertools.count`, starts at 1; 0 = unknown). A producer takes ONE value when it admits a turn / call, before any await, and
+  stamps it as `turn_seq` on `VoiceTurnStarted` and every later event of that turn. New field `turn_seq` on `VoiceTurnStarted`,
+  `VoiceTurnCompleted`, `AudioOutFirst`, `BrainTurnStarted` (the last also gets `session_id` / `turn_id`) and `SystemStateChanged`
+  (also `stop_generation`, `session_id`, `turn_id`; all optional, defaults mean unscoped).
+- **Bridge (`avatar/bridge.py`).** Complete identity = generation >= 0, `turn_seq` > 0, non-empty session id and turn id.
+  `_matches_turn` requires all four to equal the followed turn's; any missing field is a rejection (no wildcard).
+  `_on_turn_started` / `_adopt`: adopt only if the generation is current AND `turn_seq` is greater than `_order_floor`, the highest
+  order ever adopted, which is NOT reset by STOP / resume; an older or equal start never retargets (and does not reset `speaking`).
+  `_on_brain_started`: complete identity matches the followed turn (thinking) or is adopted if newer; no identity while a turn is
+  active is dropped; no identity and no turn tracked emits `thinking` only and tracks nothing (a chat brain turn cannot be made
+  the target of later audio). `_on_state`: while a turn is active an event counts only if scoped to exactly that turn (unscoped,
+  incomplete or another turn's = ignored, including listening / thinking / idle); with no turn tracked an unscoped state still
+  drives display, a state scoped to an older generation is dropped.
+- **Producers updated (stamp session + turn + generation + order of the ORIGINATING turn).** `realtime/session.py` (order issued in
+  `_ensure_turn_started`, reset with the turn; started, completed, audio-first), `live/session.py` (`_turn_order` issued at creation
+  next to `_archive_turn_id`; started, completed, audio-first, brain-started, and the `SystemStateChanged` phase mirror),
+  `live/native.py` (started, brain-started), `live/subscription.py` (brain-started), `browser_voice/session.py` (order per turn id,
+  started and completed), `speech/stop_gate.py` (`VoiceTurnTicket` now has `seq`, `turn_id`, `session_id`, filled by `new_ticket()`
+  only), `audio/player.py` (`AudioOutFirst` from the turn ticket in the context), `brain/manager.py` (`BrainTurnStarted` from the
+  turn ticket in the context), `state/supervisor.py` (`SystemStateChanged` stamped from the turn ticket when set in the context).
+- **Producers / paths NOT updated or not complete (listed on purpose).**
+  - `live/recording.py` publishes `VoiceTurnCompleted` without identity: dropped while a turn is active.
+  - Classic path: the speech pipeline publishes no `VoiceTurnStarted` / `Completed`. A classic turn is followed only if
+    `BrainManager` publishes `BrainTurnStarted` inside the `voice_turn()` context, and that event is published at the END of the brain
+    turn next to `BrainTurnCompleted` (existing placement), so adoption is late; `AudioOutFirst` from a player task created outside the
+    context has no ticket and is dropped. Consequence: classic `speaking_start` / `speaking_stop` may be MISSING (conservative), not
+    wrong. Supervisor states raised outside the turn context are unscoped and ignored while a turn is tracked.
+  - `SystemStateChanged` from `live/session.py` and the supervisor inside a turn context only; any other source stays unscoped.
+  - Telephony, and any external bus producer: legacy, treated as identity-less.
+- **Residual.** The avatar consumer in the other repository is unverified and must apply the same rule. `turn_seq` is per process, not
+  durable across restarts (the bridge floor is also per process). Equal-order duplicates of the same turn are ignored, so a second
+  `turn_start` for the same turn is not emitted.
+- **Controls prepared, NOT RUN.** `tests/unit/avatar/test_bridge_block17.py` (rewritten with identity helpers): each identity field
+  missing in the same generation (audio and completion rejected, complete identity accepted); wrong session / wrong order with the same
+  turn id; reversed start order (older start after newer, then its audio); duplicate equal-order start; order floor surviving
+  STOP + resume; unscoped / incomplete / foreign-turn `SystemStateChanged` cannot end speaking while the scoped one can; unscoped state
+  works with no turn tracked; identity-less brain turn tracks nothing; brain turn adoption only if newer; `next_turn_seq` monotonic.
+  `tests/unit/avatar/test_bridge_block13.py` carries the new fields.
+
+### H8 follow-up (audit of the raw senders): partial, not run
+
+The fence (`fenced_sender`) gates the ENTRY to the raw async sender; it does not cover a suspension inside the sender. Audit of
+the callables it wraps (`live/session.py`, `realtime/session.py`, and through `realtime/factory.py` and `browser_voice/route.py`):
+
+| Raw sender | What awaits inside | Enqueues synchronously? | State |
+| --- | --- | --- | --- |
+| `BrowserOutputControl.send_binary` / `send_json` (`browser_voice/output_control.py`, used by live, native and browser realtime) | `async with self._lock` (contended with the JSON sender and mute snapshots) | No: suspends on the lock before the hand-over | CHANGED: `stop_gate.send_allowed()` right after the lock |
+| route `_send_binary` / `_send_json` (`browser_voice/route.py`) | `asyncio.wait_for(ws.send_bytes / send_json)` | The check is now the last synchronous step before the write coroutine is built; the write itself (ASGI send, and `wait_for`) can suspend | CHANGED: `send_allowed()` first thing; the write itself is NOT covered |
+| desktop realtime `_send_binary` closure (`speech/pipeline.py`) | `await self._set_turn_state(...)` (state publish) before `playback.send_binary` | No | CHANGED: `send_allowed()` after that await |
+| `DesktopRealtimePlayback.send_binary` (`realtime/desktop.py`) | `await queue.put` | On a queue with room yes; on a FULL queue `put` suspends before the chunk is queued | CHANGED: `put_nowait` right after the existing `stale()` read (same synchronous step); on `QueueFull` it falls back to `await put`. The chunk queued after that wait is not recalled; `_chunks` drops stale chunks at dequeue (existing) |
+| realtime / live direct bus publishes (captions, spoken text, `_publish_*`) | not wrappers of these senders | n/a | NOT audited one by one (as in block 17) |
+
+Mechanism: `fenced_sender` now sets a `ContextVar` (`stop_gate._SEND_FENCE`) to the ORIGINAL ticket for the duration of one fenced
+send; a raw sender calls `stop_gate.send_allowed()` synchronously right before its own final write / enqueue. It is `True` outside a
+fenced send and for control frames (not fenced), so the classic browser session and telephony are unaffected. Child tasks created
+inside a fenced send inherit the variable (they see the same ticket, which is the right one).
+- **What this is NOT.** Not an atomic transport fence. A STOP can still land in the transport's own write (`ws.send_bytes`, the
+  ASGI send, the OS socket), in a `put` already suspended on a full queue, or after the bytes are queued; nothing here recalls them,
+  stops browser / WebRTC playback, proves physical silence, or cancels the provider's response. Claim kept: LOCAL sends only.
+- **Controls prepared, NOT RUN.** `tests/unit/speech/test_send_fence_block18.py`: `send_allowed` true outside a fenced send; STOP
+  landing inside the raw sender's own await makes its final check refuse; no STOP still writes; control frames pass and the context
+  variable is reset. NOT covered: `BrowserOutputControl` with a real lock contention, the route `wait_for` write, the
+  `DesktopRealtimePlayback` full-queue path, the pipeline closure (all need larger fakes).
+- **Open.** The full-queue `put` case and the transport write remain; a drain on STOP (`audio_clear`, `ScrubHoldGate`) is unchanged.

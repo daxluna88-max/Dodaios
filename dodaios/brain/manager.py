@@ -12377,10 +12377,19 @@ class BrainManager:
                         "Cost calculation failed for model %r — recording $0.00",
                         model, exc_info=True,
                     )
+                # Originating identity (ADR-0058 block 18) from the voice turn's ticket when this
+                # runs inside one; a chat brain turn has none, never guessed onto a voice turn.
+                from dodaios.speech import stop_gate as _stop_gate  # noqa: PLC0415
+
+                _tk = _stop_gate.current_turn()
                 await self._bus.publish(BrainTurnStarted(
                     provider=prov_name,
                     model=model,
                     intent_level=decision.level,
+                    stop_generation=-1 if _tk is None else _tk.ticket,
+                    turn_seq=0 if _tk is None else _tk.seq,
+                    turn_id="" if _tk is None else _tk.turn_id,
+                    session_id="" if _tk is None else _tk.session_id,
                 ))
                 await self._bus.publish(BrainTurnCompleted(
                     provider=prov_name,

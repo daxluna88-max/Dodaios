@@ -293,6 +293,7 @@ class NativeLiveVoiceSession(LiveVoiceSession):
                         session_id=self.session_id,
                         turn_id=self._archive_turn_id,
                         stop_generation=self._stop_ticket.ticket,
+                        turn_seq=self._turn_order,
                     )
                 )
                 await self._bus.publish(
@@ -589,6 +590,8 @@ class NativeLiveVoiceSession(LiveVoiceSession):
                             source_layer="live.native", trace_id=self._indicator_trace_id,
                             provider=self.active_provider, model=self._active_model,
                             stop_generation=self._stop_ticket.ticket,
+                            turn_seq=self._turn_order, session_id=self.session_id,
+                            turn_id=self._archive_turn_id,
                         ))
                     if not self._closing and not self._recovering:
                         self._resume_needs_input = False

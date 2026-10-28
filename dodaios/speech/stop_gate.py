@@ -22,6 +22,13 @@ from dataclasses import dataclass
 class VoiceTurnTicket:
     ticket: int
     exempt: bool = False
+    #: Admission order / identity of a classic turn (ADR-0058 block 18). Filled by ``new_ticket``
+    #: only: ``seq`` from ``core.events.next_turn_seq()``, a fresh ``turn_id`` and the pipeline's
+    #: ``session_id``. A call ticket (``session_ticket``) leaves them empty: a call has its own
+    #: session / turn ids and takes its order per turn. 0 / "" = unknown.
+    seq: int = 0
+    turn_id: str = ""
+    session_id: str = ""
 
     def stale(self) -> bool:
         if self.exempt:
@@ -34,11 +41,34 @@ class VoiceTurnTicket:
 _TURN: ContextVar[VoiceTurnTicket | None] = ContextVar("dodaios_voice_turn_ticket", default=None)
 
 
+#: Ticket of the fenced send currently in flight in THIS task (block 18). A raw sender deep in the
+#: chain (after its own lock / state awaits) asks ``send_allowed()`` right before its final write.
+_SEND_FENCE: ContextVar[VoiceTurnTicket | None] = ContextVar(
+    "dodaios_send_fence", default=None
+)
+
+
+def send_allowed() -> bool:
+    """Synchronous re-check for a raw sender, right before it writes / enqueues.
+
+    True outside a fenced send (no ticket in this context) and for control frames, which the fence
+    does not cover. False when the fenced send's ORIGINAL ticket went stale in the meantime.
+    """
+    ticket = _SEND_FENCE.get()
+    return ticket is None or not ticket.stale()
+
+
 def new_ticket() -> VoiceTurnTicket:
+    from uuid import uuid4  # noqa: PLC0415
+
     from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+    from dodaios.core.events import next_turn_seq  # noqa: PLC0415
 
     controller = get_stop_controller()
-    return VoiceTurnTicket(controller.ticket(), exempt=not controller.door_open)
+    return VoiceTurnTicket(
+        controller.ticket(), exempt=not controller.door_open,
+        seq=next_turn_seq(), turn_id=uuid4().hex, session_id="speech.pipeline",
+    )
 
 
 def session_ticket() -> VoiceTurnTicket:
@@ -118,7 +148,13 @@ def fenced_sender(
             if on_drop is not None:
                 on_drop()
             return None
-        return await raw(payload, *args, **kwargs)  # type: ignore[misc]
+        # Publish the ticket to the raw sender's own awaits (lock, state change) so it can
+        # re-check synchronously right before its final write (``send_allowed``).
+        token = _SEND_FENCE.set(ticket)
+        try:
+            return await raw(payload, *args, **kwargs)  # type: ignore[misc]
+        finally:
+            _SEND_FENCE.reset(token)
 
     return send
 
@@ -132,5 +168,6 @@ __all__ = [
     "new_ticket",
     "session_ticket",
     "not_stale",
+    "send_allowed",
     "voice_turn",
 ]

@@ -817,6 +817,9 @@ class SubscriptionLiveVoiceSession(LiveVoiceSession):
                     source_layer="live.delegation",
                     trace_id=self._indicator_trace_id,
                     stop_generation=self._stop_ticket.ticket,
+                    turn_seq=self._turn_order,
+                    session_id=self.session_id,
+                    turn_id=self._archive_turn_id,
                 )
             )
         async for event in self._reasoning.stream(

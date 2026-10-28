@@ -458,6 +458,12 @@ async def browser_voice_ws(ws: WebSocket) -> None:
 
     async def _send_binary(data: bytes) -> None:
         nonlocal semantic_turn_committed
+        # Last synchronous check before the socket write (ADR-0058 block 18). The write itself
+        # (``ws.send_bytes`` under ``wait_for``) can still suspend: not covered.
+        from dodaios.speech import stop_gate  # noqa: PLC0415
+
+        if not stop_gate.send_allowed():
+            return
         if data:
             semantic_turn_committed = True
         await asyncio.wait_for(
@@ -466,6 +472,10 @@ async def browser_voice_ws(ws: WebSocket) -> None:
 
     async def _send_json(msg: dict[str, Any]) -> None:
         nonlocal semantic_turn_committed
+        from dodaios.speech import stop_gate  # noqa: PLC0415
+
+        if not stop_gate.send_allowed():
+            return
         if _json_commits_semantic_turn(msg):
             semantic_turn_committed = True
         await asyncio.wait_for(

@@ -50,6 +50,11 @@ class BrowserOutputControl:
             current = self.snapshot()
             if before["muted"] or current["muted"] or before["revision"] != current["revision"]:
                 return
+            # The lock may have suspended us: re-check the ORIGINAL ticket before the hand-over.
+            from dodaios.speech import stop_gate  # noqa: PLC0415
+
+            if not stop_gate.send_allowed():
+                return
             await self._binary(data)
 
     async def send_json(self, message: dict[str, Any]) -> None:
@@ -59,4 +64,8 @@ class BrowserOutputControl:
                 message = {**message, "output_muted": state["muted"],
                            "output_volume": state["volume"],
                            "output_revision": state["revision"]}
+            from dodaios.speech import stop_gate  # noqa: PLC0415
+
+            if not stop_gate.send_allowed():
+                return
             await self._json(message)
