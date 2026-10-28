@@ -2502,6 +2502,19 @@ class RealtimeVoiceSession:
         from dodaios.speech import stop_gate as _stop_gate  # noqa: PLC0415
 
         self._stop_ticket = _stop_gate.session_ticket()
+        self._stop_drained = False
+        # Final emission fence (ADR-0058 block 17): the ORIGINAL ticket is checked at the write
+        # itself, with no await between the check and the hand-over to the transport callable,
+        # for audio, captions, timed audio and surface speech alike. This suppresses LOCAL sends
+        # only; frames the transport already holds, browser / WebRTC playback and the provider's
+        # response are not recalled or cancelled by it (not demonstrated).
+        self._send_binary = _stop_gate.fenced_sender(
+            self._stop_ticket, self._send_binary, on_drop=self._on_output_dropped
+        )
+        self._send_json = _stop_gate.fenced_sender(
+            self._stop_ticket, self._send_json,
+            content_types=_stop_gate.STOPPABLE_JSON_TYPES, on_drop=self._on_output_dropped,
+        )
         self._hangup_control_turn = ""
         self._end_after_turn = False
         self._end_call_timer: asyncio.Task[None] | None = None
@@ -8986,6 +8999,7 @@ class RealtimeVoiceSession:
                     session_id=self.session_id,
                     turn_id=self._turn_id,
                     turn_index=self._current_turn_index,
+                    stop_generation=self._stop_ticket.ticket,
                 )
             )
         except Exception:  # noqa: BLE001, S110
@@ -9111,6 +9125,7 @@ class RealtimeVoiceSession:
                             source_layer=f"realtime.{self.active_provider}",
                             session_id=self.session_id,
                             turn_id=self._turn_id,
+                            stop_generation=self._stop_ticket.ticket,
                             user_text=self._last_user_text,
                             user_lang=self._language,
                             jarvis_text=answer,
@@ -9885,6 +9900,19 @@ class RealtimeVoiceSession:
         if self._delegate_surface_fallback_spoken():
             return "a non-provider channel already owns this turn's reply"
         return ""
+
+    def _on_output_dropped(self) -> None:
+        """A send was refused after STOP: count it and discard what the scrub gate still holds.
+
+        Drains OUR buffered audio once. It cannot unsend what the transport already queued."""
+        self._note_output_withheld("send after STOP")
+        if self._stop_drained:
+            return
+        self._stop_drained = True
+        try:
+            self._gate.drain()
+        except Exception:  # noqa: BLE001 — a drain failure must not break the drop
+            log.debug("STOP drain of the scrub gate failed", exc_info=True)
 
     def _note_output_withheld(self, kind: str) -> None:
         """Report, bounded, that provider output is being dropped (AP-30)."""
@@ -12722,10 +12750,21 @@ class RealtimeVoiceSession:
 
             try:
                 await self._bus.publish(
-                    AudioOutFirst(**self._event_trace_kwargs())
+                    AudioOutFirst(
+                        **self._event_trace_kwargs(),
+                        session_id=self.session_id,
+                        turn_id=self._turn_id,
+                        stop_generation=self._stop_ticket.ticket,
+                    )
                 )
             except Exception:  # noqa: BLE001, S110 — best-effort telemetry
                 pass
+        # Second fence: ``_ensure_turn_started`` and the AudioOutFirst publish awaited, and STOP
+        # can land during either. The send below is also ticket-fenced as the final step.
+        if self._stop_ticket.stale():
+            self._note_output_withheld("audio after STOP (post-await)")
+            self._on_output_dropped()
+            return
         self._note_audio_flow(pcm, chunk)
         # The chunk is FORWARDED either way — a live media track's embedded
         # pauses must reach the player as real PCM or the output stream

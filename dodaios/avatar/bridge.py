@@ -13,6 +13,12 @@ No signal exists without the underlying real event:
 * stop / idle   <- the STOP door closing (``StopController`` listener)
 * expression_plan <- ``offer_plan`` with a plan the ``PlanGate`` (ADR-0056) accepts
 
+Identity (ADR-0058 block 17): turn events carry their ORIGINATING session / turn id and STOP
+generation. The bridge MATCHES them against the turn it follows and drops a mismatch; it never
+re-stamps an event with the current generation. An event with no identity (legacy producer,
+``stop_generation == -1``) is dropped while a turn is active instead of being guessed onto it.
+Unverified: whether the avatar consumer in the other repository applies the same rule.
+
 After STOP the bridge drops everything until the door reopens and a NEW turn starts in the new
 generation: a late AudioOutFirst of the stopped turn cannot make the face speak again. Signals
 travel on the bus; the web server already forwards every bus event to ``/ws``.
@@ -51,6 +57,7 @@ class AvatarBridge:
         #: STOP generation of the turn the avatar is following; -1 = no turn yet.
         self._turn_gen = -1
         self._turn_id = ""
+        self._session_id = ""
         self._speaking = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._attached = False
@@ -83,6 +90,22 @@ class AvatarBridge:
             and self._turn_gen == self._ctl.generation
         )
 
+    def _turn_active(self) -> bool:
+        return self._current() and self._turn_gen >= 0
+
+    def _matches_turn(self, ev: Any) -> bool:
+        """The event's originating identity is the followed turn's. Unknown identity = no."""
+        if not self._current():
+            return False
+        gen = getattr(ev, "stop_generation", -1)
+        if gen != self._turn_gen:  # also drops -1 (legacy / unknown) and any older generation
+            return False
+        sid = getattr(ev, "session_id", "")
+        if sid and self._session_id and sid != self._session_id:
+            return False
+        tid = getattr(ev, "turn_id", "")
+        return not (tid and self._turn_id and tid != self._turn_id)
+
     async def _emit(self, kind: str, reason: str, *, expression: str = "") -> None:
         self._seq += 1
         await self._bus.publish(AvatarSignal(
@@ -96,17 +119,32 @@ class AvatarBridge:
     async def _on_turn_started(self, ev: VoiceTurnStarted) -> None:
         if not self._ctl.door_open:
             return
-        self._turn_gen = self._ctl.generation
+        gen = getattr(ev, "stop_generation", -1)
+        if gen != self._ctl.generation:
+            # Started under an older generation, or no identity at all: never adopted as current.
+            return
+        self._turn_gen = gen
         self._turn_id = ev.turn_id
+        self._session_id = ev.session_id
         self._speaking = False
         await self._emit("turn_start", "VoiceTurnStarted")
 
-    async def _on_brain_started(self, _ev: BrainTurnStarted) -> None:
-        if self._ctl.door_open:
-            # A brain turn without a voice turn (chat) follows the current generation too.
-            if self._turn_gen != self._ctl.generation:
-                self._turn_gen, self._turn_id, self._speaking = self._ctl.generation, "", False
-            await self._emit("thinking", "BrainTurnStarted")
+    async def _on_brain_started(self, ev: BrainTurnStarted) -> None:
+        if not self._ctl.door_open:
+            return
+        gen = getattr(ev, "stop_generation", -1)
+        if gen >= 0 and gen != self._ctl.generation:
+            return  # a brain turn of an older generation
+        if self._turn_active():
+            if gen != self._turn_gen:
+                return  # no identity while a voice turn is active: not guessed onto it
+        else:
+            # No turn followed: a brain turn without a voice turn (chat) starts one in the
+            # generation the event itself names, or (legacy, none active) the current one.
+            self._turn_gen, self._turn_id, self._session_id, self._speaking = (
+                self._ctl.generation, "", "", False,
+            )
+        await self._emit("thinking", "BrainTurnStarted")
 
     async def _on_state(self, ev: SystemStateChanged) -> None:
         if not self._ctl.door_open:
@@ -123,14 +161,14 @@ class AvatarBridge:
         if state in {"LISTENING", "THINKING"}:
             await self._end_speaking(f"SystemStateChanged:{state}")
 
-    async def _on_audio_first(self, _ev: AudioOutFirst) -> None:
-        if not self._current() or self._speaking:
+    async def _on_audio_first(self, ev: AudioOutFirst) -> None:
+        if not self._matches_turn(ev) or self._speaking:
             return
         self._speaking = True
         await self._emit("speaking_start", "AudioOutFirst")
 
-    async def _on_turn_completed(self, _ev: VoiceTurnCompleted) -> None:
-        if self._ctl.door_open:
+    async def _on_turn_completed(self, ev: VoiceTurnCompleted) -> None:
+        if self._ctl.door_open and self._matches_turn(ev):
             await self._end_speaking("VoiceTurnCompleted")
 
     async def _on_error(self, _ev: ErrorOccurred) -> None:
@@ -162,7 +200,7 @@ class AvatarBridge:
 
     def _on_door_close(self) -> None:
         """Synchronous, inside ``StopController.stop``: forget the turn, then say stop / idle."""
-        self._turn_gen, self._speaking = -1, False
+        self._turn_gen, self._speaking = -1, False  # _turn_id kept only to label stop / idle
         loop = self._loop
         if loop is None or loop.is_closed():
             return
@@ -178,7 +216,7 @@ class AvatarBridge:
             loop.call_soon_threadsafe(_schedule)
 
     def _on_door_open(self) -> None:
-        self._turn_gen, self._speaking = -1, False
+        self._turn_gen, self._speaking, self._turn_id, self._session_id = -1, False, "", ""
 
 
 __all__ = ["AvatarBridge"]

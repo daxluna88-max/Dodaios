@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import random
@@ -294,6 +295,18 @@ class LiveVoiceSession:
 
         self._stop_ticket = stop_gate.session_ticket()
         self._stop_end_task: asyncio.Task | None = None
+        self._stop_drained = False
+        # Final emission fence (ADR-0058 block 17): the ORIGINAL ticket is checked at the write
+        # itself, with no await between the check and the hand-over to the transport callable.
+        # LOCAL sends only: a frame the transport already holds, browser playback and the
+        # provider's own response are not recalled by this (not demonstrated).
+        self._send_binary = stop_gate.fenced_sender(
+            self._stop_ticket, send_binary, on_drop=self._on_output_dropped
+        )
+        self._send_json = stop_gate.fenced_sender(
+            self._stop_ticket, send_json,
+            content_types=stop_gate.STOPPABLE_JSON_TYPES, on_drop=self._on_output_dropped,
+        )
         self._language = resolve_output_language(
             getattr(config.brain, "reply_language", "auto"),
             "auto",
@@ -606,6 +619,31 @@ class LiveVoiceSession:
             self._stop_end_task = asyncio.ensure_future(self.end(reason="stopped"))
         return True
 
+    def _on_output_dropped(self) -> None:
+        """A send was refused after STOP: end the call and flush what the surface holds, once.
+
+        The flush is a control frame (``audio_clear``) asking the browser to empty ITS buffer;
+        whether that stops audio already playing there is not demonstrated."""
+        self._stopped()
+        if self._stop_drained:
+            return
+        self._stop_drained = True
+        self._playback_epoch += 1
+        self._discard_audio_before = self._last_output_audio_end
+        frame = {
+            "type": "audio_clear",
+            **({"epoch": self._playback_epoch} if self._output_transport() == "timed_pcm" else {}),
+        }
+
+        async def _flush() -> None:
+            try:
+                await self._send_json(frame)
+            except Exception:  # noqa: BLE001 — surface already gone
+                log.debug("STOP flush frame could not be sent", exc_info=True)
+
+        with contextlib.suppress(RuntimeError):
+            asyncio.ensure_future(_flush())
+
     async def _emit_indicator(self, message: dict) -> None:
         """Send a speaking/thinking indicator without breaking the session.
 
@@ -701,7 +739,11 @@ class LiveVoiceSession:
             # The native bar deliberately waits for audible output AFTER the
             # SPEAKING state. RTP bypasses AudioPlayer, so media owns this edge.
             await self._bus.publish(
-                AudioOutFirst(source_layer="live.media", trace_id=self._indicator_trace_id)
+                AudioOutFirst(
+                    source_layer="live.media", trace_id=self._indicator_trace_id,
+                    session_id=self.session_id, turn_id=self._archive_turn_id,
+                    stop_generation=self._stop_ticket.ticket,
+                )
             )
 
     def _clear_media_levels(self) -> None:
@@ -1000,6 +1042,7 @@ class LiveVoiceSession:
                     VoiceTurnStarted(
                         session_id=self.session_id,
                         turn_id=self._archive_turn_id,
+                        stop_generation=self._stop_ticket.ticket,
                     )
                 )
             self._startup_timing.mark("lifecycle_started")
@@ -1402,7 +1445,8 @@ class LiveVoiceSession:
                 start_ms=fragment.start_ms, end_ms=fragment.end_ms,
             )
             self._captions[role] = caption.text
-            if self._bus is not None:
+            # Final fence for the bus caption: no await between this check and the publish call.
+            if self._bus is not None and not (role == "assistant" and self._stopped()):
                 await self._bus.publish(caption)
             current = fragment.end_ms >= self._last_end[role]
             self._last_end[role] = max(self._last_end[role], fragment.end_ms)
@@ -1603,6 +1647,7 @@ class LiveVoiceSession:
                 await self._bus.publish(BrainTurnStarted(
                     source_layer="live.delegation", trace_id=self._indicator_trace_id,
                     provider=self.active_provider, model=self._tools.backend_model,
+                    stop_generation=self._stop_ticket.ticket,
                 ))
             await self._note_thinking()
         elif kind == "response.reasoning_summary_text.delta":
@@ -2119,6 +2164,7 @@ class LiveVoiceSession:
                         VoiceTurnCompleted(
                             session_id=self.session_id,
                             turn_id=self._archive_turn_id,
+                            stop_generation=self._stop_ticket.ticket,
                             user_text=text["user"],
                             jarvis_text=text["assistant"],
                             user_lang=self._language,

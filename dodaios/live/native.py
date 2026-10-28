@@ -292,6 +292,7 @@ class NativeLiveVoiceSession(LiveVoiceSession):
                     VoiceTurnStarted(
                         session_id=self.session_id,
                         turn_id=self._archive_turn_id,
+                        stop_generation=self._stop_ticket.ticket,
                     )
                 )
                 await self._bus.publish(
@@ -567,6 +568,11 @@ class NativeLiveVoiceSession(LiveVoiceSession):
         if event.type == "audio_delta" and event.audio is not None:
             self._report_started()
             await self._note_speaking()
+            # The entry check above is not the emission fence: STOP can land while
+            # ``_note_speaking`` awaits (indicators, bus). Re-check, then write; the send callable
+            # is itself ticket-fenced (``stop_gate.fenced_sender``) as the final step. LOCAL only.
+            if self._stopped():
+                return
             await self._send_binary(event.audio.pcm)
         elif event.type in {"input_transcript", "output_transcript_delta"}:
             role: Literal["user", "assistant"] = (
@@ -582,6 +588,7 @@ class NativeLiveVoiceSession(LiveVoiceSession):
                         await self._bus.publish(BrainTurnStarted(
                             source_layer="live.native", trace_id=self._indicator_trace_id,
                             provider=self.active_provider, model=self._active_model,
+                            stop_generation=self._stop_ticket.ticket,
                         ))
                     if not self._closing and not self._recovering:
                         self._resume_needs_input = False
@@ -604,6 +611,8 @@ class NativeLiveVoiceSession(LiveVoiceSession):
                         task.add_done_callback(self._control_tasks.discard)
             if role == "assistant":
                 self._report_started()
+            if role == "assistant" and self._stopped():
+                return
             if role == "assistant" or event.is_final:
                 stamp = time.monotonic_ns() // 1_000_000
                 await asyncio.to_thread(
@@ -631,7 +640,8 @@ class NativeLiveVoiceSession(LiveVoiceSession):
                 event_id=str(uuid4()), role=role, text=event.text or "",
                 start_ms=stamp, end_ms=stamp, snapshot=role == "user",
             )
-            if self._bus is not None:
+            # The ledger write above awaited: re-check before the caption leaves on the bus.
+            if self._bus is not None and not (role == "assistant" and self._stopped()):
                 await self._bus.publish(caption)
             if role == "user" and event.is_final:
                 self._transcript.finish("user")
@@ -639,6 +649,8 @@ class NativeLiveVoiceSession(LiveVoiceSession):
             # The model is answering the report, starting with a tool.
             self._report_started()
             await self._note_thinking()
+            if self._stopped():
+                return  # STOP landed during the await: the call is not started
             task = asyncio.create_task(self._call(event, self._tools.revision))
             self._track_job(task)
         elif event.type in {"interrupted", "speech_started"}:
@@ -707,9 +719,12 @@ class NativeLiveVoiceSession(LiveVoiceSession):
                 revision,
                 deadline_s=_TOOL_DEADLINE_S,
             )
-            if self._closing:
+            if self._closing or self._stopped():
                 return
             result = await self._send_tool_images(result)
+            # ``_send_tool_images`` awaited: a STOP in between must not hand the result back.
+            if self._stopped():
+                return
             self._native_turn_complete = False
             await self._connection.send_tool_result(event.call_id, event.tool_name, result)
             if self._tools.end_requested:

@@ -38,23 +38,25 @@ async def test_nothing_is_emitted_without_a_real_event():
 
 
 async def test_speaking_needs_a_turn_and_an_audible_start():
-    bus, _ctl, seen = await _setup()
-    await bus.publish(AudioOutFirst())  # no turn yet: dropped
-    await bus.publish(VoiceTurnStarted(turn_id="t1"))
-    await bus.publish(AudioOutFirst())
+    bus, ctl, seen = await _setup()
+    g = ctl.generation
+    await bus.publish(AudioOutFirst(stop_generation=g))  # no turn yet: dropped
+    await bus.publish(VoiceTurnStarted(turn_id="t1", stop_generation=g))
+    await bus.publish(AudioOutFirst(turn_id="t1", stop_generation=g))
     await bus.publish(SystemStateChanged(new_state="IDLE"))
     assert await _kinds(seen) == ["turn_start", "speaking_start", "speaking_stop"]
 
 
 async def test_stop_goes_idle_and_a_late_audio_start_is_dropped():
     bus, ctl, seen = await _setup()
-    await bus.publish(VoiceTurnStarted(turn_id="t1"))
+    old = ctl.generation
+    await bus.publish(VoiceTurnStarted(turn_id="t1", stop_generation=old))
     await ctl.stop()
-    await bus.publish(AudioOutFirst())  # stale: door closed
+    await bus.publish(AudioOutFirst(turn_id="t1", stop_generation=old))  # stale: door closed
     kinds = await _kinds(seen)
     assert kinds == ["turn_start", "stop", "idle"]
     ctl.resume()
-    await bus.publish(AudioOutFirst())  # new generation, but no new turn yet: still dropped
+    await bus.publish(AudioOutFirst(turn_id="t1", stop_generation=old))  # old identity: dropped
     assert await _kinds(seen) == ["turn_start", "stop", "idle"]
 
 

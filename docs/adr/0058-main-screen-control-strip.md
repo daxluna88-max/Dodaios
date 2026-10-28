@@ -488,3 +488,69 @@ STOP -> stop/idle and late audio dropped, stale plan refused, no lip-sync claim)
 session and live/native edits (they need the large session fakes), `desktop_app` wiring. PC checklist owed: say "stop"
 in a classic call, a desktop realtime call, a browser call and a native live call and confirm the strip shows STOPPED and
 the avatar goes idle; Resume and check the avatar stays idle until the next turn.
+
+## Block 17: GPT round 4 (H7, H8)
+
+Static review only. Nothing was run: no test, no CI, no service, no audio device. `py_compile` and `ruff check` only.
+
+### H8 (HIGH) native audio emission had an await after its STOP check: fixed in code, not run
+
+- **Problem.** `live/native.py` `_native_event` checked `_stopped()`, then awaited `_note_speaking()`, then `_send_binary(pcm)`.
+  STOP could land in the await and the old audio was still submitted. The same shape existed in `realtime/session.py`
+  `_emit_audio` (check, then `_ensure_turn_started` and the `AudioOutFirst` publish, then the send), in the caption path
+  (ledger write awaited, then bus publish), in tool results (`_send_tool_images` awaited, then `send_tool_result`) and in
+  every `error_spoken` / `transcript` / `audio_timed` / `speech_timing` frame.
+- **Choice.** The ORIGINAL session ticket is applied at the common output boundary, not only on entry.
+  `speech/stop_gate.py` `fenced_sender(ticket, raw, content_types, on_drop)` wraps the transport callable: `stale()` is read and
+  `raw(payload)` is invoked in the same synchronous step (a coroutine runs inline to its first suspension; nothing is awaited
+  between), so there is no authorization gap before the hand-over. `live/session.py` and `realtime/session.py` wrap
+  `_send_binary` (all payloads) and `_send_json` (only `STOPPABLE_JSON_TYPES`: `transcript` of the assistant, `audio_timed`,
+  `speech_timing`, `error_spoken`, `caption`). Control frames (`audio_clear`, `audio_closed`, `tts_cancel`, `provider_error`,
+  indicators) and the person's own `transcript` (`role == "user"`) are deliberately not fenced.
+- **Second checks after awaits.** `live/native.py`: after `_note_speaking`, after the ledger write (assistant text and bus caption),
+  after `_note_thinking` (tool task not started), around `_send_tool_images` / `send_tool_result` (receipt retained, result not
+  handed back). `live/session.py`: bus caption publish. `realtime/session.py` `_emit_audio`: re-check after the turn-start and
+  `AudioOutFirst` awaits.
+- **Drain on STOP.** First refused send calls `_on_output_dropped`, once: `live/session.py` bumps `_playback_epoch`, sets
+  `_discard_audio_before` and sends a control `audio_clear` (asks the browser to empty its buffer) and ends the call;
+  `realtime/session.py` drains the `ScrubHoldGate` (audio held in the transcript gate) and counts the drop.
+- **What this is NOT.** It suppresses LOCAL sends: this process stops handing data to the transport callable. It does NOT recall
+  bytes the transport or the websocket already queued, it does NOT stop browser / WebRTC playback that already started, and it
+  does NOT cancel the provider's own response (the provider keeps generating until the call ends). None of that is demonstrated;
+  nothing here claims physical silence or provider-side cancellation.
+- **Residual / open.** Other `await ...; send` shapes in the very large `realtime/session.py` that bypass `_send_binary` /
+  `_send_json` (direct bus publishes of spoken-text events, `_publish_*` helpers) were not individually audited: partial for those.
+  The `audio_clear` flush is a request to the browser, its effect is unproven. A STOP landing after the synchronous check but
+  inside the transport's own write is outside this process's control.
+
+### H7 (MEDIUM) avatar assigned late events to the current turn: fixed in code, not run
+
+- **Problem.** `avatar/bridge.py` ignored event identity: after STOP + resume + a new turn, an old `AudioOutFirst` could start
+  "speaking" on the new turn, an old `VoiceTurnCompleted` could stop it, and `VoiceTurnStarted` was accepted whenever the door was open.
+- **Events.** `core/events.py`: optional, backward-compatible `stop_generation` (default -1 = unknown) on `VoiceTurnStarted`,
+  `VoiceTurnCompleted`, `AudioOutFirst`, `BrainTurnStarted`; `AudioOutFirst` also gets `session_id` / `turn_id`.
+- **Producers updated** (stamp session / turn / generation of the ORIGINATING turn or call): `realtime/session.py` (started,
+  completed, audio-first), `live/native.py` (started, brain-started), `live/session.py` (started, completed, audio-first,
+  brain-started), `live/subscription.py` (brain-started), `browser_voice/session.py` (started and completed; generation kept per
+  turn), `audio/player.py` (`AudioOutFirst`: generation from the turn ticket in the context, -1 when none).
+- **Bridge.** `_on_turn_started` adopts a turn only if the event's generation equals the current one; `_on_audio_first` and
+  `_on_turn_completed` require the followed turn (generation, and session / turn id when both sides know them); `_on_brain_started`
+  drops an older generation, and drops an identity-less event while a turn is active. A mismatch is dropped, never re-stamped
+  with the current generation.
+- **Producers NOT updated** (their events are dropped while a turn is active, by design): `brain/manager.py` `BrainTurnStarted`
+  (classic path "thinking"; the supervisor `SystemStateChanged` still drives it), the classic speech pipeline publishes no
+  `VoiceTurnStarted` / `Completed` in this tree, and `SystemStateChanged` carries no identity (state signals follow the current
+  generation, unchanged). Any external producer on the bus is legacy.
+- **Residual.** The avatar consumer in the other repository is unverified: it must also drop a signal older than the newest
+  generation it saw. The tray / hotkey path of STOP is still unwired. Real audio cancellation is unproven.
+
+### Controls prepared, NOT RUN
+
+- `tests/unit/avatar/test_bridge_block17.py`: STOP + resume + new turn followed by OLD start / audio / completion events; same
+  generation with another turn id; identity-less events while a turn is active; old brain turn after resume.
+- `tests/unit/speech/test_output_fence_block17.py`: fenced binary drops after STOP and after STOP + resume; STOP landing during
+  the awaited work between the entry check and the send; control frames and user text pass.
+- `tests/unit/avatar/test_bridge_block13.py` edited to carry the new identity fields (the old identity-less events are now
+  dropped by design).
+- Not covered: STOP during the awaited native emit through a real `NativeLiveVoiceSession`, `_emit_audio` with a real session,
+  and the physical result in a browser. A human check with a real call would be needed for those.
