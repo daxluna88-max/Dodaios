@@ -158,3 +158,11 @@ No compatibility with this runtime is certified.
   logs, backups), per-customer STOP and revocation, budget reservations under concurrency, reconciliation and block,
   export and deletion completeness, egress denial, restore from backup, first-party and third-party access audits.
 - Nothing here authorizes spend, a purchase, a deployment or a customer-facing promise.
+
+## Addendum (2026-10-28): scope extended to a PC-like environment
+
+New owner requirements (a per-customer Linux desktop-like environment with a real browser, shell, GUI automation and
+long tasks; low cost through idle hibernation; provider-neutral) change section 3: the "text-only base plan without
+code or local-computer tools" mitigation no longer applies. Runtime audit, per-customer instance vs shared runtime,
+node image, customer isolation, security, abuse, backup, STOP and the provider requirement checklist are in
+[ADR-0065](0065-jarvis-cloud-runtime-isolation-security.md). Design and static review only; nothing run.
