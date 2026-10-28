@@ -1,0 +1,22 @@
+{
+  "_comment": "DEFINITION - NOT RUN. Install as /etc/chromium/policies/managed/jarvis.json (root:root 0644). TODO(verify) that the Playwright Chromium build reads this directory (Chromium: /etc/chromium/policies/managed; Google Chrome: /etc/opt/chrome/policies/managed). Policy names from the Chrome Enterprise policy list; each must be re-checked against the pinned Chromium milestone.",
+  "ExtensionInstallBlocklist": ["*"],
+  "BlockExternalExtensions": true,
+  "URLBlocklist": ["file://*", "chrome://*", "chrome-untrusted://*", "chrome-extension://*", "view-source:*", "javascript:*", "ftp://*"],
+  "URLAllowlist": ["chrome://version", "about:blank"],
+  "DownloadDirectory": "/data/home/Downloads",
+  "PromptForDownloadLocation": false,
+  "DownloadRestrictions": 1,
+  "DeveloperToolsAvailability": 2,
+  "PasswordManagerEnabled": false,
+  "SyncDisabled": true,
+  "BrowserSignin": 0,
+  "MetricsReportingEnabled": false,
+  "SafeBrowsingProtectionLevel": 1,
+  "BackgroundModeEnabled": false,
+  "DefaultBrowserSettingEnabled": false,
+  "AutoplayAllowed": false,
+  "NetworkPredictionOptions": 2,
+  "WebRtcIPHandling": "disable_non_proxied_udp",
+  "BrowserLabsEnabled": false
+}

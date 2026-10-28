@@ -1,0 +1,33 @@
+# DEFINITION - NOT RUN. Never loaded with apparmor_parser. Modeled on the pattern Ubuntu 24.04
+# ships for Chrome-like apps (/etc/apparmor.d/chrome, flags=(unconfined) + `userns,`), written
+# from memory: TODO(verify) the exact `abi` line and syntax against the installed apparmor 4.x
+# (`apparmor_parser -Q -T /etc/apparmor.d/jarvis-chromium` on a throwaway host).
+#
+# Purpose: Ubuntu 24.04 sets kernel.apparmor_restrict_unprivileged_userns=1. An unprivileged
+# process may create a user namespace, but WITHOUT the capabilities inside it (the generic
+# `unprivileged_userns` profile stacks and denies them), so Chromium's namespace sandbox fails
+# ("No usable sandbox") and people reach for --no-sandbox. This profile grants `userns` to ONE
+# binary path only, while the global restriction stays on for everything else.
+#
+# flags=(unconfined): the profile adds NO file/network confinement (the browser needs the
+# profile dir, downloads, fonts, GPU-less rendering...). Confinement of the browser is by the
+# Chromium sandbox itself + the systemd unit limits + nftables. Tightening this into a real
+# confining profile is an open item (DEPENDENCY-MAP G7).
+abi <abi/4.0>,
+include <tunables/global>
+
+# The Playwright build lives in the immutable release dir. The revision directory name changes
+# with PLAYWRIGHT_VERSION; the glob keeps the profile valid across releases. The path is
+# root-owned and not writable by jarvis (volume layout), so the agent cannot place its own binary there.
+profile jarvis-chromium /opt/jarvis/releases/*/browsers/chromium-*/chrome-linux*/chrome flags=(unconfined) {
+  userns,
+
+  include if exists <local/jarvis-chromium>
+}
+# Playwright may also ship chrome_crashpad_handler / headless_shell; headless shell
+# (chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell) needs the same grant if used:
+profile jarvis-chromium-headless /opt/jarvis/releases/*/browsers/chromium_headless_shell-*/chrome-headless-shell-linux*/chrome-headless-shell flags=(unconfined) {
+  userns,
+
+  include if exists <local/jarvis-chromium>
+}

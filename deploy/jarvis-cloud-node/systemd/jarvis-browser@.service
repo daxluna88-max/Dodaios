@@ -1,0 +1,66 @@
+# DEFINITION - NOT RUN. OPTIONAL. A supervised, HEADED Chromium for first logins / 2FA /
+# human takeover through the live view. Instance name = agent id (alphanumeric; the
+# profile path is society/<agent>/browser-profile, session.py::profile_dir).
+# Do NOT run this unit while the runtime's browser-use holds the same profile: Chromium
+# locks the profile dir (SingletonLock); one active browser per customer (owner rule).
+# Start: systemctl start jarvis-browser@main ; stop it before agent browsing resumes.
+# NO --remote-debugging-port, NO --remote-debugging-pipe: a takeover browser needs no CDP.
+# NO --no-sandbox. The binary path must match apparmor/jarvis-chromium (userns grant).
+[Unit]
+Description=Jarvis headed Chromium for takeover (profile %i)
+Requires=nftables.service jarvis-xvfb.service jarvis-wm.service
+After=nftables.service jarvis-xvfb.service jarvis-wm.service
+JoinsNamespaceOf=jarvis-xvfb.service
+Conflicts=jarvis-runtime.service
+# Conflicts= is the crude form of "one browser"; a finer lock between runtime and this unit is gap G6.
+RequiresMountsFor=/data
+
+[Service]
+Type=simple
+User=jarvis
+Group=jarvis
+Slice=jarvis-agent.slice
+EnvironmentFile=/etc/jarvis/node.env
+# TODO: replace the glob with the resolved path written at release activation:
+# /opt/jarvis/current/browsers/chromium-REV/chrome-linux64/chrome (path varies by Playwright revision).
+ExecStart=/opt/jarvis/current/bin/chromium-launch --user-data-dir=/data/jarvis-consumer/society/%i/browser-profile --disk-cache-dir=/data/cache/chromium-%i --password-store=basic --no-first-run --no-default-browser-check --disable-extensions --disable-background-networking --disable-sync --disable-features=Translate --window-size=1600,900 about:blank
+Restart=no
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+# RestrictNamespaces is deliberately NOT set: the Chromium sandbox needs user/pid/net/ipc/mnt
+# namespaces (docs/CHROMIUM-LAUNCH-PROFILE.md). Do not add it without re-testing the browser.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+# Second layer behind nftables (which is the primary egress control): never reach private/link-local/metadata.
+# TODO: if the inference broker sits in a private range, add it to IPAddressAllow.
+IPAddressAllow=127.0.0.0/8 ::1/128
+IPAddressDeny=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10 fe80::/10 fc00::/7
+ReadWritePaths=/data/jarvis-consumer/society /data/home /data/cache /run/jarvis
+InaccessiblePaths=/etc/jarvis /etc/shadow /etc/ssh /etc/caddy
+MemoryMax=3500M
+TasksMax=1024
+CPUQuota=250%
+ManagedOOMMemoryPressure=kill
+LimitCORE=0
+# SystemCallFilter intentionally omitted: Chromium's userns sandbox calls clone/unshare/chroot/
+# pivot_root-class syscalls. TODO(derive) a filter from a traced run; Chromium has its own seccomp-bpf.
+
+[Install]
+# not enabled by default
