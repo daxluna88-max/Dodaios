@@ -373,6 +373,15 @@ def run_update(
         print(f"Done. Dodaios {version} is installed.")
         print(f"Start it with: {main_command()}")
         return 0
+    if result.get("refused") == "no_verified_backup":
+        print(
+            f"Update to {version} NOT started: no verified backup of your data could be made "
+            f"({result.get('detail', 'unknown reason')}). The installed version and your data "
+            "are unchanged. To update anyway, without that safety net, run "
+            f"'{main_command()} update --allow-unbacked-update' (this is recorded).",
+            file=sys.stderr,
+        )
+        return EXIT_FAILED
     if result.get("rolled_back"):
         print(
             f"Installing version {version} failed, so Dodaios went back to "
@@ -425,6 +434,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Only report whether a newer version exists; change nothing.",
     )
+    parser.add_argument(
+        "--allow-unbacked-update",
+        action="store_true",
+        help="Update even if no verified backup of the product data could be made (recorded).",
+    )
     return parser
 
 
@@ -439,6 +453,10 @@ def main(argv: list[str] | None = None) -> int:
     except product_profile.ProductError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    if args.allow_unbacked_update:
+        from dodaios.core.product_backup import ALLOW_UNBACKED_ENV
+
+        os.environ[ALLOW_UNBACKED_ENV] = "1"  # inherited by the detached finalizer, recorded there
     refusal = None if args.check else _other_product_refusal()
     if refusal:
         print(refusal, file=sys.stderr)

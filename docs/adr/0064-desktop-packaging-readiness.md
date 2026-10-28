@@ -5,8 +5,8 @@ Status: partial. Static preparation only.
 **Build e verifica nell'app restano rinviate all'autorizzazione.** Nothing in this block was built,
 installed, uninstalled, signed, notarized, tested or run: no PyInstaller, no npm/vite, no installer
 builder, no pytest, no CI, no app, no download, no push. Only reading, editing, `py_compile`,
-`bash -n` and `ruff check` were used. PowerShell and Inno Setup text was read, not executed. The two
-new test files are written, not run.
+`bash -n` and `ruff check` were used. PowerShell and Inno Setup text was read, not executed. The new
+test files are written, not run.
 
 ## 1. Bundle vs code
 
@@ -20,7 +20,7 @@ Audit of what blocks 5-13 added (since `main` 01cdb725), against `dodaios.spec`,
 | `memory/control` package | `collect_submodules("dodaios.memory.control")` added to the spec | done |
 | `voice_engine/bridge_llm.py` | spec copies every file of `dodaios/voice_engine` as plain files | already covered |
 | Backend locales `dodaios/i18n/locales/{de,en,es,pt}.json` (modified, no new file) | spec `datas` + `pyproject` `i18n/locales/*.json` | already covered |
-| **No `it.json` exists** (backend or frontend). Italian is not a shipped UI/system-phrase language; the frontend has `zh` beside de/en/es/pt | n/a | stated, not invented |
+| **Backend** has no `it.json` (`dodaios/i18n/locales/` ships de/en/es/pt). **Frontend** `it.json` DOES exist at this SHA (corrected in block 17; the earlier statement was stale): the base `dodaios/ui/web/frontend/src/i18n/locales/it.json` and the namespace files `first_run_hardening/it.json`, `memory_control/it.json`, `onboarding/it.json`, `personality_limits/it.json` (4 namespace files by `git ls-files`; no `control_strip/it.json` is tracked at this SHA). The frontend also has `zh` beside de/en/es/pt | frontend: compiled into `dist/` by Vite (as below); backend: n/a | frontend Italian is shipped through a rebuilt `dist` only; backend system phrases stay without Italian |
 | Frontend locale namespaces `first_run_hardening`, `memory_control`, `personality_limits` | compiled into `dist/` by Vite; not runtime data | covered only by a rebuilt `dist` (below) |
 | SQL migrations | spec package-data sweep + `pyproject` `**/*.sql` | no new `.sql` in these blocks |
 | ADRs / docs | not shipped (spec ships only `docs/product`, `docs/legal/TERMS.md`, `docs/licensing.md`) | by design |
@@ -106,20 +106,21 @@ State: **partial**.
   rename fails; Windows Inno replaces in place; Linux replaces the AppImage atomically. A bad frozen
   release has no automatic return (open; a kept previous installer/bundle is the design).
 - Data backup before update: `relauncher.snapshot_user_state` saved only install-folder files; it never
-  saw `<root>-<product>`. New `dodaios/core/product_backup.py`:
-  - `snapshot_product_state()` (called by `finalize_pending_update`, after the old snapshot): copies the
-    top-level regular files of the **active** product's validated directory (config, credential
-    fallback file, SQLite stores; each ≤ 64 MB, total ≤ 512 MB, never links, marker or locks) to
-    `<data dir>/.pre-update-backup/<stamp>/` with a SHA-256 manifest; keeps 3; never raises.
-  - Restore: `python -m dodaios.core.product_backup list|restore --product work|consumer [--stamp S]`.
+  saw `<root>-<product>`. `dodaios/core/product_backup.py` (reworked in block 17, see section 7):
+  - `snapshot_product_state_checked()` (called by `finalize_pending_update`): SQLite stores are copied with
+    the online backup API (coherent), other top-level regular files with `copy2`; manifest of coverage and
+    every omission with its reason; keeps 3. A failed snapshot is a refusal of the managed update, not a
+    shrug (section 7).
+  - Restore: `python -m dodaios.core.product_backup list|restore|recover --product work|consumer [--stamp S]`.
     Refuses unless the directory is the canonical one, the marker names the product, the manifest names
     the product, every file matches its hash, and the product's launch lock can be taken (product closed).
-    Replaced files are kept as `*.before-restore`. It writes only inside that product's directory; the
-    other product and the shared directory are never opened.
-  - Limits: sub-directories (wiki, skills, logs, models) are **not** backed up; the backup lives inside the
-    data directory, so a destroyed directory takes it along and `--product ... --uninstall` removes it;
-    unscoped (shared) data is not covered; the frozen path calls no snapshot (no `finalize_pending_update`
-    there) so frozen updates have **no** data backup yet (open).
+    Staged, journalled, rolled back on error (section 7). It writes only inside that product's directory;
+    the other product and the shared directory are never opened.
+  - Limits: sub-directories (wiki, skills, logs, models) are **not** backed up, so this is never a full data
+    rollback; the backup lives inside the data directory, so a destroyed directory takes it along and
+    `--product ... --uninstall` removes it; unscoped (shared) data is not covered; the frozen path calls no
+    snapshot (no `finalize_pending_update` there) so frozen updates have **no** data backup yet (open,
+    declared).
 
 ## 4. Uninstall
 
@@ -160,3 +161,81 @@ Credential Manager removal: never exercised.
    per-product uninstall leaves the other intact; full uninstall refused while product data exists.
 8. Decide before release: per-product identities (section 2) or an explicit statement that one shared
    install ships; frozen rollback and frozen data backup.
+
+## 7. Block 17: GPT round 4 (H5, H6)
+
+Nothing below was run: no pytest, no build, no installer, no restore or backup against real data, no
+download, no push. Only reading, editing, `py_compile` and `ruff check`. The new tests are written, not run.
+
+### H5 (HIGH): backup did not ensure a coherent SQLite snapshot
+
+State: **fixed in code, not run.**
+
+- Files: `dodaios/core/product_backup.py`, `dodaios/ui/relauncher.py` (`finalize_pending_update`,
+  `_write_update_result`), `dodaios/cli/app_update.py` (`--allow-unbacked-update`, refusal message).
+- Choice: every `*.sqlite|*.db|*.sqlite3` is copied with `sqlite3.Connection.backup` from a read-only
+  connection (`mode=ro`, best-effort `wal_checkpoint(PASSIVE)`), the copy gets `integrity_check` and
+  `journal_mode=DELETE`, and `-wal`/`-shm`/`-journal` are never copied. Other top-level files use `copy2`.
+  The manifest (schema 2) carries `coverage` and `omissions`: each skipped entry names a reason (size
+  cap, unreadable, link, directory, not a regular file, SQLite sidecar, ownership/lock, backup folder).
+  A SQLite store that is omitted or cannot be backed up makes the snapshot **failed**; a failure removes
+  the half-written folder (a backup without manifest is never listed).
+  `complete_data_rollback` is always `false` and the note says "NOT a full data rollback" when
+  directories are omitted. No wording calls the copy a reliable rollback.
+- "Verified pre-update backup": `finalize_pending_update` calls `snapshot_product_state_checked()`. When a
+  product is active and the snapshot **failed**, the update does not start (no git reset, no installer):
+  pending update removed, result file written with `refused: no_verified_backup`, return `False`, the
+  relauncher launches the unchanged install, `jarvis update` prints a clear refusal and exits 1. The
+  owner override is `jarvis update --allow-unbacked-update` (sets `DODAIOS_ALLOW_UNBACKED_UPDATE=1` for the
+  detached finalizer); when used, `override_unbacked_update: true` and `backup_failure` are recorded in
+  the update result. No product active means nothing to back up (not a failure).
+- Frozen updates: remain without this backup (declared, section 3).
+- Residual limits: a write that lands between the online backup of two different databases leaves them
+  mutually inconsistent (no cross-database quiescence; the app is stopped at this point, so this is
+  only a risk if something else writes); a database in a directory the process cannot open read-only
+  fails the snapshot (fail closed); the backup shares the disk and directory with the data; the in-app
+  restart path shows the refusal only through the update result file (no new UI string); a backup
+  made by an older schema-1 manifest still restores but states "coverage unknown".
+- Controls prepared, NOT RUN: `tests/unit/packaging/test_product_backup_coherence.py`
+  (`test_snapshot_is_coherent_while_the_database_is_open_and_in_wal`,
+  `test_manifest_lists_every_omission_with_a_reason`,
+  `test_omitted_database_makes_the_snapshot_fail_and_leaves_no_half_backup`,
+  `test_backup_failure_midway_is_failed_and_cleaned`,
+  `test_update_is_refused_without_a_verified_backup_unless_overridden`).
+  Still to do with authorization: a real writer process hammering a WAL database during a snapshot.
+
+### H6 (HIGH): restore could mutate partially and still print "Nothing was changed"
+
+State: **fixed in code, not run.**
+
+- Files: `dodaios/core/product_backup.py` (`restore_product_state`, `recover_product_state`, `main`).
+- Choice: before anything changes, the backup parent, the backup folder, every source file and every
+  destination file are checked (linked parent/source/destination refused, resolved descendant check,
+  manifest names restricted). Inputs are then STAGED as exclusive-create (`O_EXCL|O_NOFOLLOW`, 0600)
+  temp files inside the verified product directory; the SHA-256 is checked while copying and again on
+  the staged copy. Only then a swap under a JOURNAL (`.restore-journal-<token>.json`, rewritten before
+  and after each step with the state `planned|saving|installing|installed`). On any `OSError` the journal is
+  replayed backwards (previous files and sidecars moved back, installed files removed) and the temp files
+  deleted. The destination's `-wal`/`-shm`/`-journal` move away together with its database. Prior files are
+  kept as `<name>.before-restore`, then `.1`, `.2`, ... (never overwritten). `RestoreFailed` carries a
+  report; `main` prints restored / rolled back / moved away / left untouched, and says "No data file was
+  replaced" only for refusals raised before the swap. An unfinished journal (crash) blocks a new restore
+  until `recover --product NAME` rolls it back.
+- Residual limits: a power loss or kill between two `os.replace` calls leaves the journal for `recover`
+  (no automatic recovery at start-up); a failure of the rollback itself is reported with the journal kept
+  and may leave an inconsistent directory; `os.replace` and `fsync` guarantees depend on the file system
+  (never exercised on Windows or network drives); sub-directories are not restored; restore holds the
+  launch lock, so it cannot protect against a process that ignores the lock.
+- Controls prepared, NOT RUN (same test file): `test_restore_moves_stale_wal_and_shm_away_with_the_database`
+  (WAL pairing), `test_before_restore_copies_are_numbered_never_overwritten`,
+  `test_mid_restore_failure_rolls_back_and_reports_precisely`,
+  `test_main_never_says_nothing_changed_after_a_failed_swap`,
+  `test_altered_backup_is_refused_before_any_change`,
+  `test_linked_backup_parent_is_refused`, `test_linked_destination_file_is_refused_and_not_followed`,
+  `test_staging_uses_exclusive_create_and_refuses_a_planted_temp_link` (linked parent/temp),
+  `test_unfinished_journal_blocks_restore_and_recover_rolls_back`.
+
+### ADR correction
+
+Section 1 said no `it.json` exists. At this SHA the frontend has `locales/it.json` and four namespace
+`it.json` files (listed in the table); only the backend lacks Italian. Corrected above.

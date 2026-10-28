@@ -863,6 +863,7 @@ def _write_update_result(
     rolled_back: bool,
     previous_revision: str,
     target_revision: str,
+    extra: dict[str, object] | None = None,
 ) -> None:
     """Persist a non-sensitive result for diagnostics after the new launch."""
 
@@ -876,6 +877,8 @@ def _write_update_result(
         "target_revision": target_revision,
         "completed_at": int(time.time()),
     }
+    if extra:
+        payload.update(extra)
     try:
         temp.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
         os.replace(temp, path)
@@ -997,15 +1000,49 @@ def finalize_pending_update(cwd: str | Path) -> bool:
         return False
 
     snapshot_user_state(root)
-    # The product's own data directory is not under ``root``; back up its small files too
-    # (best effort, never raises, never touches the other product; ADR-0064).
-    from dodaios.core.product_backup import snapshot_product_state  # noqa: PLC0415
-
-    snapshot_product_state()
+    # The product's own data directory is not under ``root``. A managed update can only be
+    # recovered if that data was saved first, so a product-scoped update needs a VERIFIED
+    # backup (coherent SQLite copies, manifest of coverage and omissions; ADR-0064). Without
+    # one the update does NOT start, unless the owner passed the explicit override, which is
+    # recorded in the update result. Frozen updates do not come through here (no backup).
+    from dodaios.core.product_backup import (  # noqa: PLC0415
+        ALLOW_UNBACKED_ENV,
+        snapshot_product_state_checked,
+    )
 
     previous = str(payload["previous_revision"])
     target = str(payload["target_revision"])
     profile = str(payload["profile"])
+    snap = snapshot_product_state_checked()
+    backup_extra: dict[str, object] = {}
+    if snap.status == "failed":
+        if os.environ.get(ALLOW_UNBACKED_ENV) != "1":
+            pending_path.unlink(missing_ok=True)
+            _write_update_result(
+                root,
+                ok=False,
+                rolled_back=False,
+                previous_revision=previous,
+                target_revision=target,
+                extra={
+                    "refused": "no_verified_backup",
+                    "detail": snap.reason,
+                    "message": (
+                        "Update not started: no verified pre-update backup of the product "
+                        "data could be made. The installed version and your data are "
+                        "unchanged. Fix the cause or pass the explicit override "
+                        "(jarvis update --allow-unbacked-update)."
+                    ),
+                },
+            )
+            return False
+        backup_extra = {"override_unbacked_update": True, "backup_failure": snap.reason}
+        logging.getLogger(__name__).warning(
+            "update continues WITHOUT a verified data backup (owner override): %s", snap.reason
+        )
+    elif snap.verified:
+        backup_extra = {"data_backup": snap.path.name if snap.path else "nothing to back up",
+                        "data_backup_complete": snap.complete}
 
     target_reset_ok = (
         _run_update_command(["git", "reset", "--hard", target], root=root, timeout=120.0) == 0
@@ -1027,6 +1064,7 @@ def finalize_pending_update(cwd: str | Path) -> bool:
             rolled_back=False,
             previous_revision=previous,
             target_revision=target,
+            extra=backup_extra,
         )
         return True
 
@@ -1048,6 +1086,7 @@ def finalize_pending_update(cwd: str | Path) -> bool:
         rolled_back=rolled_back,
         previous_revision=previous,
         target_revision=target,
+        extra=backup_extra,
     )
     return False
 
