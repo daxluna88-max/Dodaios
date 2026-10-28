@@ -52,7 +52,7 @@ class LedgerBudget:
         self._unknown_estimate = unknown_estimate
         self._limit_units = limit_units
         self._lock = threading.Lock()
-        self._seq = 0
+        self._seq = ledger.max_idem_seq(customer, idem_prefix)  # a re-created adapter never reuses an idem
         self._open: list[OpenReservation] = []
 
     # -- Budget interface ------------------------------------------------------------------------
@@ -77,8 +77,11 @@ class LedgerBudget:
                 pick = next((r for r in reversed(self._open) if not r.unknown and r.units == units), None)
             if pick is None:
                 return
-            self._open.remove(pick)
-        self._ledger.release(pick.res_id)
+        d = self._ledger.release(pick.res_id)
+        if d.ok:  # forget locally only what the ledger really gave back
+            with self._lock:
+                if pick in self._open:
+                    self._open.remove(pick)
 
     @property
     def reserved(self) -> float:
@@ -101,7 +104,7 @@ class LedgerBudget:
     def settle(self, res_id: str, actual_units: int | None, *, measured: bool = True) -> bool:
         """Settle one held reservation with the measured amount (None = usage unknown, keeps the hold)."""
         d = self._ledger.settle(res_id, actual_units, measured=measured)
-        if d.ok:
+        if d.ok and d.code != "unknown_usage":  # an unknown settlement keeps the hold visible
             with self._lock:
                 self._open = [r for r in self._open if r.res_id != res_id]
         return d.ok

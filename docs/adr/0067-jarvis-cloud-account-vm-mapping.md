@@ -12,6 +12,19 @@ behaviour (Chromium sandbox, systemd, SQLite, nftables, hypervisor features, OVH
 knowledge, not measured here. Controls are "prepared, NOT RUN". Status legend: **decided** (part of the owner's
 baseline), **designed** (specified here, not built), **open** (owner decision or unknown fact).
 
+## ERRATUM 2026-10-28 (review K1, not yet resolved by a full rewrite)
+
+Review K1 found that section 0.2 and the broker placement in section 0.5 do not match the agreed topology:
+the **VPS itself is the separate execution environment per customer**; **no nested virtualization is
+required** (and it is NOT an owner decision or a purchase prerequisite); billed-inference keys stay on a
+broker **outside** that execution VPS. Treat sections 0.2, 0.5, 3.5 and 14.1 as superseded by this paragraph.
+OPEN, owner decision, to be applied consistently to this ADR, the deploy files and the compliance matrix
+together: ONE ingress model, either (a) outbound-only tunnel to a central gateway with NO customer-facing
+443 on the VPS, or (b) customer HTTPS terminated on the VPS. `deploy/jarvis-cloud-node/` currently
+implements (b) (Caddy sample and nft input 443) while the text above chooses (a); do not deploy until one is
+chosen. OVH is a documented alternative, not the settled supplier (Hostinger preferred pending the owner's
+supplier discussion). Nothing was run for this erratum.
+
 ## 0. Baseline (decided by the owner, not re-opened here)
 
 1. **ONE OVHcloud VPS-2 per customer**, always-on, for the pilot. No purchase has been made.

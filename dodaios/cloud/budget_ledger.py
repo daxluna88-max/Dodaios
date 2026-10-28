@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS scopes (
   max_amount INTEGER NOT NULL, max_calls INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS entries (
   res_id TEXT PRIMARY KEY, customer TEXT NOT NULL, period TEXT NOT NULL, cls TEXT NOT NULL,
-  scope TEXT, idem TEXT NOT NULL,
+  scope TEXT, idem TEXT NOT NULL, fp TEXT,
   amount INTEGER NOT NULL,
   state TEXT NOT NULL,
   price_basis TEXT NOT NULL,
@@ -101,6 +101,9 @@ CREATE TABLE IF NOT EXISTS audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, actor TEXT NOT NULL,
   action TEXT NOT NULL, detail TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS losses (
+  key TEXT PRIMARY KEY, customer TEXT NOT NULL, cls TEXT NOT NULL, period TEXT NOT NULL,
+  total INTEGER NOT NULL, updated REAL NOT NULL);
 """
 
 # Held money: settled -> the real amount, reserved/unknown -> the worst case, released -> nothing.
@@ -156,6 +159,8 @@ class BudgetLedger:
         )
         self._db.row_factory = sqlite3.Row
         self._db.executescript(_SCHEMA)
+        if "fp" not in {r["name"] for r in self._db.execute("PRAGMA table_info(entries)")}:
+            self._db.execute("ALTER TABLE entries ADD COLUMN fp TEXT")  # ledgers created before K3
 
     @contextmanager
     def _tx(self) -> Iterator[sqlite3.Connection]:
@@ -275,13 +280,16 @@ class BudgetLedger:
         scope: str | None = None,
         ttl_s: float = 300.0,
         owner_estimate: int | None = None,
+        fingerprint: str | None = None,
         now: float | None = None,
     ) -> Decision:
         """Hold ``amount`` (the worst case of one paid call) or refuse BEFORE the call starts.
 
         ``amount=None`` is an unknown price: refused unless the account owner set an explicit
         ``owner_estimate`` (then the row is labelled ``owner_estimate``). Same ``idem`` again returns
-        the existing reservation (retries cannot double-hold)."""
+        the existing reservation (retries cannot double-hold) ONLY when class, period, scope, amount,
+        price basis and ``fingerprint`` (the caller's canonical request identity) all match; any
+        difference is a ``conflict``: a replay never authorizes a different or larger request."""
         now = time.time() if now is None else now
         if cls not in COST_CLASSES or not customer or not idem or not period:
             return Decision(False, "invalid", "", None, "")
@@ -296,7 +304,7 @@ class BudgetLedger:
         if held is None:
             return Decision(False, "invalid", "", None, "")
         with self._tx() as db:
-            return self._reserve_tx(db, customer, cls, held, basis, idem, period, scope, ttl_s, now)
+            return self._reserve_tx(db, customer, cls, held, basis, idem, period, scope, ttl_s, now, fingerprint)
 
     def _reserve_tx(
         self,
@@ -310,12 +318,17 @@ class BudgetLedger:
         scope: str | None,
         ttl_s: float,
         now: float,
+        fingerprint: str | None = None,
     ) -> Decision:
         prior = db.execute(
             "SELECT * FROM entries WHERE customer=? AND idem=?", (customer, idem)
         ).fetchone()
         if prior is not None:
-            same = prior["cls"] == cls and prior["period"] == period and prior["scope"] == scope
+            same = (
+                prior["cls"] == cls and prior["period"] == period and prior["scope"] == scope
+                and int(prior["amount"]) == amount and prior["price_basis"] == basis
+                and prior["fp"] == fingerprint
+            )
             if not same or prior["state"] == "released":
                 return Decision(False, "conflict", prior["res_id"], None, "")
             return Decision(True, "replay", prior["res_id"], self._remaining(db, customer, period), "")
@@ -347,9 +360,9 @@ class BudgetLedger:
             return self._refuse("scope_ceiling", remaining)
         res_id = os.urandom(12).hex()
         db.execute(
-            "INSERT INTO entries (res_id, customer, period, cls, scope, idem, amount, state, "
-            "price_basis, created, deadline, updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (res_id, customer, period, cls, scope, idem, amount, "reserved", basis, now,
+            "INSERT INTO entries (res_id, customer, period, cls, scope, idem, fp, amount, state, "
+            "price_basis, created, deadline, updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (res_id, customer, period, cls, scope, idem, fingerprint, amount, "reserved", basis, now,
              now + max(1.0, float(ttl_s)), now),
         )
         return Decision(True, "ok", res_id, remaining - amount, "")
@@ -604,6 +617,59 @@ class BudgetLedger:
             cur = db.execute("DELETE FROM blocks WHERE customer=?", (customer,))
             self._audit(db, actor, "clear_block", f"{customer}: {note}", now or time.time())
             return cur.rowcount == 1
+
+    def raise_loss(
+        self, key: str, attributed: str, operator: str, cls: str, period: str, total: int, *, now: float | None = None
+    ) -> int:
+        """Raise the OPERATOR_LOSS of ``key`` to ``total`` (monotonic) and book the difference under
+        ``operator`` in ONE transaction: either both rows move or neither does, so a retry after a
+        storage error adds the missing amount. Returns the newly added amount."""
+        value = _money(total)
+        if value is None or cls not in COST_CLASSES or not key or not attributed or not operator:
+            raise ValueError("invalid loss record")
+        now = time.time() if now is None else now
+        with self._tx() as db:
+            row = db.execute("SELECT total FROM losses WHERE key=?", (key,)).fetchone()
+            before = 0 if row is None else int(row["total"])
+            if value <= before:
+                return 0
+            db.execute(
+                "INSERT OR REPLACE INTO losses (key, customer, cls, period, total, updated) VALUES (?,?,?,?,?,?)",
+                (key, attributed, cls, period, value, now),
+            )
+            idem = f"loss:{key}"
+            cur = db.execute(
+                "UPDATE entries SET amount=?, actual=?, updated=? WHERE customer=? AND idem=? AND state='settled'",
+                (value, value, now, operator, idem),
+            )
+            if cur.rowcount == 0:
+                db.execute(
+                    "INSERT INTO entries (res_id, customer, period, cls, scope, idem, amount, state, "
+                    "price_basis, actual, actual_basis, created, updated, note) "
+                    "VALUES (?,?,?,?,NULL,?,?,'settled','accrual',?,'measured',?,?,'operator_loss')",
+                    (os.urandom(12).hex(), operator, period, cls, idem, value, value, now, now),
+                )
+            return value - before
+
+    def losses(self) -> list[tuple[str, str, str, str, int]]:
+        """(key, attributed customer, class, period, total) for every recorded operator loss."""
+        with self._lock:
+            rows = self._db.execute("SELECT key, customer, cls, period, total FROM losses ORDER BY key").fetchall()
+        return [(r["key"], r["customer"], r["cls"], r["period"], int(r["total"])) for r in rows]
+
+    def max_idem_seq(self, customer: str, prefix: str) -> int:
+        """Highest numeric suffix of ``<prefix>:<n>`` among the customer's idempotency keys (0 if none)."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT idem FROM entries WHERE customer=? AND idem LIKE ? ESCAPE '\\'",
+                (customer, prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + ":%"),
+            ).fetchall()
+        best = 0
+        for r in rows:
+            tail = str(r["idem"])[len(prefix) + 1 :]
+            if tail.isdigit():
+                best = max(best, int(tail))
+        return best
 
     def get_entry(self, res_id: str) -> dict[str, object] | None:
         """Read-only copy of one ledger row (used by the broker for settle/late-usage after a

@@ -129,6 +129,8 @@ table inet jarvis {
 		# udp dport 443 is intentionally NOT accepted.
 
 		# Default for the agent uid: drop (log metadata only, rate limited)
-		limit rate 5/minute counter log prefix "jarvis-agent-egress-drop " drop
+		# The LOG is rate limited; the DROP is NOT (a limited drop lets packets fall through to ACCEPT).
+		limit rate 5/minute log prefix "jarvis-agent-egress-drop "
+		counter drop
 	}
 }

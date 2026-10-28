@@ -38,6 +38,7 @@ from enum import StrEnum
 
 from dodaios.cloud.budget_ledger import MESSAGES_IT, BudgetLedger, period_of
 
+USAGE_COUNTER_MAX = 10**12  # sanity bound for one call's measured token/image/second counters
 OPERATOR_CUSTOMER = "__operator__"  # pseudo customer that carries OPERATOR_LOSS rows
 
 
@@ -93,6 +94,8 @@ BROKER_MESSAGES_IT: dict[str, str] = {
     "operator_hold": "Jarvis e fermo per una verifica dei conti da parte nostra. Non ti viene chiesto nulla.",
     "broker_down": "Il servizio di calcolo non risponde: Jarvis non puo ragionare adesso e non spende nulla. Riprova piu tardi.",
     "invalid": "Richiesta non valida: non e stata eseguita.",
+    "conflict": "Questa richiesta e gia stata registrata con dati diversi: non e stata eseguita.",
+    "replay_closed": "Questa richiesta e gia conclusa: non viene eseguita di nuovo.",
 }
 
 
@@ -370,44 +373,31 @@ class _Turn:
 
 
 class OperatorLossBook:
-    """Records OPERATOR_LOSS under a pseudo customer so it can never enter a customer's figures."""
+    """Records OPERATOR_LOSS under a pseudo customer so it can never enter a customer's figures.
+    The per-reservation totals live in the ledger (same transaction as the operator cost row), so a
+    Broker re-created on the same ledger sees them and a failed write leaves nothing half-booked."""
 
     def __init__(self, ledger: BudgetLedger) -> None:
         self._ledger = ledger
-        self._lock = threading.Lock()
-        self._by_res: dict[str, tuple[str, str, str, int]] = {}  # res_id -> customer, cls, period, total
 
     def record(self, res_id: str, customer: str, cls: CostClass, period: str, total: int, *, now: float | None = None) -> int:
-        """Raise the loss of ``res_id`` to ``total`` (monotonic). Returns the newly added amount."""
+        """Raise the loss of ``res_id`` to ``total`` (monotonic). Returns the newly added amount.
+        Raises if the durable write fails: the caller must treat that as an unresolved loss."""
         if _int(total) is None or total == 0:
             return 0
-        with self._lock:
-            prior = self._by_res.get(res_id)
-            before = 0 if prior is None else prior[3]
-            if total <= before:
-                return 0
-            self._by_res[res_id] = (customer, cls.value, period, total)
-        delta = total - before
-        self._ledger.record_usage(
-            OPERATOR_CUSTOMER, LEDGER_CLASS.get(cls, "ai_inference"), delta,
-            idem=f"loss:{res_id}:{total}", period=period, measured=True, now=now,
-        )
-        return delta
+        return self._ledger.raise_loss(res_id, customer, OPERATOR_CUSTOMER, LEDGER_CLASS.get(cls, "ai_inference"), period, total, now=now)
 
     def total_for(self, customer: str, period: str, ledger_cls: str) -> int:
-        with self._lock:
-            return sum(
-                v[3] for v in self._by_res.values()
-                if v[0] == customer and v[2] == period and LEDGER_CLASS.get(CostClass(v[1])) == ledger_cls
-            )
+        return sum(
+            t for (_k, c, cls, per, t) in self._ledger.losses()
+            if c == customer and per == period and cls == ledger_cls
+        )
 
     def period_total(self, period: str) -> int:
-        with self._lock:
-            return sum(v[3] for v in self._by_res.values() if v[2] == period)
+        return sum(t for (_k, _c, _cls, per, t) in self._ledger.losses() if per == period)
 
     def records(self) -> list[tuple[str, str, str, str, int]]:
-        with self._lock:
-            return [(r, *v) for r, v in self._by_res.items()]
+        return self._ledger.losses()
 
 
 class Broker:
@@ -521,7 +511,8 @@ class Broker:
                     return self._no("limit_voice")
                 if len(self._inflight.get(who.customer, ())) >= lim.max_concurrency:
                     return self._no("limit_concurrency")
-        if amount is not None and lim.per_step_ceiling is not None and amount > lim.per_step_ceiling:
+        effective = amount if amount is not None else estimate  # worst-case hold: known price OR approved estimate
+        if effective is not None and lim.per_step_ceiling is not None and effective > lim.per_step_ceiling:
             return self._no("call_ceiling")
         if escalated:
             allow = 0 if grant is None else grant.escalation_allowance
@@ -538,12 +529,17 @@ class Broker:
         )
         d = self.ledger.reserve(
             who.customer, LEDGER_CLASS[spec.cls], amount, idem=idem, period=period,
-            scope=scope, owner_estimate=estimate if amount is None else None, now=now,
+            scope=scope, owner_estimate=estimate if amount is None else None,
+            fingerprint=self._fingerprint(who, spec), now=now,
         )
         if not d.ok:
             return Authorization(False, d.code, remaining=d.remaining,
                                  message_it=message_it(d.code), stop=stop_action_for(d.code))
         entry = self.ledger.get_entry(d.res_id) or {}
+        if d.code == "replay" and entry.get("state") != "reserved":
+            # The stored result is already settled/unknown/released: a replay returns that fact, it is
+            # never permission to start another paid request with the same identity.
+            return self._no("replay_closed", d.remaining)
         held_amount = _i(entry, "amount", amount or estimate or 0)
         with self._lock:
             turn.steps.setdefault(spec.step, set()).add(spec.request_id)
@@ -558,6 +554,13 @@ class Broker:
             self._open.setdefault(d.res_id, _OpenCall(d.res_id, who.customer, who.session, spec.engine, spec.cls, period, held_amount, escalated))
         return Authorization(True, d.code, d.res_id, held_amount, str(entry.get("price_basis", "known")), d.remaining)
 
+    @staticmethod
+    def _fingerprint(who: Principal, spec: CallSpec) -> str:
+        """Canonical identity of one authorized request; a replay must present the same one."""
+        parts = (who.customer, who.session, spec.turn_id, spec.step, spec.cls.value, spec.engine, spec.request_id,
+                 spec.max_input_tokens, spec.max_output_tokens, spec.images, spec.voice_seconds)
+        return hashlib.sha256(repr(parts).encode()).hexdigest()
+
     def _ceiling(self, spec: CallSpec) -> tuple[int | None, int | None]:
         """(worst case from the owner price table | None, owner estimate | None)."""
         amount = worst_case(spec, self.prices.price(spec.engine))
@@ -571,6 +574,13 @@ class Broker:
             if call is not None:
                 self._inflight.get(call.customer, set()).discard(res_id)
         return call
+
+    @staticmethod
+    def _valid_usage(usage: Usage) -> bool:
+        counters = (usage.input_tokens, usage.output_tokens, usage.images, usage.voice_seconds)
+        if any(_int(v) is None or v > USAGE_COUNTER_MAX for v in counters):
+            return False
+        return usage.provider_cost is None or _int(usage.provider_cost) is not None
 
     def actual_cost(self, call: _OpenCall | None, usage: Usage) -> int | None:
         if usage.provider_cost is not None:
@@ -588,6 +598,13 @@ class Broker:
         if entry is None:
             return SettleResult(False, "not_found")
         call = self._done(res_id)
+        if usage is not None and not self._valid_usage(usage):
+            # Malformed measurement is not evidence of free execution: keep the worst case held
+            # (as unknown) and require reconciliation.
+            self.ledger.settle(res_id, None, now=now)
+            with self._lock:
+                self.needs_reconcile.add(str(entry["customer"]))
+            return SettleResult(False, "invalid")
         actual = None if usage is None else self.actual_cost(call, usage)
         if actual is None:
             d = self.ledger.settle(res_id, None, now=now)
@@ -610,7 +627,7 @@ class Broker:
         """The provider was provably never contacted: give the hold back."""
         call = self._done(res_id)
         d = self.ledger.release(res_id, now=now)
-        if d.ok and call is not None and call.escalated:
+        if d.ok and d.code != "replay" and call is not None and call.escalated:  # refund only on the first transition
             with self._lock:
                 k = (call.customer, call.period)
                 self._escalated[k] = max(0, self._escalated.get(k, 0) - call.amount)
@@ -642,8 +659,8 @@ class Broker:
 
     def _operator_loss(self, res_id: str, customer: str, call: _OpenCall | None, period: str, ledger_cls: str, amount: int, reason: str, now: float | None, *, cls: CostClass | None = None) -> None:
         kind = cls or (call.cls if call is not None else next((c for c, v in LEDGER_CLASS.items() if v == ledger_cls), CostClass.INFERENCE))
+        self._hold(customer, f"operator_loss:{reason}")  # fail closed first: a failed write below keeps the hold
         self.losses.record(res_id, customer, kind, period, amount, now=now)
-        self._hold(customer, f"operator_loss:{reason}")
         threshold = self.limits.operator_loss_breaker_threshold
         if threshold is not None and self.losses.period_total(period) >= threshold:
             self.ledger.trip_breaker(f"operator_loss_threshold:{period}", actor="broker", now=now)
