@@ -63,6 +63,7 @@ import { installDictationFocusTracker } from "@/lib/dictationTarget";
 import { SubscriptionRealtimeTransportBroker } from "@/components/voice/SubscriptionRealtimeTransportBroker";
 import { BrowserRealtimeControl } from "@/components/voice/BrowserRealtimeControl";
 import { cn } from "@/lib/utils";
+import { initialNavCollapsed } from "@/lib/navCollapsedDefault";
 
 /** Where the collapsed/expanded choice for the nav sidebar is remembered. */
 const NAV_COLLAPSED_KEY = "jarvis.sidebar.collapsed.v1";
@@ -261,11 +262,13 @@ export default function App() {
    * rather than taking the shell down with it.
    */
   const [navCollapsed, setNavCollapsed] = useState<boolean>(() => {
+    let stored: string | null = null;
     try {
-      return window.localStorage.getItem(NAV_COLLAPSED_KEY) === "true";
+      stored = window.localStorage.getItem(NAV_COLLAPSED_KEY);
     } catch {
-      return false;
+      /* storage unavailable — fall through to the width-based default */
     }
+    return initialNavCollapsed(stored, window.innerWidth);
   });
   // Dragging the seam is itself an "I want the sidebar" gesture: a drag that
   // left the rail state behind would snap straight back to icons and read as a
