@@ -605,6 +605,13 @@ class BudgetLedger:
             self._audit(db, actor, "clear_block", f"{customer}: {note}", now or time.time())
             return cur.rowcount == 1
 
+    def get_entry(self, res_id: str) -> dict[str, object] | None:
+        """Read-only copy of one ledger row (used by the broker for settle/late-usage after a
+        restart). ``None`` when unknown."""
+        with self._lock:
+            row = self._db.execute("SELECT * FROM entries WHERE res_id=?", (res_id,)).fetchone()
+        return None if row is None else {key: row[key] for key in row.keys()}  # noqa: SIM118
+
     def close(self) -> None:
         with self._lock:
             self._db.close()
