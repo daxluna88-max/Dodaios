@@ -24,7 +24,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from dodaios.brain import engine_policy, provenance
+from dodaios.brain import dispatch_gate, engine_policy, provenance
 from dodaios.brain.consumer_orchestrator import (
     Branch,
     Budget,
@@ -86,7 +86,9 @@ def extract_task(text: str) -> str | None:
 
 @dataclass(slots=True)
 class MultiEngineOutcome:
-    #: ok | work | off | no_engines | no_answer | synthesis_failed
+    #: ok | work | off | no_engines | no_answer | synthesis_failed | refused
+    #: (``refused``: the carried input label allows no configured engine; ``reason`` is the
+    #: user-visible refusal and nothing was sent)
     status: str
     text: str = ""
     #: Why there is no answer (per engine), already readable. Empty when ``status == "ok"``.
@@ -121,6 +123,30 @@ def _build(registry: Any, spec: Any, branch_id: str, refusals: list[str]) -> Bra
         authenticated=authenticated(provider, kind, registry),
         needs_api=spec.needs_api, est_cost=spec.est_cost, timeout_s=spec.timeout_s,
     )
+
+
+def context_items(task: str) -> list[ContextItem]:
+    """The ContextItems of the question, derived from the CURRENT message's input label (J1).
+
+    No declared label = no attachment: the typed question is an ordinary ``task``. A declared label
+    that is not UNRESTRICTED (a missing label reads UNAVAILABLE) makes the item ``local_only`` and
+    carries every attachment kind in ``derived_from`` (``attachment_<kind>``), so a remote branch
+    withholds it by category AND by flag and the label survives into the egress/turn record. The
+    composed prompt cannot be split back into typed text and attachment text here (the composer
+    emits one string), so the whole question carries the turn's most restrictive label.
+    """
+    carried = provenance.input_label()
+    if carried is None or carried.turn is provenance.Provenance.UNRESTRICTED:
+        return [ContextItem(task, "task")]
+    kinds = sorted({f"attachment_{it.kind}" for it in carried.items if it.kind} or {"attachment"})
+    return [ContextItem(task, "task", local_only=True, derived_from=tuple(kinds))]
+
+
+def _permitted(branch: Branch) -> str | None:
+    """None when the current input may go to ``branch``; else the user-visible refusal."""
+    dest_local = dispatch_gate.is_local(branch.provider, branch.brain)
+    return dispatch_gate.refusal(branch.provider, branch.brain,
+                                 local=branch.kind == "local" and dest_local)
 
 
 #: The gate calls the question ``task``; the screen's fixed list calls it ``question``.
@@ -228,7 +254,25 @@ async def ask(
     branches = [b for i, spec in enumerate(config.engines)
                 if (b := _build(registry, spec, f"b{i + 1}", refusals)) is not None]
 
-    items = [ContextItem(task, "task")]
+    items = context_items(task)
+    restricted_input = provenance.input_requires_local()
+    refused_text = ""
+    if restricted_input:
+        # J1: restrict BEFORE any remote branch. Only branches provably local stay.
+        kept: list[Branch] = []
+        for b in branches:
+            barred = _permitted(b)
+            if barred is None:
+                kept.append(b)
+            else:
+                refused_text = barred
+                refusals.append(f"{b.provider}: not sent (attachment must stay on this computer)")
+        branches = kept
+        if not branches:
+            _close(ledger, record_key, "failed")
+            return MultiEngineOutcome(
+                "refused", reason=refused_text or dispatch_gate.user_message(""),
+                provenance=provenance.Provenance.UNRESTRICTED)
     orchestrator = Orchestrator(
         PrivacyGate(allowed_categories=frozenset({"task"})),
         Budget(config.budget),
@@ -251,6 +295,23 @@ async def ask(
         for r in results if r.status == "ok" and r.text.strip()
     )
     synthesizer = _build(registry, synth_spec, "synthesis", refusals)
+    if restricted_input and (synthesizer is None or _permitted(synthesizer) is not None):
+        # J1: a remote synthesizer must not get restricted material or answers tainted by it.
+        # Fall back to a local engine that answered; none = say so, never a partial leak.
+        synthesizer = None
+        for r in results:
+            if r.status == "ok" and r.text.strip():
+                cand = _build(registry, config.engines[int(r.branch_id[1:]) - 1],
+                              "synthesis", refusals)
+                if cand is not None and _permitted(cand) is None:
+                    synthesizer = cand
+                    break
+        if synthesizer is None:
+            _record_turn(ledger, turn_id, branches, results, None, None, key=record_key,
+                         phase="failed")
+            return MultiEngineOutcome(
+                "refused", reason=refused_text or dispatch_gate.user_message("a remote engine"),
+                report=report, provenance=provenance.Provenance.UNRESTRICTED)
     if synthesizer is not None and style_instruction:
         synthesizer = dataclasses.replace(synthesizer, instruction=style_instruction)
     if synthesizer is None:

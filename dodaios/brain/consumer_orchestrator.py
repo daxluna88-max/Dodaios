@@ -41,7 +41,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from dodaios.brain import engine_policy
+from dodaios.brain import dispatch_gate, engine_policy
 from dodaios.core.protocols import BrainMessage, BrainRequest
 
 log = logging.getLogger(__name__)
@@ -392,6 +392,15 @@ class Orchestrator:
             # (``kind`` only says how the engine is billed). Anything unproven is remote.
             dest = engine_policy.destination_of(b.provider, b.brain)
             local = b.kind == "local" and dest.local
+            # Defense in depth (block 19, J1): the CURRENT message's input label is enforced at
+            # this direct brain call too, not only in the ordinary dispatcher. UNAVAILABLE or
+            # RESTRICTED input never reaches a destination that is not provably local, whatever
+            # the ContextItems say (no redaction is relied on).
+            barred = dispatch_gate.refusal(b.provider, b.brain, local=local)
+            if barred is not None:
+                return BranchResult(
+                    b.branch_id, b.provider, "refused", reason=barred, run_id=run_id
+                )
             prompt, record = self.gate.prepare(
                 items, turn_id=turn_id, branch_id=b.branch_id, destination=b.provider, local=local,
                 extra_allowed=extra_allowed,
@@ -524,6 +533,9 @@ class Orchestrator:
             return SynthesisResult("no_input", reason="no engine produced an answer")
         dest = engine_policy.destination_of(synthesizer.provider, synthesizer.brain)
         synth_local = synthesizer.kind == "local" and dest.local
+        barred = dispatch_gate.refusal(synthesizer.provider, synthesizer.brain, local=synth_local)
+        if barred is not None:  # block 19 (J1): a remote synthesizer never gets restricted input
+            return SynthesisResult("refused", reason=barred)
         forwardable = [r for r in answers if synth_local or not r.tainted]
         withheld = len(answers) - len(forwardable)
         if not forwardable:

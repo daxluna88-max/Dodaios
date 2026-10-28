@@ -220,3 +220,35 @@ before a "restart" (second `ChatStore` on the same file) is read back. Nothing w
 Block 17 (GPT round 4, H1): phone attachment label is set before analysis and travels with the queued record; see ADR-0062 "Block 17: GPT round 4 (H1)".
 
 Block 18 (I1): the current attachment-bearing prompt/images are now label-gated at every dispatch (brain chain, dispatcher, API/CLI runners); see ADR-0062 'Block 18: GPT round 5 (I1)'. Not run.
+
+## Block 19: GPT round 6 (J1)
+
+Finding J1 (HIGH): the explicit "ask several engines" path built `[ContextItem(task, "task")]` (`local_only=False`) and
+called the orchestrator directly, so the Block 18 input label (attachment text / PDF / image) never reached remote
+reviewers or the synthesizer. State: **fixed in code (statically); NOT executed.**
+
+Choice (label -> ContextItem, enforced twice, refusal not leak):
+* `brain/multi_engine_chat.py`: `context_items(task)` derives the item from `provenance.input_label()`: no label = no
+  attachment = ordinary `task`; any non-UNRESTRICTED label (a missing label reads UNAVAILABLE) = `local_only=True` with
+  `derived_from=("attachment_<kind>", ...)`, so the gate withholds it by flag AND by category and the kinds survive into
+  the egress record. `ask` then drops every branch that is not provably local (`dispatch_gate.is_local`, kind local)
+  BEFORE the fan-out; a restricted input with no permitted engine returns the new outcome `refused` (user-visible
+  message from `dispatch_gate.user_message`, nothing sent). The synthesizer is chosen the same way: a remote configured
+  synthesizer is replaced by a local engine that answered, or the outcome is `refused`; reviewer answers tainted by the
+  material keep the existing `tainted` provenance (outcome RESTRICTED).
+* `brain/consumer_orchestrator.py`: defense in depth at the direct brain calls: `_fan.serve` calls
+  `dispatch_gate.refusal(...)` (locality from the real destination) and returns `refused` before preparing the prompt;
+  `synthesize` returns `refused` for a non-local synthesizer under a restricted input. No redaction and no output-side
+  TTS denial is relied on.
+* `brain/manager.py` `_run_multi_engine_turn`: the `refused` outcome returns its reason as the reply.
+
+Residual limits: the composed prompt is one string, so typed text and attachment text cannot be split back; the whole
+question carries the turn's most restrictive label (typed text of a mixed message stays local too). Per-item labels
+are kept as category kinds only. Locality is loopback only (Block 18 rule). No localized catalog string for the refusal
+(English `dispatch_gate` text). A message without a declared input label is treated as ordinary typed text, as before.
+
+Controls prepared, NOT RUN: `tests/unit/test_block19_multi_engine_input_label.py` (text/PDF/image labels map to
+ContextItem fields; unlabelled = restricted; remote-only engines -> refused, nothing sent; mixed engines -> only the local
+one is called and the answer is RESTRICTED; local reviewer + remote synthesizer -> local synthesis, remote sees nothing;
+unrestricted input unchanged; orchestrator refuses a remote branch/synthesizer with clean-looking items). Nothing was run:
+no pytest, no CI, no app, no model call; only `py_compile` and `ruff check` on the touched modules and the new test.

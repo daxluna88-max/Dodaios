@@ -9761,6 +9761,8 @@ class BrainManager:
         provenance.set_turn_provenance(outcome.provenance)
         if outcome.status == "ok":
             return provenance.label(outcome.text, outcome.provenance)
+        if outcome.status == "refused":  # block 19 (J1): the input label allows no engine
+            return outcome.reason
         key = {"work": "work", "off": "off", "no_engines": "no_engines",
                "no_answer": "no_answer", "synthesis_failed": "synthesis_failed"}[outcome.status]
         return i18n_catalog.t(
