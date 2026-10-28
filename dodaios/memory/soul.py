@@ -220,7 +220,9 @@ class Soul:
                 out[current].append(stripped)
         return out
 
-    def render_for_prompt(self, *, max_chars: int = MAX_PROMPT_CHARS, compact: bool = False) -> str:
+    def render_for_prompt(
+        self, *, max_chars: int = MAX_PROMPT_CHARS, compact: bool = False, remote: bool = True
+    ) -> str:
         """The character block for a system prompt; ``""`` when the file says nothing.
 
         The name line is left out on purpose: the identity directive states
@@ -228,6 +230,11 @@ class Soul:
         contradict it. ``compact`` (small self-hosted brains) keeps who the
         assistant is and what it learned, and drops the tone rules and limits
         the compact persona already carries.
+
+        ``remote`` (default True, fail closed; ADR-0061 block 17): the learned notes are given
+        only when explicitly marked remote-shareable. A prompt builder that does not know its
+        destination (``dodaios.brain.identity``) keeps every unlabelled or local-only learned note
+        out; ``remote=False`` is for a destination proven local.
         """
         from dodaios.society.notebook import select_entries
 
@@ -243,7 +250,7 @@ class Soul:
         learned = self.learned()
         if learned:
             budget = LEARNED_PROMPT_CHARS // (2 if compact else 1)
-            picked, _omitted = select_entries(learned, max_chars=budget)
+            picked, _omitted = select_entries(learned, max_chars=budget, remote=remote)
             picked.sort(key=lambda e: e.revision)
             if picked:
                 out.append("### What you have learned about yourself")

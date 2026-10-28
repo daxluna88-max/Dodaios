@@ -68,6 +68,21 @@ def _seat_of(reviewer: Any) -> dict[str, str]:
     return fields() if callable(fields) else {}
 
 
+def _seat_is_local(model_call: Any) -> bool:
+    """True only on a POSITIVE ``is_local`` declaration by the reviewer/compactor callable.
+
+    Nothing sets it today, so every reviewer and compactor seat counts as a remote destination
+    (ADR-0061 block 17, H2): it is shown only entries explicitly marked remote-shareable.
+    """
+    return getattr(model_call, "is_local", False) is True
+
+
+def _shareable_view(books: dict[str, list[Any]]) -> dict[str, list[Any]]:
+    from dodaios.society.notebook import visible_entries
+
+    return {target: visible_entries(rows, remote=True) for target, rows in books.items()}
+
+
 @dataclass
 class _Conversation:
     turns: list[Turn] = field(default_factory=list)
@@ -403,7 +418,8 @@ class JarvisLearningLoop:
     async def _review_said(self, said: list[dict[str, str]], reason: str) -> tuple[int, bool]:
         """``(changes written, a reviewer answered)``; raises only on I/O faults."""
         entries = await asyncio.to_thread(self.notebook.entries)
-        prompt = build_prompt(said, entries=entries, usage=self.notebook.usage(entries))
+        shown = entries if _seat_is_local(self._reviewer) else _shareable_view(entries)
+        prompt = build_prompt(said, entries=shown, usage=self.notebook.usage(entries))
         log.info("learning: reviewing %d picked turn(s) (%s)", len(said), reason)
         self.review_calls += 1
         try:
@@ -535,6 +551,11 @@ class JarvisLearningLoop:
         # What the user asked to remember is theirs: never merged, never
         # expired (its date prefix would otherwise read as a passed deadline).
         rows = [e for e in rows if getattr(e, "origin", "") != EXPLICIT_ORIGIN]
+        if not _seat_is_local(self._compactor):
+            # A remote seat is never shown a local-only note (so it can neither merge nor drop it).
+            from dodaios.society.notebook import visible_entries
+
+            rows = visible_entries(rows, remote=True)
         if len(rows) < 2:
             return 0
         prompt = compact.build_prompt(rows, target=target, used=used, budget=budget)

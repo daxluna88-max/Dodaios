@@ -257,7 +257,8 @@ def upcoming_notes(*, today: date | None = None) -> list[tuple[date, str]]:
     try:
         from dodaios.memory.learning.notebook import dated_notes
 
-        notes = dated_notes()
+        # The owner's own page on this machine: every note, local-only ones included.
+        notes = dated_notes(remote=False)
     except Exception:  # noqa: BLE001 — the page renders without the list
         log.debug("initiative: dated notes unavailable", exc_info=True)
         return []
