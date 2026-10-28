@@ -146,6 +146,11 @@ class BrainDispatcher:
                 ``None`` (default) preserves prior behavior — silent
                 pre-execution.
         """
+        # Block 18 (I1): the last door before the engine. A current message carrying a
+        # restricted/unavailable attachment label never reaches a not provably local brain.
+        from dodaios.brain import dispatch_gate  # noqa: PLC0415
+
+        dispatch_gate.check_brain(self._brain)
         tid = trace_id or uuid4()
         messages: list[BrainMessage] = list(history or [])
         # Wave 2 (omni-latency): per-turn dynamic context (date/wiki)
@@ -232,6 +237,9 @@ class BrainDispatcher:
         history: list[BrainMessage] | None = None,
     ) -> AsyncIterator[str]:
         """Yields text chunks. Tool use is disabled in this mode."""
+        from dodaios.brain import dispatch_gate  # noqa: PLC0415
+
+        dispatch_gate.check_brain(self._brain)  # block 18 (I1)
         messages: list[BrainMessage] = list(history or [])
         messages.append(BrainMessage(role="user", content=user_text))
         req = BrainRequest(

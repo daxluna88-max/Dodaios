@@ -166,3 +166,44 @@ required argument; ingest passes the label; wire/queue round-trip and old rows =
 dispatched with its record's label; `turn_label` only tightens; copied-context turn), `test_phone_integration.py`
 (behaviour test replaces the source-text test), `test_phone_routes.py` (ingest label and body label), existing
 fakes updated for the `provenance` keyword. Nothing was run: no pytest, no CI, no build, no app, no model call.
+
+## Block 18: GPT round 5 (I1)
+**State: fixed in code (statically); NOT executed.** Finding I1 (HIGH): the attachment label reached the
+context but not the final dispatch decision. `service.send` composed the extracted text into the prompt,
+`run_attempt` chose brain/CLI/API and checked only Work; `runner_api.run_api_turn` appended `user_text` and
+`_plain_images` with no check, `runner_cli` likewise, the brain path filtered OLD history only, and
+`begin_turn` replaced the inherited state.
+
+Choice: an immutable label on the message, enforced at every actual dispatch by one gate.
+- Label. `brain/provenance.py`: `InputItem(kind, name, label)` / frozen `InputLabel(turn, items)` in a
+  ContextVar; `declare_input` MERGES (`combine` with whatever is declared: only keeps or tightens, never
+  loosens; a missing/unknown label reads UNAVAILABLE); `input_requires_local()`. `service.send` declares it
+  in the turn's copied context from the record (each attachment's own kind/label + the message's declared
+  label), so text extracts, PDFs and images are covered alike. `begin_turn` now re-applies the declared
+  input label to the fresh state (it no longer drops it).
+- Gate. New `brain/dispatch_gate.py` (`refusal`, `check`, `check_brain`, `InputLabelRefused`): UNAVAILABLE
+  or RESTRICTED + destination not provably loopback (`engine_policy.destination_of`; unknown name,
+  unreadable endpoint, vendor CLI, control runner = remote) => refused with a user-visible message, never a
+  silent drop. Work needs loopback too (an allowlisted LAN host is not enough). No attachment => no label =>
+  untouched.
+- Enforced at: `service.run_attempt` (control runner, CLI, API, unknown runner), `runner_api.run_api_turn`
+  (before `_plain_images`/`BrainRequest`), `runner_cli.run_cli_turn` (before any spawn; also covers
+  native_control/tasks/sandbox callers), `brain/manager.py` fallback loop (per attempt: a remote engine is
+  skipped, the chain moves to a local one if configured; if none answers the user gets the refusal text, not
+  "provider down"), `brain/dispatcher.py` `dispatch`/`stream_text` (last door for manager.dispatch,
+  run_task, router).
+- Preserved: the ContextVar travels with the turn context copy through queued turns (record -> `send`),
+  continuations, retries and delegated sub-tasks; a fallback re-checks the same label.
+
+Residual limits: routing to a local engine is only the existing chain/fallback order (no new "pick a local
+engine" selector). A desktop composer that posts back attachments without `provenance` reads UNAVAILABLE and
+is now refused for remote engines (fail closed; stock server responses carry the label). Locality is
+loopback only. `consumer_orchestrator` fan-out and `resume_hosted_cli_turn` (CLI already spawned before a
+restart) were not changed; the orchestrator keeps its own ContextItem gate. Other `svc.send` callers that
+make no claim carry no label.
+
+Controls prepared, NOT RUN: `tests/unit/test_block18_input_label_dispatch.py` (text and image + remote API
+refused and images not prepared; PDF + CLI refused, nothing spawned; local engine allowed; Work needs
+loopback; unnamed brain remote; fallback chain re-check; dispatcher refuses remote brain; `begin_turn` does
+not loosen; frozen/most-restrictive label; queued record keeps its label). Nothing was run: no pytest, no CI,
+no app, no model call; only `py_compile` and `ruff check` (no new findings vs. baseline).

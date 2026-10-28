@@ -1599,6 +1599,34 @@ class AgentChatService:
                         ),
                     )
                     return
+                # Block 18 (I1): the CURRENT prompt/images carry the message's label. A vendor
+                # CLI, a vendor control runner and an unknown runner are remote unless proven
+                # otherwise; the API runner is judged by its real destination; the brain runner
+                # is re-checked per engine in its fallback chain. Refused, never silently dropped.
+                if runner != "brain" or control_runner is not None:
+                    from dodaios.brain import dispatch_gate
+
+                    _api_seat = control_runner is None and (
+                        runner == "api" and supports_api_runner(session.provider)
+                    )
+                    _refused = dispatch_gate.refusal(
+                        session.provider, local=None if _api_seat else False
+                    )
+                    if _refused is not None:
+                        await self._emit(
+                            session_id,
+                            make_event(
+                                "turn_finished",
+                                {
+                                    "turn_id": turn_id,
+                                    "status": "error",
+                                    "duration_ms": 0,
+                                    "usage": {},
+                                    "error": _refused,
+                                },
+                            ),
+                        )
+                        return
                 if control_runner is not None:
                     vendor = await control_runner(active_handle, text)
                     if vendor:
@@ -1801,7 +1829,21 @@ class AgentChatService:
             turn_ctx = contextvars.copy_context()
             carried = chat_attachments.turn_label(attached, provenance)
             if carried is not None:
-                turn_ctx.run(_prov.set_turn_provenance, carried)
+                # Block 18 (I1): an IMMUTABLE per-turn + per-item label, enforced at every actual
+                # dispatch (run_attempt below, the brain fallback chain, the dispatcher, the API
+                # and CLI runners). ``declare_input`` only merges: it can never loosen.
+                turn_ctx.run(
+                    _prov.declare_input,
+                    carried,
+                    tuple(
+                        _prov.InputItem(
+                            str(getattr(item, "kind", "") or "other"),
+                            str(getattr(item, "name", "") or ""),
+                            _prov.parse(getattr(item, "provenance", None)),
+                        )
+                        for item in attached
+                    ),
+                )
             run.task = asyncio.create_task(
                 _body(), name=f"agent-chat-{turn_id[:8]}", context=turn_ctx
             )

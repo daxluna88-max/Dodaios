@@ -161,8 +161,72 @@ _turn_var: contextvars.ContextVar[_TurnState | None] = contextvars.ContextVar(
 def begin_turn(turn_id: str | None = None) -> None:
     """A new turn starts in THIS context. Block 9: it starts UNAVAILABLE, not UNRESTRICTED; a
     path must positively attach UNRESTRICTED (:func:`attach_unrestricted`) to unlock remote
-    speech."""
+    speech.
+
+    Block 18 (I1): the input label the dispatcher declared for this message (see
+    :func:`declare_input`) is INHERITED, never dropped: the fresh state is merged with it, so a
+    turn that carries a restricted/unavailable attachment starts at least as restricted."""
     _turn_var.set(_TurnState(turn_id=turn_id or ""))
+    carried = _input_var.get()
+    if carried is not None and carried.turn is not Provenance.UNRESTRICTED:
+        set_turn_provenance(carried.turn)
+
+
+# --- Immutable input label (block 18, I1) -------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class InputItem:
+    """One attachment's own label: ``kind`` is image / text / pdf / other."""
+
+    kind: str
+    name: str
+    label: Provenance
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class InputLabel:
+    """What the CURRENT message (prompt text + images) is allowed to do. Frozen: it is replaced
+    only by a more restrictive one (:func:`declare_input`). ``turn`` is the most restrictive of
+    ``items`` and of the message's own declared label."""
+
+    turn: Provenance
+    items: tuple[InputItem, ...] = ()
+
+
+_input_var: contextvars.ContextVar[InputLabel | None] = contextvars.ContextVar(
+    "dodaios_input_label", default=None)
+
+
+def declare_input(
+    turn: Provenance | str | None, items: tuple[InputItem, ...] = ()
+) -> InputLabel:
+    """Declare (in THIS context) the label of the message about to be dispatched.
+
+    Merges with any label already declared: the result is ``combine`` of both, so a second call
+    can only keep or tighten, never loosen (queued turns, retries, continuations, nested
+    dispatches all inherit). A ``None``/unknown ``turn`` reads as UNAVAILABLE (fail closed)."""
+    new = parse(turn)
+    old = _input_var.get()
+    merged = InputLabel(
+        combine(new, *(item.label for item in items), *([old.turn] if old else [])),
+        (old.items if old else ()) + tuple(items),
+    )
+    _input_var.set(merged)
+    if merged.turn is not Provenance.UNRESTRICTED:  # never a positive claim from here
+        set_turn_provenance(merged.turn)
+    return merged
+
+
+def input_label() -> InputLabel | None:
+    """The declared label of the current message, or None when it carries no attachment."""
+    return _input_var.get()
+
+
+def input_requires_local() -> bool:
+    """True when the current message must NOT reach a destination that is not provably local."""
+    carried = _input_var.get()
+    return carried is not None and carried.turn is not Provenance.UNRESTRICTED
 
 
 def set_turn_provenance(provenance: Provenance) -> None:

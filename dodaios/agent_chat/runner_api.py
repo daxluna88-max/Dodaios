@@ -334,6 +334,27 @@ async def run_api_turn(handle: TurnHandle, user_text: str) -> None:
         )
         return
 
+    # Block 18 (I1): the CURRENT prompt and images carry the message's label. Judged by the real
+    # destination of the built engine (loopback only); refused visibly before anything is read,
+    # encoded or sent.
+    from dodaios.brain import dispatch_gate
+
+    refused = dispatch_gate.refusal(provider, brain)
+    if refused is not None:
+        await handle.emit(
+            make_event(
+                "turn_finished",
+                {
+                    "turn_id": handle.turn_id,
+                    "status": "error",
+                    "duration_ms": 0,
+                    "usage": {},
+                    "error": refused,
+                },
+            )
+        )
+        return
+
     messages = messages_from_events(handle.history)
     messages.append(
         BrainMessage(role="user", content=user_text, images=await _plain_images(handle, brain))

@@ -3213,6 +3213,26 @@ async def run_cli_turn(
 
     # Product policy (ADR-0049): every vendor CLI is a cloud engine. Refused before anything starts.
     require_local_inference(f"The {runner!r} CLI runner")
+    # Block 18 (I1): a vendor CLI is a remote engine unless proven local (it never is here). The
+    # CURRENT prompt carrying a restricted/unavailable attachment label is refused, visibly, before
+    # anything is spawned; the attachment is neither dropped nor sent.
+    from dodaios.brain import dispatch_gate
+
+    refused = dispatch_gate.refusal(runner, local=False)
+    if refused is not None:
+        await handle.emit(
+            make_event(
+                "turn_finished",
+                {
+                    "turn_id": handle.turn_id,
+                    "status": "error",
+                    "duration_ms": 0,
+                    "usage": {},
+                    "error": refused,
+                },
+            )
+        )
+        return None
     t0 = time.perf_counter()
     session = handle.session
     resume = session.vendor_session

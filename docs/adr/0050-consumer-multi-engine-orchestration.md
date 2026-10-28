@@ -218,3 +218,5 @@ calls it once; a remote engine's history view contains only `unrestricted` messa
 unlabelled pairs stay `unavailable`; a chat DB created before the column reads old rows as `unavailable`, and a label written
 before a "restart" (second `ChatStore` on the same file) is read back. Nothing was run: no test, no CI, no build, no app.
 Block 17 (GPT round 4, H1): phone attachment label is set before analysis and travels with the queued record; see ADR-0062 "Block 17: GPT round 4 (H1)".
+
+Block 18 (I1): the current attachment-bearing prompt/images are now label-gated at every dispatch (brain chain, dispatcher, API/CLI runners); see ADR-0062 'Block 18: GPT round 5 (I1)'. Not run.

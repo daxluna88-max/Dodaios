@@ -11770,6 +11770,7 @@ class BrainManager:
         # kind ∈ {"rate_limit", "missing_key", "skipped_cooldown", "init_fail",
         #         "call_fail"}
         provider_errors: list[tuple[str, str, str, str]] = []
+        label_refusals: list[str] = []  # block 18 (I1): engines skipped for the attachment label
 
         # B5 Agent C: wiki context injection — run once before the provider
         # loop so all providers in the fallback chain see the same enriched
@@ -11977,6 +11978,21 @@ class BrainManager:
                         "Brain %s(%s) konnte nicht instantiiert werden: %s",
                         prov_name, model, exc)
                 provider_errors.append((prov_name, model, kind, msg[:200]))
+                continue
+
+            # Block 18 (I1): the current message's attachment label is re-checked for EVERY
+            # attempt, fallbacks included. A restricted/unavailable label never reaches an engine
+            # that is not provably on this machine; the chain moves on to a local one if any.
+            from dodaios.brain import dispatch_gate  # noqa: PLC0415
+
+            _label_refusal = dispatch_gate.refusal(prov_name, brain)
+            if _label_refusal is not None:
+                label_refusals.append(_label_refusal)
+                provider_errors.append(
+                    (prov_name, model, "attachment_label_remote", "attachment label is local-only")
+                )
+                log.info("Skipping %s(%s): the message carries a local-only attachment label",
+                         prov_name, model)
                 continue
 
             # Attached pixels are evidence, not decoration. A provider that
@@ -12519,6 +12535,19 @@ class BrainManager:
 
             language = _turn_phrase_language(self, user_text)
             response_text = no_vision_provider_reply(language)
+            await self._record_response_side_effects(
+                user_text=user_text,
+                response_text=response_text,
+                use_history=use_history,
+                trace_id=trace_uuid,
+            )
+            return response_text
+
+        if used_provider is None and label_refusals:
+            # Nothing local answered and at least one remote engine was refused for the label:
+            # say so plainly (never the generic "provider down", never a silent attachment drop).
+            self._last_turn_all_failed = True
+            response_text = label_refusals[0]
             await self._record_response_side_effects(
                 user_text=user_text,
                 response_text=response_text,
