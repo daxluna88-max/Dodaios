@@ -158,3 +158,10 @@ No compatibility with this runtime is certified.
   logs, backups), per-customer STOP and revocation, budget reservations under concurrency, reconciliation and block,
   export and deletion completeness, egress denial, restore from backup, first-party and third-party access audits.
 - Nothing here authorizes spend, a purchase, a deployment or a customer-facing promise.
+
+## 9. Follow-up
+
+Server-enforced budget ledger design (reservations, accruals for the per-customer environment, reconciliation, circuit
+breaker; static module `dodaios/cloud/budget_ledger.py`, written-not-run tests) and the mobile cloud interface
+(onboarding, consumption display, memory location, live-view option, notifications, accessibility, screen/API
+inventory): see `docs/adr/0066-jarvis-cloud-budget-and-mobile.md`. Nothing was run; no provider chosen, no price fixed.
