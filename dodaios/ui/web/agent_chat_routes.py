@@ -77,6 +77,7 @@ from dodaios.agent_chat.service import (
 )
 from dodaios.agent_chat.surface_kits import kit_for
 from dodaios.agent_chat.tools import shell_label
+from dodaios.brain.provenance import Provenance
 from dodaios.society.credentials import CredentialError
 
 log = logging.getLogger(__name__)
@@ -253,6 +254,10 @@ class PatchSessionBody(BaseModel):
 
 
 class MessageBody(BaseModel):
+    #: Block 17: the label the message was born with. It only ever TIGHTENS the turn (a client
+    #: cannot loosen anything with it); an unknown value reads as UNAVAILABLE. Absent = no claim
+    #: (an ordinary desktop message); a phone message with files sets it server-side.
+    provenance: str | None = Field(default=None, max_length=32)
     timezone: str | None = Field(default=None, max_length=100)
     #: May be empty when files are attached — dropping a screenshot and
     #: pressing Enter is a complete gesture. The service refuses a message
@@ -1230,7 +1235,8 @@ async def post_message(session_id: str, body: MessageBody, request: Request) -> 
         # A created agent's chat queues a message behind its running turn
         # instead of refusing it; every other chat answers 409 as before.
         turn_id, queue_id = await send_or_queue(
-            svc, session_id, body.text, body.attachments, tool_choices=body.tool_choices
+            svc, session_id, body.text, body.attachments, tool_choices=body.tool_choices,
+            provenance=body.provenance,
         )
     except NoSuchSession as exc:
         raise HTTPException(status_code=404, detail="session not found") from exc
@@ -1546,6 +1552,8 @@ async def attach_files(
             paths=(paths or "").splitlines(),
             uploads=uploads,
             provider=provider,
+            # Desktop composer: the owner's own files, stated explicitly (block 17).
+            provenance=Provenance.UNRESTRICTED,
         )
     except chat_attachments.AttachmentError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

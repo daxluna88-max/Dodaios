@@ -33,7 +33,8 @@ class BusyChat:
     def is_running(self, session_id: str) -> bool:
         return session_id in self.busy
 
-    async def send(self, session_id, text, attachments=None, *, tool_choices=None) -> str:
+    async def send(self, session_id, text, attachments=None, *, tool_choices=None,
+                   provenance=None) -> str:
         if session_id in self.busy or session_id in self.refusing:
             raise SessionBusy(session_id)
         if self.fail_next:
@@ -187,7 +188,8 @@ async def test_waiting_for_a_credential_does_not_expire_accepted_messages():
 )
 async def test_lead_chat_queues_without_calling_send_on_the_running_goal(surface, session_id):
     class SteeringChat(BusyChat):
-        async def send(self, sid, text, attachments=None, *, tool_choices=None):
+        async def send(self, sid, text, attachments=None, *, tool_choices=None,
+                   provenance=None):
             assert not self.is_running(sid), "A followup must not cancel a live goal"
             return await super().send(sid, text, attachments, tool_choices=tool_choices)
 
@@ -204,7 +206,8 @@ async def test_followups_do_not_overtake_a_first_send_during_async_setup():
     started, release = asyncio.Event(), asyncio.Event()
 
     class PreparingChat(BusyChat):
-        async def send(self, sid, text, attachments=None, *, tool_choices=None):
+        async def send(self, sid, text, attachments=None, *, tool_choices=None,
+                   provenance=None):
             if text == "first":
                 started.set()
                 await release.wait()
@@ -232,7 +235,8 @@ async def test_queued_messages_keep_attachments_and_their_own_timezone():
     delivered = []
 
     class ContextChat(BusyChat):
-        async def send(self, sid, text, attachments=None, *, tool_choices=None):
+        async def send(self, sid, text, attachments=None, *, tool_choices=None,
+                   provenance=None):
             turn = await super().send(sid, text, attachments, tool_choices=tool_choices)
             delivered.append((attachments, tool_choices, client_timezone.get()))
             return turn

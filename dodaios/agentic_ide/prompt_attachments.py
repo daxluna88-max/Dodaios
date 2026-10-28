@@ -17,6 +17,7 @@ from uuid import uuid4
 from dodaios.agentic_ide import drop_analysis, drops
 from dodaios.agentic_ide.session import PendingPromptAttachmentBatch, get_registry
 from dodaios.brain.drop_context import DroppedItem
+from dodaios.brain.provenance import Provenance
 
 MAX_PENDING_BATCHES = 8
 MAX_PENDING_ATTACHMENTS = 16
@@ -104,7 +105,7 @@ async def stage_items_for_prompt_target(
     pairs: list[tuple[DroppedItem, str]] = []
     for item, saved in zip(usable, stored, strict=True):
         pairs.append((item, drops.reference(saved.relative_path, agent=term.agent)))
-    analyses = await drop_analysis.analyze(pairs)
+    analyses = await drop_analysis.analyze(pairs, provenance=Provenance.UNRESTRICTED)
     if not analyses:
         return None
 

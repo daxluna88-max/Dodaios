@@ -4955,7 +4955,10 @@ async def _analyze_drops(
         for name, data, reference in readable
     ]
     try:
-        return await drop_analysis.analyze(items)
+        # Desktop drop typed by the owner: explicit (block 17); Work still forces local.
+        from dodaios.brain.provenance import Provenance  # noqa: PLC0415
+
+        return await drop_analysis.analyze(items, provenance=Provenance.UNRESTRICTED)
     except Exception as exc:  # noqa: BLE001 - the drop itself already succeeded
         log.info("Agentic IDE attach: analysis failed (%s)", exc)
         return []

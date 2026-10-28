@@ -13,6 +13,7 @@ import pytest
 from dodaios.agentic_ide import drop_analysis
 from dodaios.agentic_ide.drop_analysis import DropAnalysis, analyze
 from dodaios.brain.drop_context import DroppedItem
+from dodaios.brain.provenance import Provenance
 
 
 class _Delta:
@@ -55,7 +56,9 @@ def _image(name: str = "shot.png") -> DroppedItem:
 async def test_image_is_described_and_the_description_travels() -> None:
     brain = _SeeingBrain()
 
-    result = await analyze([(_image(), "@.jarvis/drops/shot.png")], brain=brain)
+    result = await analyze([(_image(), "@.jarvis/drops/shot.png")], brain=brain,
+        provenance=Provenance.UNRESTRICTED,
+    )
 
     assert len(result) == 1
     assert result[0].kind == "image"
@@ -76,7 +79,9 @@ async def test_no_vision_provider_says_so_rather_than_inventing(monkeypatch) -> 
     # one", so the absence has to be staged at the resolver.
     monkeypatch.setattr(drop_analysis, "_resolve_vision_brain", lambda: None)
 
-    result = await analyze([(_image(), "@shot.png")], brain=None)
+    result = await analyze([(_image(), "@shot.png")], brain=None,
+        provenance=Provenance.UNRESTRICTED,
+    )
 
     assert len(result) == 1
     assert result[0].detail == ""
@@ -93,13 +98,15 @@ async def test_a_document_only_drop_never_resolves_a_vision_brain(monkeypatch) -
     monkeypatch.setattr(drop_analysis, "_resolve_vision_brain", _boom)
     item = DroppedItem(name="notes.txt", mime="text/plain", data=b"hello")
 
-    result = await analyze([(item, '"notes.txt"')], brain=None)
+    result = await analyze([(item, '"notes.txt"')], brain=None, provenance=Provenance.UNRESTRICTED)
 
     assert result[0].described_by == "extraction"
 
 
 async def test_a_failing_provider_costs_the_description_and_nothing_else() -> None:
-    result = await analyze([(_image(), "@shot.png")], brain=_BrokenBrain())
+    result = await analyze([(_image(), "@shot.png")], brain=_BrokenBrain(),
+        provenance=Provenance.UNRESTRICTED,
+    )
 
     assert len(result) == 1
     assert result[0].described_by == "none"
@@ -110,7 +117,7 @@ async def test_a_failing_provider_costs_the_description_and_nothing_else() -> No
 async def test_text_documents_are_extracted_without_a_model() -> None:
     item = DroppedItem(name="spec.md", mime="text/markdown", data=b"# Spec\nDo the thing.")
 
-    result = await analyze([(item, '"spec.md"')], brain=None)
+    result = await analyze([(item, '"spec.md"')], brain=None, provenance=Provenance.UNRESTRICTED)
 
     assert result[0].kind == "text"
     assert result[0].described_by == "extraction"
@@ -120,7 +127,9 @@ async def test_text_documents_are_extracted_without_a_model() -> None:
 async def test_a_binary_file_is_reported_as_attached_not_as_read() -> None:
     item = DroppedItem(name="archive.zip", mime="application/zip", data=b"PK\x03\x04rest")
 
-    result = await analyze([(item, '"archive.zip"')], brain=None)
+    result = await analyze([(item, '"archive.zip"')], brain=None,
+        provenance=Provenance.UNRESTRICTED,
+    )
 
     assert result[0].kind == "other"
     assert result[0].detail == ""
@@ -134,7 +143,7 @@ async def test_images_beyond_the_cap_are_named_not_silently_dropped() -> None:
         for i in range(drop_analysis.MAX_IMAGES_ANALYZED + 2)
     ]
 
-    result = await analyze(pairs, brain=brain)
+    result = await analyze(pairs, brain=brain, provenance=Provenance.UNRESTRICTED)
 
     # Every dropped file still comes back — the user saw a chip for each one.
     assert len(result) == len(pairs)
@@ -151,7 +160,7 @@ async def test_a_mixed_drop_describes_the_image_and_extracts_the_document() -> N
         (DroppedItem(name="notes.txt", mime="text/plain", data=b"line one"), '"notes.txt"'),
     ]
 
-    result = await analyze(pairs, brain=brain)
+    result = await analyze(pairs, brain=brain, provenance=Provenance.UNRESTRICTED)
 
     assert [r.kind for r in result] == ["image", "text"]
     assert result[0].described_by == "vision"
@@ -159,7 +168,7 @@ async def test_a_mixed_drop_describes_the_image_and_extracts_the_document() -> N
 
 
 async def test_an_empty_drop_is_not_an_error() -> None:
-    assert await analyze([]) == []
+    assert await analyze([], provenance=Provenance.UNRESTRICTED) == []
 
 
 async def test_a_long_extraction_is_shortened_and_says_that_it_was() -> None:
@@ -169,7 +178,7 @@ async def test_a_long_extraction_is_shortened_and_says_that_it_was() -> None:
         for i in range(6)
     ]
 
-    result = await analyze(pairs, brain=None)
+    result = await analyze(pairs, brain=None, provenance=Provenance.UNRESTRICTED)
 
     assert len(result) == len(pairs)  # nothing falls off the end
     assert sum(len(r.detail) for r in result) <= drop_analysis.MAX_TOTAL_CHARS

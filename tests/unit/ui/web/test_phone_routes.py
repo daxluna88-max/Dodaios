@@ -286,6 +286,7 @@ def test_a_message_carries_uploaded_files_through_the_chat_pipeline(
             return {"name": "nota.txt"}
 
     async def fake_ingest(folder, *, uploads=None, **_kw):
+        seen["ingest_kw"] = _kw  # block 17: the label is decided before any analysis
         seen["folder"], seen["name"] = folder, uploads[0][0]
         seen["bytes"] = uploads[0][1].read()
         return [Found()]
@@ -301,6 +302,12 @@ def test_a_message_carries_uploaded_files_through_the_chat_pipeline(
     assert res.status_code == 202 and res.json()["turn_id"] == "t1"
     assert seen["bytes"] == b"ciao" and seen["name"] == "nota.txt"
     assert seen["body"].attachments == [{"name": "nota.txt"}] and seen["body"].text == "leggi"
+    # Block 17: ingest got an explicit UNAVAILABLE label, and the message record carries it
+    # (it travels to the queue and to the turn; it is not left in this request's context).
+    from dodaios.brain.provenance import Provenance  # noqa: PLC0415
+
+    assert seen["ingest_kw"]["provenance"] is Provenance.UNAVAILABLE
+    assert seen["body"].provenance == "unavailable"
     # A file that is not ready, not an upload or not there is refused, and nothing is sent.
     seen.clear()
     assert phone.post(f"/api/phone/chats/{sid}/messages",

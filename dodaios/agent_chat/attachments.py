@@ -47,6 +47,7 @@ __all__ = [
     "compose",
     "ingest",
     "to_analysis",
+    "turn_label",
 ]
 
 class AttachmentError(RuntimeError):
@@ -100,6 +101,7 @@ async def ingest(
     paths: list[str] | None = None,
     uploads: Sequence[tuple[str, DropSource]] | None = None,
     provider: str = "",
+    provenance: object,
 ) -> list[Any]:
     """Store what was dropped in ``cwd`` and read what is in it.
 
@@ -118,6 +120,11 @@ async def ingest(
     they arrived. Raises :class:`AttachmentError` when nothing usable was
     carried; an analysis that fails costs the description and nothing else, so
     the file still travels.
+
+    ``provenance`` (block 17) is REQUIRED: what the files may do, decided by the caller BEFORE
+    anything is analysed. A phone upload is UNAVAILABLE. It decides, before any model call,
+    whether an image may be described by a non-local engine (it may not unless positively
+    UNRESTRICTED, and never under Work), and it is stamped on every returned analysis.
     """
     from dodaios.agentic_ide import drops
 
@@ -181,10 +188,12 @@ async def ingest(
     if not references:
         raise AttachmentError("That attachment carried nothing this chat could use.")
 
-    return await _analyze(readable)
+    return await _analyze(readable, provenance=provenance)
 
 
-async def _analyze(readable: list[tuple[str, bytes, str]]) -> list[Any]:
+async def _analyze(
+    readable: list[tuple[str, bytes, str]], *, provenance: object
+) -> list[Any]:
     """Describe images and extract documents. Never raises — this is a bonus.
 
     The files are already stored and referenced by the time this runs, so a
@@ -209,7 +218,7 @@ async def _analyze(readable: list[tuple[str, bytes, str]]) -> list[Any]:
         for name, data, reference in readable
     ]
     try:
-        return await drop_analysis.analyze(items)
+        return await drop_analysis.analyze(items, provenance=provenance)
     except Exception as exc:  # noqa: BLE001 — the attach itself already succeeded
         log.info("chat attach: analysis failed (%s)", exc)
         return []
@@ -233,6 +242,25 @@ def to_analysis(raw: list[dict[str, Any]] | None) -> list[Any]:
         if item.name:
             out.append(item)
     return out
+
+
+def turn_label(attachments: list[Any] | None, declared: object = None) -> Any:
+    """The label a turn must carry because of what it was sent with, or None for "no claim".
+
+    Block 17. Read from the RECORD (the analyses and the queued message), never from the HTTP
+    request's context: ``combine`` of every attachment's own label and the message's declared
+    one. It can only tighten. A turn with no attachments and no declared label gets None, so an
+    ordinary typed message is not reshaped; a malformed/old entry reads as UNAVAILABLE.
+    """
+    from dodaios.brain import provenance
+
+    labels = [provenance.parse(getattr(item, "provenance", None)) for item in attachments or []]
+    if declared is not None:
+        labels.append(provenance.parse(declared))
+    if not labels:
+        return None
+    merged = provenance.combine(*labels)
+    return None if merged is provenance.Provenance.UNRESTRICTED else merged
 
 
 def compose(text: str, attachments: list[Any] | None) -> str:

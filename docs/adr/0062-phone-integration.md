@@ -126,3 +126,43 @@ test_phone_integration.py` (new), `test_phone_routes.py` (approval body updated)
 ## Files changed
 `dodaios/ui/web/phone_routes.py`, `dodaios/ui/web/mobile/{app.js,order.js,index.html,sw.js}`,
 `docs/mobile-panel.md` (pointer), tests above. i18n, safety, memory, setup, speech, install untouched.
+
+## Block 17: GPT round 4 (H1)
+**State: fixed in code (statically); NOT executed.** Finding H1 (HIGH): the phone route ran
+`attachments.ingest` BEFORE labelling the turn, so a vision engine could already hold the image; no label
+reached `DropAnalysis`, `MessageBody` or `send_or_queue`, and the request's ContextVar is not a durable
+label of a queued turn.
+
+Choice: the label is data on the record, decided before analysis, and checked at the destination.
+- Classify first. `phone_routes.send_message` passes `provenance=UNAVAILABLE` to `ingest` (a phone upload is
+  never unrestricted by default). `attachments.ingest/_analyze` and `drop_analysis.analyze` take a REQUIRED
+  `provenance` keyword (no default). The desktop callers (`agent_chat_routes` attach, `prompt_attachments`,
+  `agentic_ide_routes`) state `UNRESTRICTED` explicitly.
+- Destination before bytes. `drop_analysis._must_stay_local` (Work always; Consumer unless positively
+  UNRESTRICTED) makes `_resolve_vision_brain(local_only=True)` / `resolver.resolve_vision_brain(local_only=)`
+  skip non-loopback engines (`engine_policy.destination_of`), and `_analyze_image` re-checks any resolved or
+  pinned brain (`_brain_is_local`; an unnamed engine is remote) BEFORE `_describe_image`. If only a remote
+  engine can see, the image is attached undescribed and the note says so: no silent downgrade.
+- Label on the record. `DropAnalysis.provenance` (wire, `from_dict`: missing/unknown = UNAVAILABLE) is stamped
+  on every analysis, so extracted text/description keep it; the stored `user_message` attachments list it.
+  `MessageBody.provenance` (None = no claim; only tightens) -> `send_or_queue(provenance=)` -> `_Queued.provenance`
+  (default and old/missing rows = UNAVAILABLE, `to_dict/from_dict`) -> `AgentChatService.send(provenance=)`.
+- Dispatch. `service.send` computes `attachments.turn_label(attached, provenance)` from the record and applies it
+  with `set_turn_provenance` inside a COPIED context handed to the turn task (`create_task(context=)`), not the
+  request's or the queue drain's context. The label can only tighten; it never calls `attach_unrestricted`.
+- Downstream: labelled UNAVAILABLE, the existing fail-closed rules (`remote_speech_blocked`, `storage_label`,
+  `remote_replayable`, curator/history gating) apply unchanged.
+
+Residual limits: the send queue is in-memory (ADR note on `send_queue`), so "persisted with the queue" means the
+label is part of the record while it lives; a restart drops the queue as before. Locality is whatever
+`destination_of` proves (loopback only). Brain-manager `begin_turn` resets the per-turn state to UNAVAILABLE at
+its own start (fail closed); a Consumer turn that truly needs a declared-clean attachment turn is not supported.
+Documents/PDF text is extracted locally (no model) but still labelled UNAVAILABLE. Other `svc.send` callers
+(voice, control) make no claim. An image attached by an in-workspace path from the phone is not possible (uploads only).
+
+Controls prepared, NOT RUN: `tests/unit/test_block17_phone_attachment_provenance.py` (new: remote vision engine not
+called for UNAVAILABLE/RESTRICTED; local engine called; Work needs verified-local; resolver asked `local_only`;
+required argument; ingest passes the label; wire/queue round-trip and old rows = UNAVAILABLE; queued message
+dispatched with its record's label; `turn_label` only tightens; copied-context turn), `test_phone_integration.py`
+(behaviour test replaces the source-text test), `test_phone_routes.py` (ingest label and body label), existing
+fakes updated for the `provenance` keyword. Nothing was run: no pytest, no CI, no build, no app, no model call.

@@ -18,6 +18,7 @@ from dodaios.agentic_ide import fleet_actions, prompt_history
 from dodaios.agentic_ide.control import CodingSessionControl
 from dodaios.agentic_ide.drop_analysis import DropAnalysis
 from dodaios.brain.dispatcher import BrainDispatcher
+from dodaios.brain.provenance import Provenance
 from dodaios.brain.workspace_tool import WorkspaceOrchestrationTool
 from dodaios.core import image_references
 from dodaios.core.protocols import BrainDelta, ExecutionContext, ImageBlock, ToolResult
@@ -88,7 +89,9 @@ async def source_ref(source, delivery, monkeypatch, tmp_path, image_store=None):
 
         monkeypatch.setattr(attachments, "_analyze", describe)
         monkeypatch.setattr(runner_brain, "brain_manager", lambda: None)
-        attached = await attachments.ingest(tmp_path, uploads=[("source.png", data)])
+        attached = await attachments.ingest(tmp_path, uploads=[("source.png", data)],
+            provenance=Provenance.UNRESTRICTED,
+        )
         service = AgentChatService(AgentChatStore(tmp_path / "chat.sqlite"))
         chat = service.store.create_session(
             provider="fakeprov", model="", effort="", cwd=str(tmp_path), surface="jarvis",

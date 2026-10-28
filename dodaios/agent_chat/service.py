@@ -1143,8 +1143,13 @@ class AgentChatService:
         routine_run: bool = False,
         author: dict[str, str] | None = None,
         background_result: bool = False,
+        provenance: str | None = None,
     ) -> str:
         """Persist the person's message and start the turn. Returns turn_id.
+
+        ``provenance`` (block 17) is the label the message was born with (a phone attachment is
+        UNAVAILABLE), taken from the record / queued message, not from the HTTP request. With the
+        attachments' own labels it fixes the turn's provenance when the turn is created.
 
         ``background_result`` continues an earlier request of the person whose
         delegates finished after its turn had closed (``parked_work``). It is
@@ -1428,6 +1433,7 @@ class AgentChatService:
                                             "kind": item.kind,
                                             "described_by": item.described_by,
                                             "note": item.note,
+                                            "provenance": item.provenance,
                                         }
                                         for item in attached
                                     ]
@@ -1786,7 +1792,19 @@ class AgentChatService:
                     )
 
         try:
-            run.task = asyncio.create_task(_body(), name=f"agent-chat-{turn_id[:8]}")
+            # Block 17: the turn's label comes from the message record, in the turn's OWN
+            # context copy (never the caller's, which may be a long-lived queue drain).
+            import contextvars  # noqa: PLC0415
+
+            from dodaios.brain import provenance as _prov  # noqa: PLC0415
+
+            turn_ctx = contextvars.copy_context()
+            carried = chat_attachments.turn_label(attached, provenance)
+            if carried is not None:
+                turn_ctx.run(_prov.set_turn_provenance, carried)
+            run.task = asyncio.create_task(
+                _body(), name=f"agent-chat-{turn_id[:8]}", context=turn_ctx
+            )
         except BaseException:
             if self._running.get(session_id) is run:
                 self._running.pop(session_id, None)

@@ -372,8 +372,13 @@ def resolve_vision_brain(
     config: JarvisConfig,
     *,
     bus: EventBus | None = None,
+    local_only: bool = False,
 ) -> Brain | None:
     """A Brain that can actually LOOK at an image, or None.
+
+    ``local_only`` (ADR-0062, block 17): a remote vision engine is SKIPPED, never returned, so
+    image bytes of an unlabelled/restricted origin (or any image under Work) cannot reach it. A
+    destination counts as local only when ``engine_policy.destination_of`` proves loopback.
 
     Gated purely on the ``supports_vision`` capability (AP-21) — never on a
     provider name or a model id. Several providers in a normal chain are
@@ -418,6 +423,12 @@ def resolve_vision_brain(
                 provider, model or "<default>",
             )
             continue
+        if local_only:
+            from dodaios.brain import engine_policy  # noqa: PLC0415
+
+            if not engine_policy.destination_of(str(provider), brain).local:
+                log.info("resolve_vision_brain: %s is not local; skipped (local_only)", provider)
+                continue
         return brain
 
     log.info("resolve_vision_brain: no vision-capable provider reachable")

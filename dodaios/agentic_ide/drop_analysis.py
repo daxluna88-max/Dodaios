@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import dataclasses
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -90,6 +91,16 @@ paths, line numbers, labels, code), and describe the layout and the visible \
 state, including anything broken. Only what is visible: no causes, no fixes."""
 
 
+_UNAVAILABLE = "unavailable"
+
+
+def _parse_label(value: object) -> str:
+    """Wire value -> Provenance value; anything missing/unknown is UNAVAILABLE."""
+    from dodaios.brain import provenance  # noqa: PLC0415
+
+    return provenance.parse(value).value
+
+
 @dataclass(frozen=True, slots=True)
 class DropAnalysis:
     """One dropped file, and what was learned from its contents."""
@@ -112,6 +123,11 @@ class DropAnalysis:
     note: str = ""
     """Why ``detail`` is empty or partial. Empty on the happy path."""
 
+    provenance: str = _UNAVAILABLE
+    """Block 17: the :class:`~dodaios.brain.provenance.Provenance` value of ``detail``. It is
+    born with the file (a phone upload is UNAVAILABLE) and travels with it on the wire; a
+    missing or unknown value reads back as UNAVAILABLE (fail closed)."""
+
     def to_dict(self) -> dict[str, str]:
         """Wire shape — the same keys the frontend and the CLI receive."""
         return {
@@ -121,6 +137,7 @@ class DropAnalysis:
             "detail": self.detail,
             "described_by": self.described_by,
             "note": self.note,
+            "provenance": self.provenance,
         }
 
     @classmethod
@@ -144,6 +161,7 @@ class DropAnalysis:
             detail=_text("detail")[:MAX_TEXT_CHARS],
             described_by=_text("described_by") or BY_NONE,
             note=_text("note"),
+            provenance=_parse_label(raw.get("provenance") if isinstance(raw, dict) else None),
         )
 
 
@@ -158,7 +176,28 @@ def _kind_of(item: DroppedItem) -> str:
     return KIND_OTHER
 
 
-def _resolve_vision_brain():  # noqa: ANN202 - Brain | None, avoid an import cycle
+def _must_stay_local(label: str) -> bool:
+    """Whether image bytes of this origin may only go to a verified-local engine.
+
+    Work: always (local inference only). Consumer: anything that is not positively UNRESTRICTED
+    (UNAVAILABLE and RESTRICTED are refused by every remote destination).
+    """
+    from dodaios.brain import engine_policy, provenance  # noqa: PLC0415
+
+    return engine_policy.work_active() or (
+        provenance.parse(label) is not provenance.Provenance.UNRESTRICTED
+    )
+
+
+def _brain_is_local(brain) -> bool:  # noqa: ANN001 - Brain
+    """Proof that ``brain`` stays on this machine; an unnamed or unknown engine is remote."""
+    from dodaios.brain import engine_policy  # noqa: PLC0415
+
+    name = str(getattr(brain, "provider", "") or getattr(brain, "name", "") or "")
+    return bool(name) and engine_policy.destination_of(name, brain).local
+
+
+def _resolve_vision_brain(*, local_only: bool = False):  # noqa: ANN202 - Brain | None
     """The model that describes pictures, or None when nothing can see.
 
     Resolution lives in ``dodaios.brain.resolver`` so this module never grows its
@@ -168,7 +207,7 @@ def _resolve_vision_brain():  # noqa: ANN202 - Brain | None, avoid an import cyc
         from dodaios.brain.resolver import resolve_vision_brain
         from dodaios.core.config import load_config
 
-        return resolve_vision_brain(load_config())
+        return resolve_vision_brain(load_config(), local_only=local_only)
     except Exception as exc:  # noqa: BLE001 - a blind analysis is still an analysis
         logger.info("Agentic IDE drop analysis: no vision brain ({})", exc)
         return None
@@ -206,7 +245,9 @@ async def _describe_image(brain, item: DroppedItem) -> str:  # noqa: ANN001 - Br
     return "".join(chunks).strip()[:MAX_TEXT_CHARS]
 
 
-async def _analyze_image(brain, item: DroppedItem, reference: str) -> DropAnalysis:  # noqa: ANN001
+async def _analyze_image(
+    brain, item: DroppedItem, reference: str, label: str = _UNAVAILABLE  # noqa: ANN001
+) -> DropAnalysis:
     """Describe one image, degrading to an honest note on any failure."""
     if brain is None:
         return DropAnalysis(
@@ -216,7 +257,24 @@ async def _analyze_image(brain, item: DroppedItem, reference: str) -> DropAnalys
             note=(
                 "No provider that can see images is reachable, so this one was "
                 "attached but not described."
+                if not _must_stay_local(label)
+                else "No local engine that can see images is available, and this image may not "
+                "go to a remote one, so it was attached but not described."
             ),
+            provenance=label,
+        )
+    # Destination check BEFORE the bytes leave (block 17). A pinned/resolved remote brain is
+    # refused here too, whatever the caller resolved.
+    if _must_stay_local(label) and not _brain_is_local(brain):
+        return DropAnalysis(
+            name=item.name,
+            reference=reference,
+            kind=KIND_IMAGE,
+            note=(
+                "The only engine that can see images is remote and this image may not go to a "
+                "remote one, so it was attached but not described."
+            ),
+            provenance=label,
         )
     try:
         text = await _describe_image(brain, item)
@@ -227,6 +285,7 @@ async def _analyze_image(brain, item: DroppedItem, reference: str) -> DropAnalys
             reference=reference,
             kind=KIND_IMAGE,
             note=f"Could not be described ({type(exc).__name__}); it is attached as a file.",
+            provenance=label,
         )
     if not text:
         return DropAnalysis(
@@ -234,6 +293,7 @@ async def _analyze_image(brain, item: DroppedItem, reference: str) -> DropAnalys
             reference=reference,
             kind=KIND_IMAGE,
             note="The description came back empty; it is attached as a file.",
+            provenance=label,
         )
     return DropAnalysis(
         name=item.name,
@@ -241,6 +301,7 @@ async def _analyze_image(brain, item: DroppedItem, reference: str) -> DropAnalys
         kind=KIND_IMAGE,
         detail=text,
         described_by=BY_VISION,
+        provenance=label,
     )
 
 
@@ -330,6 +391,7 @@ def _trim_to_budget(results: list[DropAnalysis]) -> list[DropAnalysis]:
 async def analyze(
     items: Sequence[tuple[DroppedItem, str]],
     *,
+    provenance: object,
     timeout_s: float = ANALYSIS_TIMEOUT_S,
     brain=None,  # noqa: ANN001 - Brain, avoid an import cycle
 ) -> list[DropAnalysis]:
@@ -344,8 +406,17 @@ async def analyze(
     a caller that already resolved one); leaving it None resolves one and returns
     honest notes when none can see.
 
+    ``provenance`` (block 17) is REQUIRED and has no default: the caller states what the files
+    are allowed to do BEFORE any model sees them. A phone upload is UNAVAILABLE. Unless it is
+    positively UNRESTRICTED (and the product is not Work), image bytes go only to a verified-local
+    engine; with none, the image is attached undescribed and the note says why. Every result
+    carries the label, so the extracted text keeps it downstream.
+
     Never raises.
     """
+    from dodaios.brain import provenance as _prov  # noqa: PLC0415
+
+    label = _prov.parse(provenance).value
     if not items:
         return []
 
@@ -355,7 +426,9 @@ async def analyze(
 
     # Resolving a brain touches config and the provider registry; skip it
     # entirely for a drop of nothing but documents.
-    writer = brain if brain is not None else (_resolve_vision_brain() if describable else None)
+    writer = brain if brain is not None else (
+        _resolve_vision_brain(local_only=_must_stay_local(label)) if describable else None
+    )
 
     results: list[DropAnalysis | None] = [None] * len(items)
 
@@ -372,7 +445,7 @@ async def analyze(
             )
 
     async def _run_image(index: int, item: DroppedItem, reference: str) -> None:
-        results[index] = await _analyze_image(writer, item, reference)
+        results[index] = await _analyze_image(writer, item, reference, label)
 
     async def _run_document(index: int, item: DroppedItem, reference: str) -> None:
         # Decoding a 25 MB file (and pypdf on a big PDF) is real CPU work; it
@@ -410,7 +483,10 @@ async def analyze(
                 note="Analysis did not finish in time; it is attached as a file.",
             )
 
-    return _trim_to_budget([r for r in results if r is not None])
+    return [
+        dataclasses.replace(r, provenance=label)
+        for r in _trim_to_budget([r for r in results if r is not None])
+    ]
 
 
 __all__ = [

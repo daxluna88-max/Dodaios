@@ -217,3 +217,4 @@ turn stores `unavailable` on both messages and does not call the curator; a decl
 calls it once; a remote engine's history view contains only `unrestricted` messages; a local engine keeps all; seeded
 unlabelled pairs stay `unavailable`; a chat DB created before the column reads old rows as `unavailable`, and a label written
 before a "restart" (second `ChatStore` on the same file) is read back. Nothing was run: no test, no CI, no build, no app.
+Block 17 (GPT round 4, H1): phone attachment label is set before analysis and travels with the queued record; see ADR-0062 "Block 17: GPT round 4 (H1)".

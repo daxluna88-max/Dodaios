@@ -159,10 +159,51 @@ def test_phone_root_is_the_product_data_dir_and_never_relative(
     assert phone_routes._phone_root(request) == tmp_path / "d" / "phone"  # noqa: SLF001
 
 
-def test_phone_module_never_declares_a_turn_unrestricted() -> None:
-    source = Path("dodaios/ui/web/phone_routes.py").read_text(encoding="utf-8")
-    assert "attach_unrestricted" not in source
-    assert "Provenance.UNAVAILABLE" in source
+def test_phone_attachments_are_born_unavailable_before_any_analysis(
+    app, owner, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Block 17 (replaces a source-text test): behaviour at the boundary. The label is passed to
+    ingest (so the destination check precedes any model call) and rides in the message record."""
+    from dodaios.brain.provenance import Provenance
+    from dodaios.ui.web import phone_routes
+    from tests.unit.ui.web.test_phone_routes import upload
+
+    phone, _ = pair(app, owner)
+    made = app.state.agent_chat.store.create_session(
+        provider="claude-code", title="t", surface="agent", model="", effort="", cwd=str(tmp_path))
+    sid = made.session_id if hasattr(made, "session_id") else made["session_id"]
+    sent = upload(phone, "a.txt", b"ciao")
+    order: list[str] = []
+    seen: dict[str, object] = {}
+
+    class Found:
+        provenance = "unavailable"
+
+        def to_dict(self) -> dict[str, str]:
+            return {"name": "a.txt", "provenance": "unavailable"}
+
+    async def fake_ingest(folder, *, uploads=None, **kw):
+        order.append("ingest")
+        seen["label"] = kw.get("provenance")
+        return [Found()]
+
+    async def fake_post(session_id, body, request):
+        order.append("post")
+        seen["body"] = body
+        return {"turn_id": "t"}
+
+    monkeypatch.setattr(phone_routes.chat_attachments, "ingest", fake_ingest)
+    monkeypatch.setattr("dodaios.ui.web.agent_chat_routes.post_message", fake_post)
+    res = phone.post(f"/api/phone/chats/{sid}/messages",
+                     json={"text": "x", "file_ids": [sent["id"]]})
+    assert res.status_code == 202 and order == ["ingest", "post"]
+    assert seen["label"] is Provenance.UNAVAILABLE
+    assert seen["body"].provenance == "unavailable"
+    assert seen["body"].attachments[0]["provenance"] == "unavailable"
+    # A message with no files makes no claim: an ordinary typed message is not reshaped.
+    order.clear()
+    res = phone.post(f"/api/phone/chats/{sid}/messages", json={"text": "ciao"})
+    assert res.status_code == 202 and seen["body"].provenance is None
 
 
 def test_panel_ships_the_strip_ordering_and_an_always_available_stop() -> None:

@@ -33,6 +33,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from dodaios.agent_chat import attachments as chat_attachments
+from dodaios.brain import provenance
 from dodaios.phone.devices import DeviceRegistry, PairingError, csrf_matches
 from dodaios.phone.store import NotFound, Revoked, TransferError, TransferStore
 
@@ -309,8 +310,12 @@ async def send_message(
                 handles.append(handle)
                 uploads.append((meta["name"], handle))
             try:
+                # Born UNAVAILABLE and decided BEFORE any analysis (block 17): ingest checks the
+                # destination of every vision engine against this label before an image byte
+                # is sent, and stamps it on each analysis.
                 found = await chat_attachments.ingest(
-                    folder, uploads=uploads, provider=session.provider
+                    folder, uploads=uploads, provider=session.provider,
+                    provenance=provenance.Provenance.UNAVAILABLE,
                 )
             except chat_attachments.AttachmentError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -322,13 +327,15 @@ async def send_message(
         raise HTTPException(status_code=400, detail="write a message or attach a file")
     # Preparing the attachments awaited; a device revoked meanwhile must not reach the agent.
     _ensure_active(request, device)
-    if attachments:
-        # Files from a phone are never "known not to be local-only": the turn starts UNAVAILABLE
-        # (fail closed for remote engines/speech) and this path never calls attach_unrestricted.
-        from dodaios.brain import provenance  # noqa: PLC0415
-
-        provenance.set_turn_provenance(provenance.Provenance.UNAVAILABLE)
-    message = routes.MessageBody(text=body.text, attachments=attachments, timezone=body.timezone)
+    # The label travels IN the message (and its queue record), not in this request's context:
+    # send_or_queue / service.send apply it when the turn is created, even if it waits in the
+    # queue. Without files the message makes no claim (unchanged behaviour).
+    message = routes.MessageBody(
+        text=body.text, attachments=attachments, timezone=body.timezone,
+        provenance=(
+            provenance.Provenance.UNAVAILABLE.value if (attachments or body.file_ids) else None
+        ),
+    )
     return await routes.post_message(session_id, message, request)
 
 

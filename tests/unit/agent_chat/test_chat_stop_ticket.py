@@ -37,7 +37,8 @@ class _Chat:
     def is_running(self, session_id: str) -> bool:
         return session_id in self.busy
 
-    async def send(self, session_id, text, attachments=None, *, tool_choices=None) -> str:
+    async def send(self, session_id, text, attachments=None, *, tool_choices=None,
+                   provenance=None) -> str:
         if session_id in self.busy:
             raise SessionBusy(session_id)
         self.sent.append(text)

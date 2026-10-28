@@ -50,6 +50,29 @@ class _Queued:
     #: The STOP generation when the message was queued (ADR-0058). A message queued before the
     #: owner's STOP is never sent after it, not even after a resume.
     stop_ticket: int | None = None
+    #: Block 17: the label the message was born with. Part of the record, so a queued message
+    #: is dispatched with it whatever request context the drain runs in. A record built without
+    #: one (old row, other code path) is UNAVAILABLE, never unrestricted. ``None`` = the sender
+    #: made no claim (an ordinary desktop message): nothing is tightened.
+    provenance: str | None = "unavailable"
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialised record (queue persistence / tests); the label is always present."""
+        return {
+            "queue_id": self.queue_id, "text": self.text, "attachments": self.attachments,
+            "tool_choices": self.tool_choices, "timezone": self.timezone,
+            "stop_ticket": self.stop_ticket, "provenance": self.provenance or "",
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> _Queued:
+        from dodaios.brain import provenance  # noqa: PLC0415
+
+        return cls(
+            str(raw.get("queue_id") or ""), str(raw.get("text") or ""), raw.get("attachments"),
+            raw.get("tool_choices"), raw.get("timezone"), raw.get("stop_ticket"),
+            provenance.parse(raw.get("provenance")).value,  # missing/unknown = UNAVAILABLE
+        )
 
 
 @dataclass(slots=True)
@@ -107,6 +130,7 @@ async def send_or_queue(
     attachments: list[dict[str, Any]] | None = None,
     *,
     tool_choices: list[str] | None = None,
+    provenance: str | None = None,
 ) -> tuple[str, str]:
     """Send now, or queue behind the running turn: ``(turn_id, queue_id)``.
 
@@ -118,7 +142,9 @@ async def send_or_queue(
 
     queues = _queues(svc)
     if not _queueable(svc, session_id):
-        return await svc.send(session_id, text, attachments, tool_choices=tool_choices), ""
+        return await svc.send(
+            session_id, text, attachments, tool_choices=tool_choices, provenance=provenance
+        ), ""
     pending = queues.setdefault(session_id, _ChatQueue())
     first = False
     released = False
@@ -145,7 +171,9 @@ async def send_or_queue(
         # overtake this message, even before the service reserves its seat.
         pending.starting = True
         try:
-            turn_id = await svc.send(session_id, text, attachments, tool_choices=tool_choices)
+            turn_id = await svc.send(
+                session_id, text, attachments, tool_choices=tool_choices, provenance=provenance
+            )
         except SessionBusy:  # The expected occupied seat becomes a visible queued message below.
             first = True
         else:
@@ -161,7 +189,7 @@ async def send_or_queue(
 
     item = _Queued(
         uuid.uuid4().hex, text, attachments, tool_choices, client_timezone.get(),
-        get_stop_controller().ticket(),
+        get_stop_controller().ticket(), provenance,
     )
     # Recovery reads persisted notices off-thread. A generation fence detects
     # an admission that both starts and finishes while that snapshot is read.
@@ -226,7 +254,8 @@ async def _drain_loop(svc: Any, session_id: str, pending: _ChatQueue) -> None:
         token = client_timezone.set(head.timezone)
         try:
             await svc.send(
-                session_id, head.text, head.attachments, tool_choices=head.tool_choices
+                session_id, head.text, head.attachments, tool_choices=head.tool_choices,
+                provenance=head.provenance,
             )
         except SessionBusy:  # the seat is still taken: this message simply waits longer
             continue
