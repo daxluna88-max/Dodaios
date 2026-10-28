@@ -353,6 +353,15 @@ async def prepare_history(
             tail.append(event)
             tail_size += cost
         prefix = remaining[: len(remaining) - len(tail)]
+        # Block 19 (J2): the summariser is the session's engine. A destination that is not provably
+        # local is shown only events stored as UNRESTRICTED (the rest stays in the local archive).
+        from dodaios.agent_chat import history_labels  # noqa: PLC0415
+        from dodaios.brain import dispatch_gate  # noqa: PLC0415
+
+        if not dispatch_gate.is_local(
+            dispatch_gate.provider_of(provider) or str(getattr(session, "provider", "")), provider
+        ):
+            prefix = [e for e in prefix if history_labels.event_replayable_remote(e)]
         latest_user = next(
             (event for event in reversed(remaining) if event.get("kind") == "user_message"), None
         )

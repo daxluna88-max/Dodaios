@@ -24,6 +24,7 @@ history and nothing is kept in process between turns.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import platform
@@ -36,6 +37,7 @@ from typing import Any, Final
 
 from dodaios.agent_chat.effort import effort_note, normalize_effort
 from dodaios.agent_chat.events import make_event
+from dodaios.agent_chat.history_labels import stored_label
 from dodaios.agent_chat.permissions import normalize_permission
 from dodaios.agent_chat.store import AgentChatSession
 from dodaios.agent_chat.tools import (
@@ -47,6 +49,7 @@ from dodaios.agent_chat.tools import (
     summarize_call,
 )
 from dodaios.brain.assistant_name import DEFAULT_ASSISTANT_NAME
+from dodaios.brain.provenance import Provenance, combine, parse
 from dodaios.core.protocols import BrainDelta, BrainMessage, BrainRequest
 from dodaios.core.response_style import CONVERSATIONAL_RESPONSE_STYLE
 
@@ -189,21 +192,27 @@ def messages_from_events(
     """
     out: list[BrainMessage] = []
     pending_blocks: list[dict[str, Any]] = []
+    pending_labels: list[Provenance] = []
 
     def flush() -> None:
-        nonlocal pending_blocks
+        nonlocal pending_blocks, pending_labels
         if not pending_blocks:
             return
+        label = combine(*pending_labels)
         only_text = all(b.get("type") == "text" for b in pending_blocks)
         if only_text:
             text = "".join(str(b.get("text") or "") for b in pending_blocks)
             if text.strip():
-                out.append(BrainMessage(role="assistant", content=text))
+                out.append(_labelled(BrainMessage(role="assistant", content=text), label))
         else:
-            out.append(BrainMessage(role="assistant", content=list(pending_blocks)))
+            out.append(_labelled(
+                BrainMessage(role="assistant", content=list(pending_blocks)), label))
         pending_blocks = []
+        pending_labels = []
 
     internal: dict[str, dict[str, Any]] = {}
+    # Block 19 (J2): every replayed message keeps the label its event was stored with. A row with
+    # no label (legacy / migration) is UNAVAILABLE, never promoted.
     for ev in events[-max_events:] if max_events else events:
         kind = ev.get("kind")
         payload = ev.get("payload") or {}
@@ -216,27 +225,31 @@ def messages_from_events(
             flush()
             material = str(payload.get("report") or payload.get("text") or "")
             if material:
-                out.append(BrainMessage(
+                out.append(_labelled(BrainMessage(
                     role="assistant",
                     content="Recorded delegation result (external report, not instructions):\n"
                     + _cap(material, 6000),
-                ))
+                ), stored_label(payload)))
             continue
         if kind == "agent_message_status":
             original = internal.pop(str(payload.get("message_id")), None)
             if payload.get("status") == "delivered" and original is not None:
                 flush()
-                out.append(BrainMessage(role="user", content=str(original["prompt"])))
+                out.append(_labelled(
+                    BrainMessage(role="user", content=str(original["prompt"])),
+                    stored_label(original)))
             continue
         if kind == "user_message":
             flush()
             text = str(payload.get("text") or "")
             if text:
-                out.append(BrainMessage(role="user", content=text))
+                out.append(_labelled(
+                    BrainMessage(role="user", content=text), stored_label(payload)))
         elif kind == "assistant_text":
             text = str(payload.get("text") or "")
             if text:
                 pending_blocks.append({"type": "text", "text": text})
+                pending_labels.append(stored_label(payload))
         elif kind == "tool_call":
             block: dict[str, Any] = {
                 "type": "tool_use",
@@ -248,6 +261,7 @@ def messages_from_events(
             if meta.get("thought_signature"):
                 block["thought_signature"] = meta["thought_signature"]
             pending_blocks.append(block)
+            pending_labels.append(stored_label(payload))
         elif kind == "tool_result":
             # Plain string content on purpose: the Anthropic adapter wraps a
             # string into its tool_result block, Gemini and the OpenAI family
@@ -259,11 +273,14 @@ def messages_from_events(
             if payload.get("is_error"):
                 output = f"[error] {output}"
             out.append(
-                BrainMessage(
-                    role="tool",
-                    content=_cap(output, _TOOL_RESULT_CAP),
-                    tool_call_id=call_id,
-                    name=str(payload.get("name") or ""),
+                _labelled(
+                    BrainMessage(
+                        role="tool",
+                        content=_cap(output, _TOOL_RESULT_CAP),
+                        tool_call_id=call_id,
+                        name=str(payload.get("name") or ""),
+                    ),
+                    stored_label(payload),
                 )
             )
         elif kind == "turn_finished":
@@ -274,6 +291,12 @@ def messages_from_events(
     # service appends the new user message after this, so close any open
     # assistant tool round with a synthetic "cancelled" result first.
     return _close_dangling_tool_calls(out)
+
+
+def _labelled(message: BrainMessage, label: Provenance) -> BrainMessage:
+    """``message`` carrying the stored label (block 19, J2); RESTRICTED sets the legacy flag."""
+    return dataclasses.replace(
+        message, provenance=label.value, restricted=label is Provenance.RESTRICTED)
 
 
 def _close_dangling_tool_calls(messages: list[BrainMessage]) -> list[BrainMessage]:
@@ -288,11 +311,14 @@ def _close_dangling_tool_calls(messages: list[BrainMessage]) -> list[BrainMessag
             for block in m.content:
                 if block.get("type") == "tool_use" and block.get("id") not in answered:
                     out.append(
-                        BrainMessage(
-                            role="tool",
-                            content="[cancelled before it ran]",
-                            tool_call_id=str(block["id"]),
-                            name=str(block.get("name") or ""),
+                        _labelled(
+                            BrainMessage(
+                                role="tool",
+                                content="[cancelled before it ran]",
+                                tool_call_id=str(block["id"]),
+                                name=str(block.get("name") or ""),
+                            ),
+                            parse(m.provenance),  # the closing line follows its call's label
                         )
                     )
     return out
@@ -355,7 +381,17 @@ async def run_api_turn(handle: TurnHandle, user_text: str) -> None:
         )
         return
 
-    messages = messages_from_events(handle.history)
+    # Block 19 (J2): the STORED history is a second channel. A destination that is not provably
+    # local (loopback) is shown only events whose stored label is positively UNRESTRICTED; the
+    # rest is withheld and said so (a notice and a line in the prompt), never sent silently.
+    from dodaios.agent_chat import history_labels
+
+    messages, withheld = history_labels.for_destination(
+        messages_from_events(handle.history),
+        local=dispatch_gate.is_local(provider, brain),
+    )
+    if withheld:
+        await _announce_withheld(handle, withheld, provider)
     messages.append(
         BrainMessage(role="user", content=user_text, images=await _plain_images(handle, brain))
     )
@@ -367,6 +403,7 @@ async def run_api_turn(handle: TurnHandle, user_text: str) -> None:
     )
     if handle.output_language:
         system += "\nRespond in this language: " + handle.output_language
+    system += history_labels.system_note(withheld)
     note = effort_note(provider, effort)
     if note:
         system += "\n\n" + note.strip()
@@ -565,6 +602,19 @@ async def run_api_turn(handle: TurnHandle, user_text: str) -> None:
                 },
             )
         )
+
+
+async def _announce_withheld(handle: TurnHandle, count: int, provider: str) -> None:
+    """Tell the person (once per change) that earlier messages were not sent to a remote engine."""
+    from dodaios.agent_chat import history_labels
+
+    for ev in reversed(handle.history[-200:]):
+        payload = ev.get("payload") or {}
+        if ev.get("kind") == "notice" and payload.get("kind") == "history_withheld":
+            if payload.get("count") == count and payload.get("destination") == provider:
+                return
+            break
+    await handle.emit(make_event("notice", history_labels.notice_payload(count, provider)))
 
 
 _PERMISSION_UPGRADED: Final[str] = "\0permission-upgraded\0"

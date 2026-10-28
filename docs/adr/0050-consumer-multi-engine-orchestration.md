@@ -220,3 +220,5 @@ before a "restart" (second `ChatStore` on the same file) is read back. Nothing w
 Block 17 (GPT round 4, H1): phone attachment label is set before analysis and travels with the queued record; see ADR-0062 "Block 17: GPT round 4 (H1)".
 
 Block 18 (I1): the current attachment-bearing prompt/images are now label-gated at every dispatch (brain chain, dispatcher, API/CLI runners); see ADR-0062 'Block 18: GPT round 5 (I1)'. Not run.
+
+Block 19 (J2): the stored event history now carries a durable typed label and a remote/vendor destination is shown only UNRESTRICTED events (API runner, vendor-CLI transcript, native codex goal, Society summariser); see ADR-0062 'Block 19: GPT round 6 (J2)'. Not run.

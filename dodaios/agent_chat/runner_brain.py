@@ -102,19 +102,32 @@ def brain_history_from_events(
         if message.role == "user":
             text = message.content if isinstance(message.content, str) else ""
             if text.strip():
-                out.append(BrainMessage(role="user", content=text))
+                out.append(_carry_label(BrainMessage(role="user", content=text), message))
         elif message.role == "assistant":
             text = _assistant_prose(message.content)
             if not text.strip():
                 continue
             if out and out[-1].role == "assistant":
                 # One answer per turn: the tool round and the prose after it
-                # are two provider messages but one thing Jarvis said.
+                # are two provider messages but one thing Jarvis said. The merged message is as
+                # restricted as its most restricted part (block 19, J2).
                 merged = f"{out[-1].content}\n{text}"
-                out[-1] = BrainMessage(role="assistant", content=merged)
+                out[-1] = _carry_label(
+                    BrainMessage(role="assistant", content=merged), message, out[-1])
             else:
-                out.append(BrainMessage(role="assistant", content=text))
+                out.append(_carry_label(BrainMessage(role="assistant", content=text), message))
     return out[-max_messages:] if max_messages else out
+
+
+def _carry_label(new: BrainMessage, *sources: BrainMessage) -> BrainMessage:
+    """``new`` with the combined stored label of ``sources`` (block 19, J2): a rebuilt history
+    message never loses, and a merge never loosens, the label its events were stored with."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    from dodaios.brain.provenance import Provenance, combine, parse  # noqa: PLC0415
+
+    label = combine(*(parse(s.provenance) for s in sources))
+    return replace(new, provenance=label.value, restricted=label is Provenance.RESTRICTED)
 
 
 def _assistant_prose(content: str | list[dict[str, Any]]) -> str:

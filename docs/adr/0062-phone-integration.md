@@ -207,3 +207,77 @@ refused and images not prepared; PDF + CLI refused, nothing spawned; local engin
 loopback; unnamed brain remote; fallback chain re-check; dispatcher refuses remote brain; `begin_turn` does
 not loosen; frozen/most-restrictive label; queued record keeps its label). Nothing was run: no pytest, no CI,
 no app, no model call; only `py_compile` and `ruff check` (no new findings vs. baseline).
+
+## Block 19: GPT round 6 (J2)
+**State: fixed in code for the API runner, the vendor-CLI transcript, native codex goals, the brain-runner history
+and the Society summariser (statically); partial for cross-session taint and the brain runner's engine chain;
+NOT executed.** Finding J2 (HIGH): `runner_api.messages_from_events` rebuilt user/assistant/tool/report messages
+from stored events with no label, and `run_api_turn` checked only the CURRENT input. After a LOCAL engine read a
+restricted attachment, switching to a REMOTE API and sending a text-only follow-up replayed the restricted
+history (the block-18 gate allowed it: no new attachment). `manager._history_for_engine` filters a different
+runner.
+
+Choice: a durable typed label on every replayable stored event, kept through every rebuild, enforced per
+destination. A ContextVar is used only to decide the label of a NEW event at creation, never to judge an old one.
+- Write. New `agent_chat/history_labels.py` (`KEY="provenance"`, `stamp`, `stored_label`, `derived_label`,
+  `worst`, `filter_messages`, `for_destination`, `withheld_count`, notice/prompt text). `service._publish_event`
+  calls `_stamp_provenance` for `user_message`, `assistant_text`, `tool_call`, `tool_result`, `agent_message` and
+  the delegation/report notices (`society_result`, `society_message`, `coding_result`, `delegation_report`); the
+  label is a JSON string in the payload, so it survives a restart. `_open_turn_label` (called where the turn's
+  history is read) computes `(input label, output label)`: input = attachments/declared label
+  (`turn_label`), UNRESTRICTED only for a plain typed message, UNAVAILABLE for an agent-to-agent message, the
+  stored-tail label for a background/control continuation. Output = input for a not-provably-local engine (its
+  history was filtered); for a LOCAL engine it also takes the combine of the whole history it saw (output derived
+  from restricted input = restricted), and the brain runner on a local engine is UNAVAILABLE (local memory/wiki
+  feed its prompt). Reports and notices outside a turn take `derived_label` of the stored tail (nothing stored =
+  UNAVAILABLE). An explicit label already on a payload can only be tightened. Voice-imported assistant text is
+  stamped UNAVAILABLE.
+- Read. A row with no/empty/unknown label is UNAVAILABLE (`provenance.parse`): old DBs migrate safely, no schema
+  change. `messages_from_events` returns `BrainMessage`s with `provenance`/`restricted` set (assistant rounds take
+  the combine of their text and tool_use parts; the synthetic "cancelled" tool line follows its call).
+  `runner_brain.brain_history_from_events` carries the label and merges to the worst part, so the existing
+  `manager._history_for_engine` now sees real labels (before: every rebuilt message was UNAVAILABLE and a remote
+  brain engine got no history at all).
+- Enforce. `run_api_turn`: destination from `dispatch_gate.is_local(provider, brain)`; not provably local =>
+  only positively UNRESTRICTED messages; tool_use/tool_result pairs are kept or dropped together, and the
+  history must open on a user message; withheld count => a visible `notice` (`history_withheld`, de-duplicated
+  against the previous one) and a line in the system prompt ("N earlier messages withheld from the remote
+  engine"). Local engines see everything unchanged. `dodaios_harness.render_transcript` (first prompt of a FRESH
+  vendor CLI conversation, and the native codex goal developer instructions in `native_control`) is filtered the
+  same way and says how many were held back; `runner_cli.run_cli_turn` emits the same visible notice.
+  `society/conversation.prepare_history`: the summariser (the session's engine) receives only UNRESTRICTED
+  events when it is not provably local.
+
+Audit per path:
+- API runner: fixed (above).
+- Brain runner / voice seed: history now labelled; per-engine filter was already in the manager. Fixed. Open: the
+  fallback chain can end on a local engine while the turn was labelled for the primary (remote) one; that reply
+  is then labelled as a remote-engine reply. Residual.
+- Vendor CLI fresh start (identity transcript): was a leak (raw `handle.history`), fixed.
+- Vendor CLI resume (`session.vendor_session`): nothing is replayed; the vendor session can only contain what
+  earlier vendor turns were sent, and since block 18 those pass the gate. A provider switch clears
+  `vendor_session` (route and `reseat_session`), so a restricted local turn can never share a vendor session.
+  A session created before block 18 cannot be proven clean from labels (no label existed): not changed.
+- `resume_hosted_cli_turn` (restart): sends nothing new; the CLI was spawned under the gate. Events it emits are
+  stamped from the stored tail (restart-safe), not from process state. No change needed.
+- ACP / `remote_cli` / `remote_mcp`: take no event history. No change.
+- Native codex goal thread (`native_control`): used `build_identity(history=...)`; fixed by the transcript filter.
+- Society summariser/checkpoint: evidence sent to the engine now filtered; the checkpoint summary itself is
+  unlabelled and reads UNAVAILABLE, so a remote engine never receives a summary of a local turn. Residual: a
+  checkpoint advanced by a remote summariser passes over events it never saw, so those stay in the archive only.
+
+Residual limits: an agent-to-agent message is UNAVAILABLE (the sender's own history is not tracked), so Society
+chats on a remote engine lose those incoming prompts from replay (visible note) until senders pass a label; a
+delegation report takes the label of the receiving chat's last stored turn (a delegate fed restricted material by
+another path is not tracked). Tool output that reads local-only data without an attachment label is not
+detected. Existing chats lose their pre-block-19 history on a remote engine (all UNAVAILABLE) by design; local
+engines are unaffected. `consumer_orchestrator.py` and `multi_engine_chat.py` were not touched.
+
+Controls prepared, NOT RUN: `tests/unit/agent_chat/test_block19_history_provenance.py` (labels kept by
+`messages_from_events`; old/garbled rows = UNAVAILABLE and withheld; brain history merge to the worst; JSON round
+trip; remote gets only UNRESTRICTED, local everything; tool pair coherence; vendor transcript filtered with a note;
+local restricted turn -> switch to remote -> text-only follow-up filtered with notice, local unchanged, through
+`run_api_turn`; `_open_turn_label` by engine/input; stamping at creation never loosened; report/agent-message
+fail-closed and restart reading the stored tail). Nothing was run: no pytest, no CI, no app, no model call; only
+`py_compile` and `ruff check`. Existing tests that feed unlabelled history to a remote runner now see it withheld
+and may need a label in their fixtures.

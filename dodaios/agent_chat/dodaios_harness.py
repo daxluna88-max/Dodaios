@@ -457,10 +457,17 @@ def render_transcript(
     assistant on the app's own chat, a named agent on its seat), so its own
     lines are labelled ``You``. Nothing parses these labels.
     """
+    from dodaios.agent_chat import history_labels
     from dodaios.agent_chat.runner_api import messages_from_events
 
+    # Block 19 (J2): this transcript is written into a VENDOR CLI's first prompt, and a vendor CLI
+    # is a remote engine. Only positively UNRESTRICTED stored events ride along; the rest is
+    # withheld and the model is told how many messages are missing.
+    shown, withheld = history_labels.for_destination(messages_from_events(history), local=False)
     lines: list[str] = []
-    for message in messages_from_events(history):
+    if withheld:
+        lines.append(history_labels.withheld_text(withheld))
+    for message in shown:
         if message.role == "user":
             text = message.content if isinstance(message.content, str) else ""
             if text.strip():
