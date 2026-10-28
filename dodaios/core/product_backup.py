@@ -36,8 +36,10 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import sqlite3
+import stat
 import sys
 import time
 from dataclasses import dataclass, field
@@ -54,7 +56,10 @@ MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_BYTES = 512 * 1024 * 1024
 #: Never saved or restored: ownership and locking belong to the running product.
 _SKIP_NAMES = frozenset({pp.MARKER_NAME, ".product.lock", pp.LAUNCH_LOCK_NAME})
-EXIT_OK, EXIT_REFUSED = 0, 3
+#: 0 done; 3 refused BEFORE any change (nothing was touched); 4 the data state is final and good
+#: but the journal could not be removed (see the report); 5 failed AFTER files were changed (the
+#: report says what was restored / rolled back / left behind).
+EXIT_OK, EXIT_REFUSED, EXIT_CLEANUP_PENDING, EXIT_FAILED = 0, 3, 4, 5
 
 
 #: SQLite stores are backed up with the online backup API; these sidecars are never copied.
@@ -63,6 +68,14 @@ _SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 MANIFEST_SCHEMA = 2
 RESTORE_JOURNAL_PREFIX = ".restore-journal-"
 RESTORE_TEMP_PREFIX = ".restore-"
+JOURNAL_SCHEMAS = (1, 2)  # 1: block 17 (no terminal state, read as interrupted); 2: block 18
+JOURNAL_STATES = ("swapping", "committed", "rolled_back")
+ITEM_STATES = ("planned", "saving", "installing", "installed")
+MAX_JOURNAL_BYTES = 1024 * 1024
+MAX_JOURNAL_ITEMS = 4096
+_JOURNAL_NAME_RE = re.compile(
+    r"\.restore-journal-(?P<token>[A-Za-z0-9][A-Za-z0-9._-]{0,127})\.json"
+)
 #: Environment variable the owner sets (``jarvis update --allow-unbacked-update`` does it) to let
 #: an update run although no verified pre-update backup could be made. Always recorded.
 ALLOW_UNBACKED_ENV = "DODAIOS_ALLOW_UNBACKED_UPDATE"
@@ -305,17 +318,42 @@ class RestoreReport:
     rollback_errors: list[str] = field(default_factory=list)
     journal: Path | None = None
     coverage_note: str = ""
+    #: ``committed`` (new files in place), ``rolled_back`` (previous files back) or
+    #: ``interrupted``/``unknown``; ``journal_left`` + ``cleanup_errors`` say what stayed behind.
+    final_state: str = ""
+    journal_left: list[str] = field(default_factory=list)
+    cleanup_errors: list[str] = field(default_factory=list)
 
     def describe(self) -> str:
         def one(label: str, items: list[str]) -> str:
             return f"  {label}: {', '.join(items) if items else '(none)'}"
 
+        tail = []
+        if self.final_state:
+            tail.append(f"  final data state: {self.final_state}")
+        if self.journal_left:
+            tail.append(f"  journal left behind: {', '.join(self.journal_left)}")
+        if self.cleanup_errors:
+            tail.append(f"  cleanup errors: {'; '.join(self.cleanup_errors)}")
+        if self.rollback_errors:
+            tail.append(f"  rollback errors: {'; '.join(self.rollback_errors)}")
         return "\n".join([
             one("restored", self.restored),
             one("rolled back", self.rolled_back),
             one("moved away (sidecars, previous files kept)", self.quarantined + self.kept_prior),
             one("left untouched", self.untouched),
-        ] + ([f"  coverage: {self.coverage_note}"] if self.coverage_note else []))
+        ] + tail + ([f"  coverage: {self.coverage_note}"] if self.coverage_note else []))
+
+
+class JournalInvalid(pp.ProductError):
+    """A restore journal failed validation; raised BEFORE any recovery mutation."""
+
+    def __init__(self, journal: str, field_name: str, why: str) -> None:
+        super().__init__(
+            f"restore journal {journal} is invalid at {field_name}: {why}. "
+            "Recovery refused; nothing was changed"
+        )
+        self.journal, self.field = journal, field_name
 
 
 class RestoreFailed(pp.ProductError):
@@ -340,7 +378,22 @@ def _unique(data_dir: Path, base: str, reserved: set[str]) -> str:
     return candidate
 
 
+def _fsync_dir(path: Path) -> None:
+    """Best effort: make a rename durable (not possible on Windows)."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def _write_journal(path: Path, data: dict[str, object]) -> None:
+    """Atomic, durable rewrite: exclusive temp file, fsync, rename, fsync of the directory."""
     tmp = path.with_name(path.name + ".tmp")
     tmp.unlink(missing_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
@@ -350,6 +403,191 @@ def _write_journal(path: Path, data: dict[str, object]) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(tmp, path)
+    _fsync_dir(path.parent)
+
+
+def _persist_state(path: Path, journal: dict, state: str) -> str | None:
+    """Write the journal's terminal state durably. Returns an error text, never raises."""
+    journal["state"] = state
+    try:
+        _write_journal(path, journal)
+    except OSError as exc:
+        return f"could not record state {state!r} in {path.name}: {exc}"
+    return None
+
+
+def _finish_journal(path: Path, report: RestoreReport) -> None:
+    """Remove a journal whose data state is final; a failure is REPORTED, never hidden."""
+    try:
+        path.unlink(missing_ok=True)
+        path.with_name(path.name + ".tmp").unlink(missing_ok=True)
+    except OSError as exc:
+        report.journal_left.append(path.name)
+        report.cleanup_errors.append(f"{path.name} could not be removed: {exc}")
+
+
+# --------------------------------------------------------------------------- #
+# Journal validation: a journal is DATA from disk, never trusted instructions
+# --------------------------------------------------------------------------- #
+def _single_name(journal: str, where: str, value: object) -> str:
+    """A canonical single path component: no separator, drive, '..', NUL or control character."""
+    if not isinstance(value, str) or not value:
+        raise JournalInvalid(journal, where, "must be a non-empty string")
+    bad = (
+        "/" in value or "\\" in value or ":" in value or "\x00" in value
+        or value in (".", "..") or value != value.strip() or Path(value).name != value
+        or Path(value).is_absolute() or any(ord(c) < 32 for c in value)
+    )
+    if bad or len(value) > 200:
+        raise JournalInvalid(journal, where, f"{value!r} is not a canonical single file name")
+    return value
+
+
+def _exact_keys(journal: str, where: str, obj: object, keys: set[str]) -> dict:
+    if not isinstance(obj, dict):
+        raise JournalInvalid(journal, where, "must be an object")
+    if set(obj) != keys:
+        raise JournalInvalid(journal, where, f"keys must be exactly {sorted(keys)}")
+    return obj
+
+
+def _read_journal_file(data_dir: Path, path: Path) -> object:
+    jname = path.name
+    if path.parent != data_dir or not _JOURNAL_NAME_RE.fullmatch(jname):
+        raise JournalInvalid(jname, "file name", "not a generated journal name in the data dir")
+    try:
+        info = os.lstat(path)
+    except OSError as exc:
+        raise JournalInvalid(jname, "file", f"cannot be examined: {exc}") from exc
+    if not stat.S_ISREG(info.st_mode) or _is_link(path):
+        raise JournalInvalid(jname, "file", "must be a regular, non-linked file")
+    if info.st_nlink != 1:
+        raise JournalInvalid(jname, "file", "has several hard links")
+    if info.st_size > MAX_JOURNAL_BYTES:
+        raise JournalInvalid(jname, "file", "is too large")
+    try:
+        fd = _open_nofollow(path)
+        with os.fdopen(fd, "rb") as handle:
+            after = os.fstat(handle.fileno())
+            if not stat.S_ISREG(after.st_mode) or (after.st_ino, after.st_dev) != (
+                info.st_ino, info.st_dev
+            ):
+                raise JournalInvalid(jname, "file", "changed while it was opened")
+            raw = handle.read(MAX_JOURNAL_BYTES + 1)
+        return json.loads(raw.decode("utf-8"))
+    except (OSError, ValueError) as exc:  # UnicodeDecodeError is a ValueError
+        raise JournalInvalid(jname, "file", f"cannot be read as JSON: {exc}") from exc
+
+
+def _confined(jname: str, where: str, data_dir: Path, real_data: Path, name: str) -> None:
+    """``data_dir/name`` must sit directly in the verified data dir, and not be a link."""
+    candidate = data_dir / name
+    try:
+        if _lexists(candidate):
+            if _is_link(candidate):
+                raise JournalInvalid(jname, where, f"{name!r} is a link")
+            resolved = candidate.resolve(strict=True)
+            if resolved.parent != real_data or resolved.name != name:
+                raise JournalInvalid(jname, where, f"{name!r} resolves outside the data dir")
+        elif candidate.parent.resolve(strict=True) != real_data:
+            raise JournalInvalid(jname, where, f"{name!r} would be outside the data dir")
+    except (OSError, RuntimeError) as exc:
+        raise JournalInvalid(jname, where, f"{name!r} cannot be resolved: {exc}") from exc
+
+
+def _prior_ok(base: str, value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(
+        re.escape(base) + r"\.before-restore(\.[1-9][0-9]{0,5})?", value
+    ) is not None
+
+
+def _validate_journal(data_dir: Path, path: Path, product: str) -> dict:
+    """Validate ONE journal completely; return it. Raises ``JournalInvalid``, mutates nothing."""
+    jname = path.name
+    match = _JOURNAL_NAME_RE.fullmatch(jname)
+    if match is None:
+        raise JournalInvalid(jname, "file name", "not a generated journal name")
+    token = match.group("token")
+    if _is_link(data_dir):
+        raise JournalInvalid(jname, "data dir", "is a link")
+    try:
+        real_data = data_dir.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise JournalInvalid(jname, "data dir", f"cannot be resolved: {exc}") from exc
+    data = _read_journal_file(data_dir, path)
+    top = {"schema", "product", "stamp", "items"}
+    if isinstance(data, dict) and data.get("schema") == 2:
+        top = top | {"state"}
+    journal = _exact_keys(jname, "journal", data, top)
+    if journal["schema"] not in JOURNAL_SCHEMAS or isinstance(journal["schema"], bool):
+        raise JournalInvalid(jname, "schema", f"unsupported {journal['schema']!r}")
+    if journal["product"] != product:
+        other = journal["product"]
+        raise JournalInvalid(jname, "product", f"belongs to {other!r}, not {product!r}")
+    stamp = journal["stamp"]
+    if not isinstance(stamp, str) or len(stamp) > 64 or "/" in stamp or "\\" in stamp:
+        raise JournalInvalid(jname, "stamp", "must be a short string without separators")
+    state = journal.get("state", "swapping")
+    if state not in JOURNAL_STATES:
+        raise JournalInvalid(jname, "state", f"{state!r} is not one of {list(JOURNAL_STATES)}")
+    journal["state"] = state
+    items = journal["items"]
+    if not isinstance(items, list) or len(items) > MAX_JOURNAL_ITEMS:
+        raise JournalInvalid(jname, "items", "must be a list of reasonable size")
+    seen: set[str] = set()
+
+    def claim(where: str, name: str) -> None:
+        key = name.lower()  # case-insensitive file systems: 'A' and 'a' are one file
+        if key in seen:
+            raise JournalInvalid(jname, where, f"{name!r} is used twice in the journal")
+        seen.add(key)
+
+    for idx, raw in enumerate(items):
+        where = f"items[{idx}]"
+        item = _exact_keys(jname, where, raw, {"name", "staged", "prior", "sidecars", "state"})
+        fname = _single_name(jname, f"{where}.name", item["name"])
+        unsafe = fname in _SKIP_NAMES or fname.startswith(RESTORE_TEMP_PREFIX)
+        if unsafe or fname == BACKUP_DIR_NAME or _is_sidecar_name(fname):
+            raise JournalInvalid(jname, f"{where}.name", f"{fname!r} is not a restorable name")
+        if item["state"] not in ITEM_STATES:
+            raise JournalInvalid(jname, f"{where}.state", f"{item['state']!r} is not allowed")
+        staged = _single_name(jname, f"{where}.staged", item["staged"])
+        pattern = re.escape(f"{RESTORE_TEMP_PREFIX}{token}-") + r"[0-9]{1,6}\.tmp"
+        if not re.fullmatch(pattern, staged):
+            why = f"{staged!r} is not a generated temp name"
+            raise JournalInvalid(jname, f"{where}.staged", why)
+        claim(f"{where}.name", fname)
+        claim(f"{where}.staged", staged)
+        _confined(jname, f"{where}.name", data_dir, real_data, fname)
+        _confined(jname, f"{where}.staged", data_dir, real_data, staged)
+        prior = item["prior"]
+        if prior is not None:
+            _single_name(jname, f"{where}.prior", prior)
+            if not _prior_ok(fname, prior):
+                raise JournalInvalid(jname, f"{where}.prior", f"{prior!r} is not a generated name")
+            claim(f"{where}.prior", prior)
+            _confined(jname, f"{where}.prior", data_dir, real_data, prior)
+        sides = item["sidecars"]
+        if not isinstance(sides, list) or len(sides) > len(_SIDECAR_SUFFIXES):
+            raise JournalInvalid(jname, f"{where}.sidecars", "must be a short list")
+        if sides and not is_database_name(fname):
+            raise JournalInvalid(jname, f"{where}.sidecars", "only a database has sidecars")
+        for sidx, rawside in enumerate(sides):
+            swhere = f"{where}.sidecars[{sidx}]"
+            side = _exact_keys(jname, swhere, rawside, {"name", "prior"})
+            sname = _single_name(jname, f"{swhere}.name", side["name"])
+            if sname not in {fname + suf for suf in _SIDECAR_SUFFIXES}:
+                why = f"{sname!r} is not a sidecar of {fname!r}"
+                raise JournalInvalid(jname, f"{swhere}.name", why)
+            sprior = _single_name(jname, f"{swhere}.prior", side["prior"])
+            if not _prior_ok(sname, sprior):
+                why = f"{sprior!r} is not a generated name"
+                raise JournalInvalid(jname, f"{swhere}.prior", why)
+            claim(f"{swhere}.name", sname)
+            claim(f"{swhere}.prior", sprior)
+            _confined(jname, f"{swhere}.name", data_dir, real_data, sname)
+            _confined(jname, f"{swhere}.prior", data_dir, real_data, sprior)
+    return journal
 
 
 def _rollback(data_dir: Path, journal: dict, report: RestoreReport) -> None:
@@ -501,7 +739,9 @@ def restore_product_state(product: str, stamp: str | None = None) -> RestoreRepo
                         })
             items.append({"name": fname, "staged": staged_name, "prior": prior,
                           "sidecars": sidecars, "state": "planned"})
-        journal: dict = {"schema": 1, "product": name, "stamp": chosen, "items": items}
+        journal: dict = {
+            "schema": 2, "product": name, "stamp": chosen, "state": "swapping", "items": items,
+        }
         # 1. stage + verify everything; any failure leaves only removable temp files behind
         try:
             for item in items:
@@ -513,9 +753,54 @@ def restore_product_state(product: str, stamp: str | None = None) -> RestoreRepo
             raise pp.ProductError(
                 f"could not stage the backup ({exc}); temp files removed"
             ) from exc
-        # 2. journalled swap
+        # 2. journalled swap. Writing the first journal is still BEFORE any data change.
         report.journal = journal_path
-        _write_journal(journal_path, journal)
+        try:
+            _write_journal(journal_path, journal)
+        except OSError as exc:
+            _remove_staged(data_dir, journal)
+            for leftover in (journal_path, journal_path.with_name(journal_path.name + ".tmp")):
+                try:
+                    leftover.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise pp.ProductError(
+                f"could not write the restore journal ({exc}); temp files removed"
+            ) from exc
+
+        def undo(cause: str, exc: BaseException) -> RestoreFailed:
+            """Roll back, record the terminal state, clean up; the report says what is left."""
+            report.quarantined.clear()
+            report.kept_prior.clear()
+            _rollback(data_dir, journal, report)
+            _remove_staged(data_dir, journal)
+            if report.rollback_errors:
+                report.untouched = []
+                report.final_state = "interrupted: rollback incomplete, data may be inconsistent"
+                report.journal_left.append(journal_path.name)
+                return RestoreFailed(
+                    f"restore failed ({cause}) AND the rollback is incomplete "
+                    f"({'; '.join(report.rollback_errors)}). Journal {journal_path.name} is kept: "
+                    f"run 'recover --product {name}'. The data directory may be inconsistent",
+                    report,
+                )
+            report.final_state = "rolled_back"
+            problem = _persist_state(journal_path, journal, "rolled_back")
+            if problem:
+                report.cleanup_errors.append(problem)
+            _finish_journal(journal_path, report)
+            report.untouched = [i["name"] for i in items if i["name"] not in report.rolled_back]
+            left = (
+                f"; journal {journal_path.name} could not be removed (recover only cleans it)"
+                if report.journal_left else ""
+            )
+            return RestoreFailed(
+                f"restore failed ({cause}); every replacement was rolled back "
+                f"({len(report.rolled_back)} file(s)), so the data files are as before it "
+                f"started{left}",
+                report,
+            )
+
         try:
             for item in items:
                 fname = item["name"]
@@ -534,26 +819,16 @@ def restore_product_state(product: str, stamp: str | None = None) -> RestoreRepo
                 report.restored.append(fname)
                 _write_journal(journal_path, journal)
         except OSError as exc:
-            report.quarantined.clear()
-            report.kept_prior.clear()
-            _rollback(data_dir, journal, report)
-            _remove_staged(data_dir, journal)
-            if report.rollback_errors:
-                report.untouched = []
-                raise RestoreFailed(
-                    f"restore failed ({exc}) AND the rollback is incomplete "
-                    f"({'; '.join(report.rollback_errors)}). Journal {journal_path.name} is kept: "
-                    f"run 'recover --product {name}'. The data directory may be inconsistent",
-                    report,
-                ) from exc
-            journal_path.unlink(missing_ok=True)
-            report.untouched = [i["name"] for i in items if i["name"] not in report.rolled_back]
-            raise RestoreFailed(
-                f"restore failed ({exc}); every replacement was rolled back "
-                f"({len(report.rolled_back)} file(s)), so the data files are as before it started",
-                report,
-            ) from exc
-        journal_path.unlink(missing_ok=True)
+            raise undo(str(exc), exc) from exc
+        # 3. every file is installed: make the outcome durable BEFORE any cleanup, so a later
+        #    cleanup failure can never make `recover` roll back a finished restore.
+        problem = _persist_state(journal_path, journal, "committed")
+        if problem:
+            # Cannot prove the commit on disk: undo it so journal and data agree.
+            raise undo(problem, OSError(problem))
+        report.final_state = "committed"
+        _remove_staged(data_dir, journal)
+        _finish_journal(journal_path, report)
         report.untouched = ["everything not in the backup manifest (sub-directories included)"]
         return report
     finally:
@@ -561,22 +836,53 @@ def restore_product_state(product: str, stamp: str | None = None) -> RestoreRepo
 
 
 def recover_product_state(product: str) -> RestoreReport:
-    """Roll back an unfinished restore from its journal (e.g. after a crash); lock required."""
+    """Settle every journal left by an unfinished restore; lock required.
+
+    PHASE 1 validates ALL journals and EVERY path in them (schema, names, generated patterns,
+    states, duplicates, confinement, links) and mutates nothing: one invalid journal refuses the
+    whole recovery (``JournalInvalid``). PHASE 2 acts per terminal state: ``committed`` only
+    removes the journal (never rolls back), ``rolled_back`` only cleans, ``swapping`` rolls back.
+    Any error in phase 2 is a ``RestoreFailed`` whose report states the real data state.
+    """
     name = pp.validate_product(product)
     data_dir, paths = _locked_paths(name)
     lock = pp.acquire_launch_lock(paths)
     try:
         report = RestoreReport()
-        for path in _stale_journals(data_dir):
-            journal = json.loads(path.read_text(encoding="utf-8"))
-            if journal.get("product") != name:
-                raise pp.ProductConflict(f"{path.name} belongs to {journal.get('product')!r}")
-            _rollback(data_dir, journal, report)
-            _remove_staged(data_dir, journal)
-            if report.rollback_errors:
-                detail = "; ".join(report.rollback_errors)
-                raise RestoreFailed(f"recovery incomplete: {detail}", report)
-            path.unlink(missing_ok=True)
+        plans = [
+            (path, _validate_journal(data_dir, path, name))
+            for path in _stale_journals(data_dir)
+        ]
+        try:
+            for path, journal in plans:
+                state = journal["state"]
+                if state == "swapping":
+                    _rollback(data_dir, journal, report)
+                    _remove_staged(data_dir, journal)
+                    if report.rollback_errors:
+                        report.final_state = "interrupted: rollback incomplete"
+                        report.journal_left.append(path.name)
+                        raise RestoreFailed(
+                            f"recovery incomplete: {'; '.join(report.rollback_errors)}. "
+                            f"Journal {path.name} is kept; the data directory may be inconsistent",
+                            report,
+                        )
+                    problem = _persist_state(path, journal, "rolled_back")
+                    if problem:
+                        report.cleanup_errors.append(problem)
+                    report.final_state = "rolled_back"
+                else:
+                    _remove_staged(data_dir, journal)
+                    report.final_state = state
+                _finish_journal(path, report)
+        except RestoreFailed:
+            raise
+        except Exception as exc:  # noqa: BLE001 - after the first mutation: never a bare refusal
+            report.final_state = report.final_state or "unknown: recovery stopped midway"
+            raise RestoreFailed(
+                f"recovery stopped by {type(exc).__name__}: {exc}. Some files may already have "
+                "been moved back; see the report", report,
+            ) from exc
         return report
     finally:
         lock.release()
@@ -599,17 +905,29 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "recover":
             report = recover_product_state(args.product)
             print(f"recovery of {args.product} finished\n{report.describe()}")
+            if report.journal_left:
+                print("WARNING: data state is final but a journal could not be removed",
+                      file=sys.stderr)
+                return EXIT_CLEANUP_PENDING
             return EXIT_OK
         report = restore_product_state(args.product, args.stamp)
     except RestoreFailed as exc:
-        print(f"FAILED: {exc}.\n{exc.report.describe()}", file=sys.stderr)
-        return EXIT_REFUSED
+        # Raised only AFTER files may have changed: the report is the truth, never "unchanged".
+        print(f"FAILED after changes started: {exc}.\n{exc.report.describe()}", file=sys.stderr)
+        return EXIT_FAILED
     except (pp.ProductError, OSError, ValueError) as exc:
-        # Raised only before any data file was replaced (staging leftovers are removed).
-        print(f"refused: {exc}. No data file was replaced.", file=sys.stderr)
+        # Only reachable from checks that run before any data file or journal is touched.
+        print(f"refused before any change: {exc}. No data file was replaced.", file=sys.stderr)
         return EXIT_REFUSED
     name = report.source.name if report.source else "?"
     print(f"restored {args.product} from {name}\n{report.describe()}")
+    if report.journal_left:
+        print(
+            f"WARNING: the restore is COMPLETE and committed, but {', '.join(report.journal_left)} "
+            "could not be removed. Run 'recover' to clean it; it will NOT roll anything back.",
+            file=sys.stderr,
+        )
+        return EXIT_CLEANUP_PENDING
     return EXIT_OK
 
 
