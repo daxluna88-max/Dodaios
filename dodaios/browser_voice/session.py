@@ -124,6 +124,8 @@ class BrowserVoiceSession:
         self._turn_seq = 0
         #: STOP generation each open bus turn was created under (ADR-0058 block 17).
         self._bus_turn_gen: dict[str, int] = {}
+        #: Admission order per turn id (ADR-0058 block 18).
+        self._bus_turn_order: dict[str, int] = {}
         # Master-volume limiter for this socket, built on first use so importing
         # browser_voice still costs no numpy. Stateful across chunks, so an
         # utterance streamed as many frames is limited as one continuous signal
@@ -266,11 +268,15 @@ class BrowserVoiceSession:
 
             turn_gen = get_stop_controller().generation
             self._bus_turn_gen[turn_id] = turn_gen
+            from dodaios.core.events import next_turn_seq  # noqa: PLC0415
+
+            self._bus_turn_order[turn_id] = turn_order = next_turn_seq()
             await self._publish(
                 VoiceTurnStarted(
                     session_id=self.session_id,
                     turn_id=turn_id,
                     stop_generation=turn_gen,
+                    turn_seq=turn_order,
                     turn_index=self._turn_seq,
                     source_layer="browser_voice",
                 )
@@ -341,6 +347,7 @@ class BrowserVoiceSession:
                 session_id=self.session_id,
                 turn_id=turn_id,
                 stop_generation=self._bus_turn_gen.pop(turn_id, -1),
+                turn_seq=self._bus_turn_order.pop(turn_id, 0),
                 user_text=user_text,
                 user_lang=self._lang_short(),
                 jarvis_text=jarvis_text,

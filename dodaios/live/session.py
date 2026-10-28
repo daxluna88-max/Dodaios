@@ -262,6 +262,10 @@ class LiveVoiceSession:
         self._media_timeout: asyncio.TimerHandle | None = None
         self._active_model = ""
         self._archive_turn_id = str(uuid4())
+        # Admission order of this call's turn (ADR-0058 block 18), issued once, here.
+        from dodaios.core.events import next_turn_seq  # noqa: PLC0415
+
+        self._turn_order = next_turn_seq()
         self._parent_owned = False
         self._startup_timing: StartupTimings | None = None
         self._recovering = False
@@ -682,6 +686,10 @@ class LiveVoiceSession:
                     trace_id=self._indicator_trace_id,
                     new_state=current.upper(),
                     previous=previous.upper(),
+                    stop_generation=self._stop_ticket.ticket,
+                    turn_seq=self._turn_order,
+                    session_id=self.session_id,
+                    turn_id=self._archive_turn_id,
                 )
             )
 
@@ -742,7 +750,7 @@ class LiveVoiceSession:
                 AudioOutFirst(
                     source_layer="live.media", trace_id=self._indicator_trace_id,
                     session_id=self.session_id, turn_id=self._archive_turn_id,
-                    stop_generation=self._stop_ticket.ticket,
+                    stop_generation=self._stop_ticket.ticket, turn_seq=self._turn_order,
                 )
             )
 
@@ -1043,6 +1051,7 @@ class LiveVoiceSession:
                         session_id=self.session_id,
                         turn_id=self._archive_turn_id,
                         stop_generation=self._stop_ticket.ticket,
+                        turn_seq=self._turn_order,
                     )
                 )
             self._startup_timing.mark("lifecycle_started")
@@ -1647,7 +1656,8 @@ class LiveVoiceSession:
                 await self._bus.publish(BrainTurnStarted(
                     source_layer="live.delegation", trace_id=self._indicator_trace_id,
                     provider=self.active_provider, model=self._tools.backend_model,
-                    stop_generation=self._stop_ticket.ticket,
+                    stop_generation=self._stop_ticket.ticket, turn_seq=self._turn_order,
+                    session_id=self.session_id, turn_id=self._archive_turn_id,
                 ))
             await self._note_thinking()
         elif kind == "response.reasoning_summary_text.delta":
@@ -2165,6 +2175,7 @@ class LiveVoiceSession:
                             session_id=self.session_id,
                             turn_id=self._archive_turn_id,
                             stop_generation=self._stop_ticket.ticket,
+                            turn_seq=self._turn_order,
                             user_text=text["user"],
                             jarvis_text=text["assistant"],
                             user_lang=self._language,

@@ -2360,6 +2360,8 @@ class RealtimeVoiceSession:
         # recorder at all (2026-07-28 cost audit: 100% unmetered).
         self._turn_usage: dict[str, int] = {}
         self._turn_id = ""
+        #: Admission order of the open turn (ADR-0058 block 18); 0 = no turn.
+        self._turn_order = 0
         self._turn_trace_id = None
         self._latency_tracker: Any = None
         # Number of opened turns. The active turn keeps its own zero-based
@@ -7636,6 +7638,9 @@ class RealtimeVoiceSession:
         trace_id = uuid4()
         self._turn_trace_id = trace_id
         self._turn_id = str(trace_id)
+        from dodaios.core.events import next_turn_seq  # noqa: PLC0415
+
+        self._turn_order = next_turn_seq()  # issued before any await of this turn
         self._current_turn_index = self._turn_index
         self._turn_index += 1
         self._latency_tracker = self._create_latency_tracker(trace_id)
@@ -9000,6 +9005,7 @@ class RealtimeVoiceSession:
                     turn_id=self._turn_id,
                     turn_index=self._current_turn_index,
                     stop_generation=self._stop_ticket.ticket,
+                    turn_seq=self._turn_order,
                 )
             )
         except Exception:  # noqa: BLE001, S110
@@ -9126,6 +9132,7 @@ class RealtimeVoiceSession:
                             session_id=self.session_id,
                             turn_id=self._turn_id,
                             stop_generation=self._stop_ticket.ticket,
+                            turn_seq=self._turn_order,
                             user_text=self._last_user_text,
                             user_lang=self._language,
                             jarvis_text=answer,
@@ -9353,6 +9360,7 @@ class RealtimeVoiceSession:
         # closing; the next turn's own final requests its own response.
         self._cancel_turn_pause_waiter()
         self._turn_id = ""
+        self._turn_order = 0
         self._turn_trace_id = None
         self._latency_tracker = None
         self._current_turn_index = -1
@@ -12755,6 +12763,7 @@ class RealtimeVoiceSession:
                         session_id=self.session_id,
                         turn_id=self._turn_id,
                         stop_generation=self._stop_ticket.ticket,
+                        turn_seq=self._turn_order,
                     )
                 )
             except Exception:  # noqa: BLE001, S110 — best-effort telemetry

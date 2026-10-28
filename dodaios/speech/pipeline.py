@@ -10191,6 +10191,10 @@ class SpeechPipeline:
                 await self._set_turn_state(TurnTakingState.JARVIS_SPEAKING)
             if terminal_output_closed:
                 return
+            # ``_set_turn_state`` above awaited: re-check the fenced send's ticket before the
+            # hand-over (ADR-0058 block 18; ``playback.send_binary`` checks its own ticket too).
+            if not stop_gate.send_allowed():
+                return
             await playback.send_binary(pcm)
 
         async def _send_json(message: dict[str, Any]) -> None:

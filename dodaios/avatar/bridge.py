@@ -13,10 +13,16 @@ No signal exists without the underlying real event:
 * stop / idle   <- the STOP door closing (``StopController`` listener)
 * expression_plan <- ``offer_plan`` with a plan the ``PlanGate`` (ADR-0056) accepts
 
-Identity (ADR-0058 block 17): turn events carry their ORIGINATING session / turn id and STOP
-generation. The bridge MATCHES them against the turn it follows and drops a mismatch; it never
-re-stamps an event with the current generation. An event with no identity (legacy producer,
-``stop_generation == -1``) is dropped while a turn is active instead of being guessed onto it.
+Identity (ADR-0058 blocks 17 and 18): turn events carry their ORIGINATING session id, turn id, STOP
+generation and admission order (``turn_seq``, issued once per turn by
+``core.events.next_turn_seq``).
+While a turn is active the bridge requires the COMPLETE identity (all four) and an exact match with
+the followed turn; a missing field is a rejection, never a wildcard. A start is adopted only if its
+``turn_seq`` is NEWER than every start adopted before (high-water mark, kept across STOP), so an
+older or duplicate start arriving late cannot retarget the bridge. ``SystemStateChanged`` is
+accepted as proof of a speech transition only when scoped to the followed turn; unscoped it is
+used for state only while no turn is tracked. The bridge never re-stamps an event with the
+current generation.
 Unverified: whether the avatar consumer in the other repository applies the same rule.
 
 After STOP the bridge drops everything until the door reopens and a NEW turn starts in the new
@@ -58,6 +64,10 @@ class AvatarBridge:
         self._turn_gen = -1
         self._turn_id = ""
         self._session_id = ""
+        #: Admission order of the followed turn; 0 = none.
+        self._turn_order = 0
+        #: Highest admission order ever adopted (survives STOP): a start must exceed it.
+        self._order_floor = 0
         self._speaking = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._attached = False
@@ -93,18 +103,33 @@ class AvatarBridge:
     def _turn_active(self) -> bool:
         return self._current() and self._turn_gen >= 0
 
-    def _matches_turn(self, ev: Any) -> bool:
-        """The event's originating identity is the followed turn's. Unknown identity = no."""
-        if not self._current():
-            return False
+    @staticmethod
+    def _identity(ev: Any) -> tuple[int, int, str, str] | None:
+        """(generation, order, session id, turn id), or None when ANY field is missing."""
         gen = getattr(ev, "stop_generation", -1)
-        if gen != self._turn_gen:  # also drops -1 (legacy / unknown) and any older generation
-            return False
+        order = getattr(ev, "turn_seq", 0)
         sid = getattr(ev, "session_id", "")
-        if sid and self._session_id and sid != self._session_id:
-            return False
         tid = getattr(ev, "turn_id", "")
-        return not (tid and self._turn_id and tid != self._turn_id)
+        if gen < 0 or order <= 0 or not sid or not tid:
+            return None
+        return gen, order, sid, tid
+
+    def _matches_turn(self, ev: Any) -> bool:
+        """The event carries the followed turn's COMPLETE identity. Missing field = no."""
+        if not self._turn_active():
+            return False
+        ident = self._identity(ev)
+        return ident == (self._turn_gen, self._turn_order, self._session_id, self._turn_id)
+
+    def _adopt(self, ident: tuple[int, int, str, str]) -> bool:
+        """Follow this turn if its order is newer than every adopted one; else leave as is."""
+        gen, order, sid, tid = ident
+        if not self._ctl.door_open or gen != self._ctl.generation or order <= self._order_floor:
+            return False
+        self._turn_gen, self._turn_order, self._session_id, self._turn_id = gen, order, sid, tid
+        self._order_floor = order
+        self._speaking = False
+        return True
 
     async def _emit(self, kind: str, reason: str, *, expression: str = "") -> None:
         self._seq += 1
@@ -117,38 +142,36 @@ class AvatarBridge:
     # -- real events -------------------------------------------------------------------------
 
     async def _on_turn_started(self, ev: VoiceTurnStarted) -> None:
-        if not self._ctl.door_open:
+        ident = self._identity(ev)
+        if ident is None or not self._adopt(ident):
+            # Missing identity, older generation, or not newer than the turn already adopted
+            # (an older / duplicate start arriving late): never retargets the bridge.
             return
-        gen = getattr(ev, "stop_generation", -1)
-        if gen != self._ctl.generation:
-            # Started under an older generation, or no identity at all: never adopted as current.
-            return
-        self._turn_gen = gen
-        self._turn_id = ev.turn_id
-        self._session_id = ev.session_id
-        self._speaking = False
         await self._emit("turn_start", "VoiceTurnStarted")
 
     async def _on_brain_started(self, ev: BrainTurnStarted) -> None:
         if not self._ctl.door_open:
             return
-        gen = getattr(ev, "stop_generation", -1)
-        if gen >= 0 and gen != self._ctl.generation:
-            return  # a brain turn of an older generation
-        if self._turn_active():
-            if gen != self._turn_gen:
-                return  # no identity while a voice turn is active: not guessed onto it
-        else:
-            # No turn followed: a brain turn without a voice turn (chat) starts one in the
-            # generation the event itself names, or (legacy, none active) the current one.
-            self._turn_gen, self._turn_id, self._session_id, self._speaking = (
-                self._ctl.generation, "", "", False,
-            )
+        ident = self._identity(ev)
+        if ident is None:
+            # No complete identity: while a turn is active it is not guessed onto it. With no
+            # turn tracked (a chat brain turn) it is only a "thinking" display, tracks nothing.
+            if self._turn_active():
+                return
+        elif not self._matches_turn(ev) and not self._adopt(ident):
+            return  # an older / foreign turn
         await self._emit("thinking", "BrainTurnStarted")
 
     async def _on_state(self, ev: SystemStateChanged) -> None:
         if not self._ctl.door_open:
             return
+        if self._turn_active():
+            # Unscoped supervisor state is no proof of a transition of the followed turn: a newer
+            # turn may have begun. Only an event scoped to that exact turn counts.
+            if not self._matches_turn(ev):
+                return
+        elif self._identity(ev) is not None and ev.stop_generation != self._ctl.generation:
+            return  # scoped to an older generation
         state = str(ev.new_state).upper()
         if state == "LISTENING":
             await self._emit("listening", "SystemStateChanged:LISTENING")
@@ -200,7 +223,8 @@ class AvatarBridge:
 
     def _on_door_close(self) -> None:
         """Synchronous, inside ``StopController.stop``: forget the turn, then say stop / idle."""
-        self._turn_gen, self._speaking = -1, False  # _turn_id kept only to label stop / idle
+        # _turn_id is kept only to label stop / idle
+        self._turn_gen, self._turn_order, self._speaking = -1, 0, False
         loop = self._loop
         if loop is None or loop.is_closed():
             return
@@ -216,7 +240,8 @@ class AvatarBridge:
             loop.call_soon_threadsafe(_schedule)
 
     def _on_door_open(self) -> None:
-        self._turn_gen, self._speaking, self._turn_id, self._session_id = -1, False, "", ""
+        self._turn_gen, self._turn_order, self._speaking = -1, 0, False
+        self._turn_id, self._session_id = "", ""  # _order_floor is kept on purpose
 
 
 __all__ = ["AvatarBridge"]

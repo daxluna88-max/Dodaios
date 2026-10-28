@@ -7,6 +7,7 @@ conversation turn.
 """
 from __future__ import annotations
 
+import itertools
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -32,6 +33,20 @@ def _now_ns() -> int:
 
 def _new_trace() -> UUID:
     return uuid4()
+
+
+_TURN_SEQ = itertools.count(1)
+
+
+def next_turn_seq() -> int:
+    """Single admission point for turn order (ADR-0058 block 18).
+
+    Process-wide, strictly increasing, starts at 1 (``0`` on an event = unknown / legacy). A
+    producer takes ONE value when it admits a turn/call (synchronously, before any await) and
+    stamps it on ``VoiceTurnStarted`` and every later event of that turn. ``next()`` on an
+    ``itertools.count`` is atomic under the GIL, so threads cannot get the same value.
+    """
+    return next(_TURN_SEQ)
 
 
 # ----------------------------------------------------------------------
@@ -885,6 +900,12 @@ class SystemStateChanged(Event):
     """High-level supervisor state — rendered by the UI as a pulse badge."""
     new_state: str = "IDLE"         # IDLE | LISTENING | THINKING | SPEAKING | ERROR | PAUSED
     previous: str = "IDLE"
+    #: Optional originating identity (ADR-0058 block 18). Unset (-1 / 0 / "") = unscoped: a
+    #: turn-following consumer must not take it as proof of a transition of ITS current turn.
+    stop_generation: int = -1
+    turn_seq: int = 0
+    session_id: str = ""
+    turn_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1938,6 +1959,11 @@ class BrainTurnStarted(Event):
     #: producer's turn/call was created under; -1 = unknown (legacy producer). Consumers that
     #: follow a turn (avatar bridge) drop an event whose generation differs from theirs.
     stop_generation: int = -1
+    #: Session / turn identity too (block 18); empty = unknown.
+    session_id: str = ""
+    turn_id: str = ""
+    #: Admission order of the turn (ADR-0058 block 18, ``next_turn_seq()``); 0 = unknown (legacy).
+    turn_seq: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1985,6 +2011,8 @@ class AudioOutFirst(Event):
     session_id: str = ""
     turn_id: str = ""
     stop_generation: int = -1
+    #: Admission order of the turn (ADR-0058 block 18, ``next_turn_seq()``); 0 = unknown (legacy).
+    turn_seq: int = 0
 
 
 # ----------------------------------------------------------------------
@@ -2177,6 +2205,8 @@ class VoiceTurnStarted(Event):
     turn_index: int = 0
     #: STOP generation the turn was created under (ADR-0058 block 17); -1 = unknown (legacy).
     stop_generation: int = -1
+    #: Admission order of the turn (ADR-0058 block 18, ``next_turn_seq()``); 0 = unknown (legacy).
+    turn_seq: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -2202,6 +2232,8 @@ class VoiceTurnCompleted(Event):
     voice_provider: str | None = None
     #: STOP generation the turn was created under (ADR-0058 block 17); -1 = unknown (legacy).
     stop_generation: int = -1
+    #: Admission order of the turn (ADR-0058 block 18, ``next_turn_seq()``); 0 = unknown (legacy).
+    turn_seq: int = 0
 
 
 @dataclass(frozen=True, slots=True)

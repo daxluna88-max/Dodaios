@@ -63,11 +63,20 @@ class Supervisor:
             return
         previous = self._state
         self._state = target
+        # Scope the state to the voice turn this call runs in, when there is one (ADR-0058
+        # block 18); outside a turn context the event stays unscoped.
+        from dodaios.speech import stop_gate  # noqa: PLC0415
+
+        tk = stop_gate.current_turn()
         await self._bus.publish(
             SystemStateChanged(
                 source_layer="supervisor",
                 new_state=target.value,
                 previous=previous.value,
+                stop_generation=-1 if tk is None else tk.ticket,
+                turn_seq=0 if tk is None else tk.seq,
+                turn_id="" if tk is None else tk.turn_id,
+                session_id="" if tk is None else tk.session_id,
             )
         )
 

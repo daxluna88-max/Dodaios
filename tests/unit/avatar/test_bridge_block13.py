@@ -27,6 +27,9 @@ async def _setup():
     return bus, ctl, seen
 
 
+_ID = {"session_id": "s", "turn_id": "t1", "turn_seq": 1}
+
+
 async def _kinds(seen):
     await asyncio.sleep(0.05)
     return [e.kind for e in seen]
@@ -41,22 +44,24 @@ async def test_speaking_needs_a_turn_and_an_audible_start():
     bus, ctl, seen = await _setup()
     g = ctl.generation
     await bus.publish(AudioOutFirst(stop_generation=g))  # no turn yet: dropped
-    await bus.publish(VoiceTurnStarted(turn_id="t1", stop_generation=g))
-    await bus.publish(AudioOutFirst(turn_id="t1", stop_generation=g))
-    await bus.publish(SystemStateChanged(new_state="IDLE"))
+    await bus.publish(VoiceTurnStarted(stop_generation=g, **_ID))
+    await bus.publish(AudioOutFirst(stop_generation=g, **_ID))
+    # Block 18: an unscoped supervisor state no longer ends the followed turn's speech.
+    await bus.publish(SystemStateChanged(new_state="IDLE", stop_generation=g, turn_seq=1,
+                                         session_id="s", turn_id="t1"))
     assert await _kinds(seen) == ["turn_start", "speaking_start", "speaking_stop"]
 
 
 async def test_stop_goes_idle_and_a_late_audio_start_is_dropped():
     bus, ctl, seen = await _setup()
     old = ctl.generation
-    await bus.publish(VoiceTurnStarted(turn_id="t1", stop_generation=old))
+    await bus.publish(VoiceTurnStarted(stop_generation=old, **_ID))
     await ctl.stop()
-    await bus.publish(AudioOutFirst(turn_id="t1", stop_generation=old))  # stale: door closed
+    await bus.publish(AudioOutFirst(stop_generation=old, **_ID))  # stale: door closed
     kinds = await _kinds(seen)
     assert kinds == ["turn_start", "stop", "idle"]
     ctl.resume()
-    await bus.publish(AudioOutFirst(turn_id="t1", stop_generation=old))  # old identity: dropped
+    await bus.publish(AudioOutFirst(stop_generation=old, **_ID))  # old identity: dropped
     assert await _kinds(seen) == ["turn_start", "stop", "idle"]
 
 

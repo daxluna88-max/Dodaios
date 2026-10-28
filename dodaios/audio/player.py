@@ -1616,8 +1616,14 @@ class AudioPlayer:
                         from dodaios.speech import stop_gate  # noqa: PLC0415
 
                         _turn = stop_gate.current_turn()
+                        # Complete identity (block 18) comes from the same ticket; a context
+                        # without a ticket publishes an identity-less event, which a turn-
+                        # following consumer drops while a turn is active.
                         await self._bus.publish(AudioOutFirst(
                             stop_generation=-1 if _turn is None else _turn.ticket,
+                            turn_seq=0 if _turn is None else _turn.seq,
+                            turn_id="" if _turn is None else _turn.turn_id,
+                            session_id="" if _turn is None else _turn.session_id,
                         ))
                         log.info("AudioOutFirst published")
                     except Exception as exc:  # noqa: BLE001
