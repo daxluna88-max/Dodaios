@@ -464,6 +464,9 @@ class AgentChatService:
         self._voice_call_chats: dict[str, str] = {}
         # The archived voice chat's history while one is continued (bind_voice_chat).
         self._voice_archive_history: Callable[[], list[Any]] | None = None
+        # Block 19 (J2): session_id -> (turn_id, input label, output label) of the turn now running.
+        # A cache for stamping NEW events only; the durable label is the one stored in each event.
+        self._turn_labels: dict[str, tuple[str, Any, Any]] = {}
         self._retire_cli_seats()
         self._seal_orphaned_turns()
 
@@ -1025,9 +1028,40 @@ class AgentChatService:
                 return
         self._publish_event(session_id, event)
 
+    def _stamp_provenance(self, session_id: str, event: dict[str, Any]) -> None:
+        """Write the typed label into a replayable event BEFORE it is stored (block 19, J2).
+
+        user_message = the message's input label; assistant text / tool call / tool result = the
+        turn's OUTPUT label (input label, plus the whole history and the memory a LOCAL engine saw);
+        delegation reports and internal messages arrive outside the turn's input: they take the
+        label derived from the session's last stored turn (an agent-to-agent message is
+        UNAVAILABLE: the sender's own history is not tracked here). No state at all (restart,
+        voice import) reads the stored tail; nothing stored reads UNAVAILABLE. An explicit label
+        already on the payload can only be tightened."""
+        from dodaios.agent_chat import history_labels
+        from dodaios.brain import provenance as _prov
+
+        if not history_labels.is_labelled_kind(event):
+            return
+        kind = event.get("kind")
+        payload = event.get("payload") or {}
+        active = self._turn_labels.get(session_id)
+        if kind in ("assistant_text", "tool_call", "tool_result", "user_message") and active:
+            label = active[1] if kind == "user_message" else active[2]
+        elif kind == "agent_message" and payload.get("sender_kind") == "agent":
+            label = _prov.Provenance.UNAVAILABLE
+        else:
+            tail = self.store.list_events(session_id, tail=80)
+            label = history_labels.derived_label(tail)
+        history_labels.stamp(event, label)
+
     def _publish_event(self, session_id: str, event: dict[str, Any]) -> None:
+        self._stamp_provenance(session_id, event)
         if event.get("kind") == "turn_finished":
             turn_id = str((event.get("payload") or {}).get("turn_id") or "")
+            held = self._turn_labels.get(session_id)
+            if held is not None and held[0] == turn_id:
+                self._turn_labels.pop(session_id, None)
             if turn_id and self.store.turn_terminal(session_id, turn_id) is not None:
                 log.warning("agent chat: ignored duplicate completion for turn %s", turn_id)
                 return
@@ -1090,6 +1124,45 @@ class AgentChatService:
         )
 
     # ---------------------------------------------------------------- turns
+
+    def _open_turn_label(
+        self,
+        session: AgentChatSession,
+        turn_id: str,
+        history: list[dict[str, Any]],
+        *,
+        carried: Any,
+        runner: str,
+        incoming: Any,
+        internal: bool,
+    ) -> tuple[str, Any, Any]:
+        """``(turn_id, input label, output label)`` for the turn about to start (block 19, J2).
+
+        Input: the message's own label (attachments / declared), UNRESTRICTED only for a plain
+        typed message; an agent-to-agent message is UNAVAILABLE; a background / control-owned
+        continuation takes the label derived from the stored history. Output: the input label when
+        the engine is NOT provably local (a remote engine was shown only UNRESTRICTED history,
+        see runner_api / dodaios_harness); for a LOCAL engine it also takes the whole history it
+        saw, and the brain runner (local memory and wiki feed its prompt) is UNAVAILABLE."""
+        from dodaios.agent_chat import history_labels
+        from dodaios.brain import dispatch_gate
+        from dodaios.brain import provenance as _prov
+
+        if carried is not None:
+            given = _prov.parse(carried)
+        elif incoming is not None and getattr(incoming, "sender_kind", "") == "agent":
+            given = _prov.Provenance.UNAVAILABLE
+        elif internal:
+            given = history_labels.derived_label(history)
+        else:
+            given = _prov.Provenance.UNRESTRICTED
+        local = runner in ("api", "brain") and dispatch_gate.is_local(session.provider)
+        if not local:
+            return turn_id, given, given
+        taint = [given, history_labels.worst(history)]
+        if runner == "brain":
+            taint.append(_prov.Provenance.UNAVAILABLE)
+        return turn_id, given, _prov.combine(*taint)
 
     async def receive_message(self, session_id: str, incoming: IncomingMessage) -> dict[str, Any]:
         """Persist a trusted internal message even while its receiving chat is busy."""
@@ -1394,6 +1467,13 @@ class AgentChatService:
 
             history_start = kit.history_start(session) if kit.history_start is not None else 0
             history = self.store.list_events(session_id, after_seq=history_start)
+            self._turn_labels[session_id] = self._open_turn_label(
+                session, turn_id, history, carried=chat_attachments.turn_label(
+                    attached, provenance),
+                runner=selected_runner or session_runner(session),
+                incoming=incoming,
+                internal=(background_result or (control_owned and not direct_user)),
+            )
             if incoming is not None:
                 await self.message_status(
                     session_id, incoming.message_id, "delivered", turn_id=turn_id
@@ -2011,7 +2091,10 @@ class AgentChatService:
             session_id,
             make_event(
                 "assistant_text",
-                {"turn_id": turn_id, "message_id": message_id, "text": reply},
+                # Block 19 (J2): a spoken answer was produced by the voice stack, whose inputs
+                # are not tracked per turn here: never replayed to a remote engine.
+                {"turn_id": turn_id, "message_id": message_id, "text": reply,
+                 "provenance": "unavailable"},
             ),
         )
         await self._emit(

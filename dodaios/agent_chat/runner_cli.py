@@ -3236,6 +3236,16 @@ async def run_cli_turn(
     t0 = time.perf_counter()
     session = handle.session
     resume = session.vendor_session
+    # Block 19 (J2): a FRESH vendor conversation gets the chat's transcript in its first prompt
+    # (dodaios_harness.render_transcript), filtered to positively UNRESTRICTED events. Say so
+    # visibly when part of it was held back. A RESUMED vendor session adds no transcript: it can
+    # only hold what earlier vendor turns sent, and those passed this same gate.
+    if identity and not resume and handle.history:
+        from dodaios.agent_chat import history_labels
+
+        held = history_labels.withheld_count(handle.history, local=False)
+        if held:
+            await handle.emit(make_event("notice", history_labels.notice_payload(held, runner)))
     if (
         resume
         and identity

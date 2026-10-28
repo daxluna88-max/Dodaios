@@ -252,3 +252,5 @@ ContextItem fields; unlabelled = restricted; remote-only engines -> refused, not
 one is called and the answer is RESTRICTED; local reviewer + remote synthesizer -> local synthesis, remote sees nothing;
 unrestricted input unchanged; orchestrator refuses a remote branch/synthesizer with clean-looking items). Nothing was run:
 no pytest, no CI, no app, no model call; only `py_compile` and `ruff check` on the touched modules and the new test.
+
+Block 19 (J2): the stored event history now carries a durable typed label and a remote/vendor destination is shown only UNRESTRICTED events (API runner, vendor-CLI transcript, native codex goal, Society summariser); see ADR-0062 'Block 19: GPT round 6 (J2)'. Not run.
