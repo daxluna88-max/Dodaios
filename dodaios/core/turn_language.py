@@ -263,8 +263,9 @@ _SETS: tuple[tuple[str, frozenset[str]], ...] = (
 
 # Whisper cloud APIs return language NAMES; local faster-whisper returns ISO
 # codes; some TTS configs use BCP-47 ("pt-PT", "pt-BR"). All collapse to
-# de/en/es/pt here.
+# de/en/es/pt/it here.
 _TAG_TO_CODE: dict[str, str] = {
+    "it": "it", "ita": "it", "italian": "it", "italiano": "it",
     "de": "de", "deu": "de", "ger": "de", "german": "de", "deutsch": "de",
     "en": "en", "eng": "en", "english": "en", "englisch": "en",
     "es": "es", "spa": "es", "spanish": "es", "spanisch": "es",
@@ -275,7 +276,7 @@ _TAG_TO_CODE: dict[str, str] = {
 
 
 def normalize_language_tag(tag: object) -> str:
-    """Collapse an STT/TTS tag to ``de``/``en``/``es``/``pt``/``unknown``."""
+    """Collapse an STT/TTS tag to ``de``/``en``/``es``/``pt``/``it``/``unknown``."""
     if not tag:
         return "unknown"
     head = str(tag).strip().lower().replace("_", "-").split("-", 1)[0]
@@ -607,6 +608,11 @@ def validate_output_language(
         tokens = [token.lower() for token in _TOKEN_RE.findall(prose)]
         if _detect_gross_vietnamese_output(prose, tokens):
             detected = "vi"
+        elif target == "it" and _detect_other_language(prose)[0] == "it":
+            # Italian already has a conservative lexical detector. Consult it
+            # before the older four-language scorer can mistake shared words
+            # such as "la casa" for decisive Spanish evidence.
+            detected = "it"
         else:
             detected = _detect_strong_supported_output(prose, tokens)
 

@@ -3969,6 +3969,9 @@
       "pt": {
         "label": "Português (Portugal)",
         "description": "Português europeu em todas as etiquetas e botões."
+      },
+      "it": {
+        "label": "Italiano (italiano)"
       }
     },
     "reply_options": {
@@ -3976,7 +3979,8 @@
       "en": "{name} answers in English.",
       "de": "{name} antwortet auf Deutsch.",
       "es": "{name} responde en español.",
-      "pt": "{name} responde em português."
+      "pt": "{name} responde em português.",
+      "it": "{name} responde em italiano."
     },
     "stt_options": {
       "auto": "Deteta automaticamente o idioma que falas.",

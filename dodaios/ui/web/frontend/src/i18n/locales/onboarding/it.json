@@ -1,0 +1,101 @@
+{
+  "first_run": {
+    "back": "Indietro",
+    "continue": "Continua",
+    "step_of": "{current} di {total}",
+    "window": {
+      "title": "Configura {name}",
+      "progress": "Avanzamento della configurazione",
+      "language": "Lingua"
+    },
+    "name": {
+      "pill": "Nome",
+      "title": "Ciao! Come vorresti chiamarmi?",
+      "lede": "Scegli il nome che preferisci. Sarà anche la mia parola di attivazione: pronunciala ad alta voce e mi metterò in ascolto. Puoi cambiarla in qualsiasi momento nelle Impostazioni.",
+      "label": "Nome dell’assistente",
+      "placeholder": "Scrivi un nome…"
+    },
+    "connect": {
+      "pill": "Connessione",
+      "title": "Collega la tua IA",
+      "lede": "Accedi con un abbonamento che hai già oppure incolla una chiave API. Ne basta uno perché {name} possa ragionare e parlare.",
+      "sign_in": "Accedi",
+      "api_key": "Chiave API",
+      "ready": "Pronto",
+      "checking": "Verifica in corso…",
+      "waiting": "In attesa…",
+      "signed_in": "Accesso effettuato",
+      "signed_in_as": "Accesso effettuato come {account}",
+      "key_saved": "Chiave API salvata",
+      "plans_or_key": "{plans}, oppure una chiave API",
+      "key_only": "Chiave API",
+      "more": "Altri fornitori",
+      "finish_in_browser": "Completa l’accesso nel browser.",
+      "install_first": "Prima installalo: esegui questo comando in un terminale, poi ripeti la verifica.",
+      "check_again": "Verifica di nuovo",
+      "copy": "Copia comando",
+      "key_connecting": "Attivazione in corso…",
+      "key_connected": "Connesso: {provider}.",
+      "key_partial": "Alcune funzionalità non sono state attivate ({parts}). Puoi sistemarle in seguito nella pagina Chiavi API.",
+      "live_ready": "La voce in tempo reale è attiva: parla e {name} risponderà subito.",
+      "live_missing": "La chat funziona. Per la voce in tempo reale serve una chiave OpenAI o Gemini; fino ad allora {name} parlerà nella modalità classica, un po’ più lentamente.",
+      "key_security": "Gli abbonamenti hanno un costo mensile fisso. Le chiavi vengono salvate nel portachiavi del sistema e inviate soltanto al fornitore che hai scelto.",
+      "nothing_yet": "Non hai ancora collegato nulla. Senza un abbonamento o una chiave, chat e voce rimangono disattivate. Puoi collegarne uno in seguito nella pagina Chiavi API.",
+      "later": "Salta per ora"
+    },
+    "voice": {
+      "pill": "Voce",
+      "title": "Come parlerai con {name}",
+      "lede": "Scrivi nella chat oppure parla: pronuncia la parola di attivazione o premi la scorciatoia per la chiamata.",
+      "wake_title": "Parola di attivazione: {phrase}",
+      "call_title": "Scorciatoia per la chiamata",
+      "call_detail": "Premila da qualsiasi schermata per iniziare a parlare. Fai clic sui tasti per scegliere la tua combinazione.",
+      "call_recording": "Tieni premuti i tasti che vuoi usare, poi rilasciali. Esc annulla.",
+      "call_none": "Nessuna scorciatoia impostata. Fai clic sul campo e premi i tasti che vuoi usare.",
+      "call_press": "Fai clic, poi premi i tasti",
+      "call_change": "Cambia la scorciatoia per la chiamata",
+      "call_saved": "Salvata. Premila da qualsiasi schermata per iniziare a parlare.",
+      "call_refused": "Questa combinazione non è disponibile. Provane un’altra.",
+      "no_word": "Nessuna parola di attivazione impostata",
+      "wake_on": "Sempre in ascolto della parola di attivazione, che viene riconosciuta direttamente su questo computer.",
+      "wake_off": "Disattivato: premi la scorciatoia per la chiamata per parlare. Attivalo per mantenere sempre l’ascolto della parola di attivazione.",
+      "wake_switch": "Ascolta sempre la parola di attivazione",
+      "after_restart": "Si attiverà con il riavvio finale.",
+      "login_title": "Avvia all’accesso",
+      "login_detail": "Apre {name} all’avvio del computer, così sarà pronto ad ascoltarti.",
+      "preview_note": "Stai rivedendo la guida: non verrà eseguito alcun riavvio.",
+      "restart_note": "Ora una breve visita guidata ti mostrerà l’app. Alla fine l’app si riavvierà una volta (circa dieci secondi) per attivare tutto.",
+      "start": "Mostrami l’app"
+    },
+    "tour": {
+      "title": "Alla scoperta di {name}",
+      "lede": "La tua mascotte ti accompagna nell’app e ti spiega ogni sezione.",
+      "next": "Avanti",
+      "finish": "Iniziamo",
+      "skip": "Salta",
+      "labels": {
+        "chat": "Chat",
+        "voice": "Chat vocale",
+        "agents": "Agenti",
+        "ide": "IDE per agenti",
+        "plugins": "Estensioni",
+        "wake": "Parola di attivazione",
+        "done": "Tutto pronto"
+      },
+      "stops": {
+        "chat": "Ciao, sono {pet}! Ti faccio conoscere l’app. Questa è la tua chat con {name}. Qui puoi scrivere qualsiasi cosa: una domanda, un’attività da svolgere o un file da esaminare. Non devi scegliere personalmente uno strumento o un modello: {name} decide cosa serve.",
+        "voice": "Preferisci parlare? Questa è la chat vocale. Fai clic sulla barra, pronuncia la parola di attivazione oppure premi la scorciatoia per la chiamata, poi parla normalmente. L’onda indica chi sta parlando.",
+        "agents": "I lavori più impegnativi, come una ricerca, una relazione o un sito web, vengono affidati ai tuoi agenti. Sono la squadra di {name}: ognuno ha un ruolo e un modello propri. Apri Agenti per seguirne il lavoro, parlare con uno di loro o crearne uno tuo.",
+        "ide": "L’IDE per agenti esegue agenti di programmazione come Claude Code e Codex in terminali reali, sui tuoi progetti. Scrivi direttamente a loro oppure lascia che {name} li guidi con la voce.",
+        "plugins": "Le estensioni collegano {name} alle app che usi: posta, calendario, note, casa intelligente e altro ancora. Ognuna aggiunge un nuovo strumento; qualsiasi azione che invii o modifichi qualcosa richiede prima la tua conferma.",
+        "wake": "La parola di attivazione si trova qui, nelle Impostazioni. Pronuncia \"Hey {name}\" e {name} si metterà in ascolto. Puoi cambiare la parola, sceglierne la lingua o provarla in qualsiasi momento.",
+        "done": "La visita è finita! Parla con {name} quando vuoi e, se incontri una difficoltà, chiedi pure. Puoi rivedere questa guida da Impostazioni → App."
+      }
+    }
+  },
+  "app_tour": {
+    "replay_title": "Ripeti la configurazione guidata",
+    "replay_body": "Riapre la finestra di configurazione (nome, connessioni IA e voce), seguita dalla visita guidata dell’app. Non verrà eseguito alcun riavvio.",
+    "replay": "Rivedi la guida"
+  }
+}

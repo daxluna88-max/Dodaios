@@ -1126,8 +1126,8 @@ def set_wiki_semantic_search(
 def set_reply_language(name: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
     """Persist the user-facing reply-language pin in ``[brain] reply_language``.
 
-    ``name`` is one of ``auto`` | ``de`` | ``en`` | ``es`` (validated by the
-    caller). Takes effect as a boot default on the next ``load_config`` call — the
+    ``name`` is one of ``auto`` | ``de`` | ``en`` | ``es`` | ``pt`` | ``it``
+    (validated by the caller). Takes effect on the next ``load_config`` call — the
     live switch happens via ``BrainManager.set_reply_language``.
     """
     _patch_table(path, "brain", "reply_language", name)
@@ -1145,8 +1145,8 @@ def set_proactivity(level: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
 def set_ui_language(name: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
     """Persist the interface (display) language in ``[ui] language``.
 
-    ``name`` is one of ``en`` | ``de`` | ``es`` | ``pt`` | ``zh`` (validated by the
-    caller).
+    ``name`` is one of ``en`` | ``de`` | ``es`` | ``pt`` | ``zh`` | ``it``
+    (validated by the caller).
     This is the backend home for what used to be a frontend-only localStorage value,
     so a voice command / the Control API can change the visible app language and
     the open UI switches live (the change is broadcast over /ws).

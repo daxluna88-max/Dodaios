@@ -3969,6 +3969,9 @@
       "pt": {
         "label": "Português (Portugal)",
         "description": "所有标签和按钮都使用欧洲葡萄牙语。"
+      },
+      "it": {
+        "label": "Italiano（意大利语）"
       }
     },
     "reply_options": {
@@ -3976,7 +3979,8 @@
       "en": "{name} answers in English.",
       "de": "{name} antwortet auf Deutsch.",
       "es": "{name} responde en español.",
-      "pt": "{name} responde em português."
+      "pt": "{name} responde em português.",
+      "it": "{name} 用意大利语回答。"
     },
     "stt_options": {
       "auto": "自动检测你说的语言。",

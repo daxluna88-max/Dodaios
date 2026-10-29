@@ -13,6 +13,7 @@ import uuid
 from contextvars import ContextVar
 from typing import Any
 
+from .control_locale import ControlError, control_message
 from .control_store import ControlStore
 from .control_types import (
     COMMANDS,
@@ -26,6 +27,12 @@ from .parked_work import BACKGROUND_ORIGIN
 
 log = logging.getLogger(__name__)
 _command_origin: ContextVar[CommandRequest | None] = ContextVar("chat_command_origin", default=None)
+
+
+def _control_text(message: str, **fields: object) -> str:
+    """Use the explicit command locale; never change the conversation language."""
+    origin = _command_origin.get()
+    return control_message(message, origin.locale if origin else "en", **fields)
 
 
 def supports_restricted_turn(session: Any) -> bool:
@@ -69,7 +76,7 @@ class ChatControls:
     def state(self, sid: str) -> ChatControlState:
         session = self.service.store.get_session(sid)
         if session is None:
-            raise ValueError("Session not found")
+            raise ControlError("Session not found")
         state = self.store.get(sid)
         if state.revision == 0 and not state.last_request:
             events = self.service.store.list_events(sid)
@@ -126,7 +133,9 @@ class ChatControls:
     async def execute(self, sid: str, request: CommandRequest) -> CommandResult:
         session = self.service.store.get_session(sid)
         if session is None or session.surface not in ("jarvis", "society"):
-            raise ValueError("Commands are available in Dodaios and agent chats only")
+            raise ValueError(control_message(
+                "Commands are available in Dodaios and agent chats only", request.locale
+            ))
         # Stop must remain usable while another command waits for a turn or an approval.
         if request.command == "stop":
             return await self._execute(sid, request)
@@ -155,7 +164,7 @@ class ChatControls:
             from dodaios.memory.wiki.secret_guard import contains_secret
 
             if contains_secret(request.arguments):
-                raise ValueError("Configure credentials in app settings, not in chat commands")
+                raise ControlError("Configure credentials in app settings, not in chat commands")
             state = self.state(sid)
             state.output_language = _chat_language(
                 state.output_language, request.arguments or state.last_request
@@ -168,7 +177,9 @@ class ChatControls:
             result.status = "started" if data.get("turn_id") or data.get("started") else "done"
         except Exception as exc:
             log.warning("Chat command %s failed in %s: %s", request.command, sid, exc)
-            result.status, result.error = "failed", str(exc)
+            result.status, result.error = "failed", (
+                exc.localized(request.locale) if isinstance(exc, ControlError) else str(exc)
+            )
         finally:
             _command_origin.reset(origin_token)
         result.state = self.state(sid)
@@ -183,7 +194,7 @@ class ChatControls:
         session = self.service.store.get_session(sid)
         if command in ("plan", "review", "recap", "goal") and not supports_restricted_turn(session):
             if command != "goal" or arguments not in ("", "clear"):
-                raise ValueError(
+                raise ControlError(
                     "This runner cannot enforce read-only verification; choose an API model"
                 )
         if command in ("help", "clear", "history", "model", "routines"):
@@ -191,12 +202,12 @@ class ChatControls:
         if command == "status" or command == "goal" and not arguments:
             return {"running": self.service.is_running(sid)}
         if command == "stop":
-            await self.pause(sid, "Stopped by the user")
+            await self.pause(sid, _control_text("Stopped by the user"))
             return {"stopped": True}
         if command == "goal":
             if arguments == "clear":
                 if state.goal and state.goal.status == "active":
-                    await self.pause(sid, "Goal cleared by the user")
+                    await self.pause(sid, _control_text("Goal cleared by the user"))
                 await self._clear_saved_native(sid)
                 state = self.state(sid)
                 if state.goal:
@@ -206,10 +217,10 @@ class ChatControls:
                     await self.publish(state)
                 return {}
             if state.mode == "plan":
-                raise ValueError("Leave plan mode with /build before starting a goal")
+                raise ControlError("Leave plan mode with /build before starting a goal")
             if len(arguments) > 4000:
-                raise ValueError("Goal must be at most 4000 characters")
-            await self.pause(sid, "Replaced by a new goal")
+                raise ControlError("Goal must be at most 4000 characters")
+            await self.pause(sid, _control_text("Replaced by a new goal"))
             state = self.state(sid)
             now = int(time.time() * 1000)
             state.goal = GoalState(
@@ -227,7 +238,7 @@ class ChatControls:
             self.start(sid)
             return {"started": True}
         if command == "plan":
-            await self.pause(sid, "Plan mode activated")
+            await self.pause(sid, _control_text("Plan mode activated"))
             state = self.state(sid)
             if state.mode != "plan":
                 state.previous_permission = session.permission_mode
@@ -249,7 +260,7 @@ class ChatControls:
             self._idle(sid)
             permission = state.previous_permission or session.permission_mode
             if permission in ("plan", "read-only"):
-                raise ValueError(
+                raise ControlError(
                     "No writable mode was selected before planning; "
                     "update the agent permissions first"
                 )
@@ -266,7 +277,7 @@ class ChatControls:
         if command == "continue":
             self._idle(sid)
             if state.mode == "plan" and state.goal:
-                raise ValueError("Leave plan mode with /build before resuming a goal")
+                raise ControlError("Leave plan mode with /build before resuming a goal")
             if state.goal and state.goal.status in ("paused", "blocked"):
                 state.goal.status = "active"
                 state.last_status = "running"
@@ -279,12 +290,12 @@ class ChatControls:
                 return {"started": sid in self.jobs}
             if not state.last_request or state.last_status not in ("interrupted", "failed"):
                 if self._last_failure_was_not_yours(sid):
-                    raise ValueError(
+                    raise ControlError(
                         "The task that failed last came from Dodaios, a teammate or a "
                         "routine, not from you, so /continue cannot resume it. Ask the "
                         "agent yourself, or let the sender try again."
                     )
-                raise ValueError("There is no interrupted task to continue")
+                raise ControlError("There is no interrupted task to continue")
             return {
                 "turn_id": await self._send(
                     sid,
@@ -295,7 +306,7 @@ class ChatControls:
             }
         if command == "find":
             if not arguments:
-                raise ValueError("Use /find followed by search text")
+                raise ControlError("Use /find followed by search text")
             hits = []
             for event in self.service.store.list_events(sid):
                 payload = event.get("payload") or {}
@@ -320,12 +331,12 @@ class ChatControls:
             return {"hits": hits}
         if command in ("remember", "message"):
             if attachments:
-                raise ValueError("This command accepts text; send files as a separate chat message")
+                raise ControlError("This command accepts text; send files as a separate chat message")
             self._idle(sid)
             if state.mode == "plan":
-                raise ValueError("Plan mode permits reads only; leave it with /build")
+                raise ControlError("Plan mode permits reads only; leave it with /build")
             if not arguments:
-                raise ValueError(f"/{command} needs an argument")
+                raise ControlError("/{command} needs an argument", command=command)
             return await self._tool(sid, command, arguments)
         if command in ("recap", "review"):
             self._idle(sid)
@@ -348,11 +359,11 @@ class ChatControls:
                     attachments=attachments,
                 )
             }
-        raise ValueError("Unknown command")
+        raise ControlError("Unknown command")
 
     def _idle(self, sid: str) -> None:
         if self.service.is_running(sid) or sid in self.jobs:
-            raise ValueError("The chat is working; use /stop first")
+            raise ControlError("The chat is working; use /stop first")
 
     async def _send(self, sid: str, text: str, **kwargs: Any) -> str:
         if kwargs.get("direct_user", True):
@@ -387,10 +398,13 @@ class ChatControls:
             folded = "plan"
         permission = folded
         if session.surface == "society" and self.service.is_running(sid):
-            raise ValueError("The agent chat is working; stop it before changing permissions")
+            raise ControlError("The agent chat is working; stop it before changing permissions")
         if session.surface == "society" and permission not in ("plan", "read-only"):
             if not society_mode_supported(runner, permission):
-                raise ValueError(f"{runner} cannot provide an actionable approval for {permission}")
+                raise ControlError(
+                    "{runner} cannot provide an actionable approval for {permission}",
+                    runner=runner, permission=permission,
+                )
         self.service.store.update_session(sid, permission_mode=permission)
         if session.surface == "society":
             self.service.store.set_permission_override(sid, permission)
@@ -398,7 +412,7 @@ class ChatControls:
             bound = await binder(sid) if binder is not None else session
             self.service.store.set_permission_override(sid, bound.permission_mode)
             if bound.permission_mode != permission:
-                raise ValueError("The agent's roster does not permit that chat mode")
+                raise ControlError("The agent's roster does not permit that chat mode")
             permission = bound.permission_mode
         state.mode = "plan" if permission in ("plan", "read-only") else "build"
         set_chat_read_only(sid, state.mode == "plan")
@@ -418,7 +432,7 @@ class ChatControls:
         brain = brain_manager()
         executor = getattr(brain, "_tool_executor", None)
         if runtime is None or executor is None:
-            raise ValueError("Agent tools are still starting")
+            raise ControlError("Agent tools are still starting")
         from dodaios.society.surface import agent_id_of
 
         agent_id = (agent_id_of(sid) or "") if session.surface == "society" else "jarvis"
@@ -426,7 +440,7 @@ class ChatControls:
         if command == "message":
             match = re.fullmatch(r'@(?P<target>"[^"]+"|\S+)\s+(?P<text>[\s\S]+)', arguments)
             if not match:
-                raise ValueError("Use /message @Agent text (quote names containing spaces)")
+                raise ControlError("Use /message @Agent text (quote names containing spaces)")
             tool = MessageAgentTool(runtime, agent_id)
             args = {"target": match["target"].strip('"'), "text": match["text"], "kind": "say"}
         else:
@@ -508,7 +522,7 @@ class ChatControls:
         await self._send(sid, f"/{command} {arguments}", control_owned=True, control_runner=run)
         await self.service.wait_turn(sid)
         if not completed or not completed[-1].success:
-            raise ValueError(completed[-1].error if completed else "Command was interrupted")
+            raise ValueError(completed[-1].error if completed else _control_text("Command was interrupted"))
         return {"result": completed[-1].output}
 
     async def user_message(self, sid: str, text: str) -> int | None:
@@ -520,7 +534,7 @@ class ChatControls:
         if self.service.is_running(sid) and not active:
             return None
         if active:
-            await self.pause(sid, "User is steering the task")
+            await self.pause(sid, _control_text("User is steering the task"))
             state = self.state(sid)
             if state.goal is not None:
                 state.goal.status = "active"
@@ -546,7 +560,7 @@ class ChatControls:
             return
         if state.goal and state.goal.status == "active":
             state.goal.status = "paused"
-            state.goal.reason = "Message was not started"
+            state.goal.reason = _control_text("Message was not started")
             state.goal.updated_ms = int(time.time() * 1000)
             state.last_status = "interrupted"
         else:
@@ -637,7 +651,7 @@ class ChatControls:
 
         adapter = next((item for item in native_adapters() if item.name == state.goal.engine), None)
         if adapter is None:
-            raise ValueError(
+            raise ControlError(
                 "The previous native goal must be cleared before this chat can continue"
             )
         await adapter.clear_saved(self.service, self.service.store.get_session(sid))
@@ -674,7 +688,7 @@ class ChatControls:
                     e for e in self.service.store.list_events(sid) if e["kind"] == "turn_finished"
                 ]
                 if not finished or finished[-1]["payload"].get("status") != "done":
-                    raise ValueError("Attachments could not be read; they were kept for /continue")
+                    raise ControlError("Attachments could not be read; they were kept for /continue")
                 self.store.save_inputs(sid, [])
             adapters = self.adapters if self.adapters is not None else native_adapters()
             for adapter in adapters:
@@ -727,9 +741,9 @@ class ChatControls:
                 finished = [e for e in events if e["kind"] == "turn_finished"]
                 if not finished or finished[-1]["payload"].get("status") != "done":
                     raise ValueError(
-                        str(finished[-1]["payload"].get("error") or "Work was interrupted")
+                        str(finished[-1]["payload"].get("error") or _control_text("Work was interrupted"))
                         if finished
-                        else "No turn result"
+                        else _control_text("No turn result")
                     )
                 verdict: GoalVerdict = await (self.evaluator or evaluate_goal)(
                     session, state.goal.objective, events, state.output_language
@@ -764,7 +778,7 @@ class ChatControls:
                     state.goal.status = "blocked"
                     if state.goal.stalled_steps >= 3:
                         state.goal.reason = (
-                            "No verified progress in three consecutive steps. " + verdict.reason
+                            _control_text("No verified progress in three consecutive steps. ") + verdict.reason
                         )
                 await self.publish(state)
                 if state.goal.status != "active":
@@ -777,7 +791,10 @@ class ChatControls:
             log.exception("Goal supervision failed for %s", sid)
             state = self.state(sid)
             if state.goal and state.goal.id == goal_id and state.goal.status == "active":
-                state.goal.status, state.goal.reason = "blocked", str(exc)
+                state.goal.status, state.goal.reason = "blocked", (
+                    _control_text(exc.message, **exc.fields)
+                    if isinstance(exc, ControlError) else str(exc)
+                )
                 await self.publish(state)
         finally:
             self.native.pop(sid, None)
@@ -814,6 +831,6 @@ class ChatControls:
         self._closed = True
         for sid in list(self.jobs):
             try:
-                await self.pause(sid, "App is closing; use /continue to resume")
+                await self.pause(sid, _control_text("App is closing; use /continue to resume"))
             except Exception:
                 log.exception("Could not finish native goal cleanup while closing %s", sid)

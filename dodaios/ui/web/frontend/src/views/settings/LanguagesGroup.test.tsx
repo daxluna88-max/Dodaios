@@ -26,6 +26,8 @@ vi.mock("@/i18n", () => ({
   hydrateUiLanguage: vi.fn(),
 }));
 
+import { setUiLanguage, setReplyLanguage, setSttLanguage } from "@/i18n";
+
 import { LanguagesGroup } from "@/views/settings/LanguagesGroup";
 
 afterEach(cleanup);
@@ -48,13 +50,25 @@ describe("LanguagesGroup (Languages folded into Settings)", () => {
     );
     fireEvent.click(screen.getByTestId("ui-language"));
     const ui = await waitFor(() => screen.getByTestId("ui-language-panel"));
-    for (const code of ["en", "de", "es", "zh", "pt"]) {
+    for (const code of ["en", "de", "es", "zh", "pt", "it"]) {
       expect(ui.textContent).toContain(`languages_view.options.${code}.label`);
     }
     fireEvent.click(screen.getByTestId("reply-language"));
     const reply = await waitFor(() => screen.getByTestId("reply-language-panel"));
-    for (const code of ["auto", "en", "de", "es", "pt"]) {
+    for (const code of ["auto", "en", "de", "es", "pt", "it"]) {
       expect(reply.textContent).toContain(`languages_view.reply_options.${code}`);
+    }
+  });
+
+  it("offers Italian independently for interface, replies and recognition", async () => {
+    render(<LanguagesGroup />);
+    for (const [kind, setter] of [["ui", setUiLanguage], ["reply", setReplyLanguage], ["stt", setSttLanguage]] as const) {
+      fireEvent.click(screen.getByTestId(`${kind}-language`));
+      const panel = await waitFor(() => screen.getByTestId(`${kind}-language-panel`));
+      const option = panel.querySelector('[role="option"][data-value="it"]');
+      expect(option).not.toBeNull();
+      fireEvent.click(option!);
+      expect(setter).toHaveBeenCalledWith("it");
     }
   });
 

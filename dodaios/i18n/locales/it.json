@@ -1,0 +1,530 @@
+{
+  "brain": {
+    "cli_failure": {
+      "cause": "Il comando non è riuscito: {cause}",
+      "code": "Il comando è terminato con codice di uscita {code}.",
+      "bare": "Il comando non è riuscito."
+    },
+    "nothing_found": "Non ho trovato nulla al riguardo.",
+    "navigation_ack": "Apro {label}.",
+    "evidence_unfulfilled": "Non sono riuscito a recuperarlo: la chiamata allo strumento non è andata a buon fine. Dimmi se vuoi che riprovi.",
+    "evidence_domain_labels": {
+      "calendar": "il tuo calendario",
+      "email": "la tua posta in arrivo",
+      "tasks": "le tue attività",
+      "repos": "i tuoi repository",
+      "deployments": "le tue distribuzioni",
+      "cloud": "la fatturazione del tuo cloud",
+      "activity": "la cronologia delle tue attività"
+    },
+    "evidence_unfulfilled_domain": "Non sono riuscito a recuperare {label}: l’accesso non è andato a buon fine. Dimmi se vuoi che riprovi.",
+    "action_unfulfilled": {
+      "society_propose_change": "La routine non è stata creata. L’azione di salvataggio non è stata eseguita.",
+      "society-create-routine": "La routine non è stata creata. L’azione di salvataggio non è stata eseguita.",
+      "contact-upsert": "Non ho ancora salvato il contatto. Ripetimi i dettagli e lo aggiungerò.",
+      "wiki-ingest": "Non l’ho ancora annotato nella tua wiki. Ripetimelo e lo scriverò.",
+      "run_shell": "Non l’ho ancora fatto: il comando non è stato eseguito. Ripetimelo e lo farò subito."
+    },
+    "lang_switch_confirm_session": "Per questa sessione risponderò in italiano: non sono riuscito a salvare la scelta in modo permanente.",
+    "subagent_switch_confirm": "Fatto: dalla prossima missione il tuo sottoagente userà {p}.",
+    "subagent_switch_fail": {
+      "missing_credential": "{p} non è collegato. Configuralo prima, poi effettuerò il cambio.",
+      "other": "Non sono riuscito a impostare {p} per il sottoagente."
+    },
+    "provider_switch_confirm": "Fatto: il cervello principale ora usa {p}.",
+    "provider_switch_fail": {
+      "missing_credential": "{p} non è configurato. Aggiungi prima la sua chiave, poi effettuerò il cambio.",
+      "subagent_only": "{p} funziona solo come sottoagente, non come cervello principale.",
+      "other": "Non sono riuscito a impostare {p} per il cervello principale."
+    },
+    "cancel_confirm": "Fatto: ho fermato {n} attività in esecuzione.",
+    "cancel_none": "Non c’erano attività in esecuzione da fermare.",
+    "depth_confirm": {
+      "deep": "Ricevuto: d’ora in poi ragionerò più a fondo.",
+      "fast": "Ricevuto: d’ora in poi ragionerò più velocemente."
+    },
+    "provider_down": [
+      "Non riesco a raggiungere il mio modello linguistico. Un momento, per favore.",
+      "Il mio modello linguistico al momento non è disponibile. Riproverò tra poco.",
+      "Non posso rispondere ora: la connessione al modello non funziona. Dammi un secondo."
+    ],
+    "provider_down_cause": {
+      "missing_key": "Al momento non è impostata alcuna chiave API per il mio modello linguistico. Apri Chiavi API nella barra laterale e aggiungine una per continuare.",
+      "bad_key": "La chiave API salvata viene rifiutata: sembra non valida o scaduta. Sostituiscila in Chiavi API nella barra laterale.",
+      "account_blocked": "L’account del mio modello linguistico sta bloccando le richieste, probabilmente per credito esaurito o un limite raggiunto. Controlla l’account del fornitore.",
+      "rate_limit": "Il fornitore sta limitando le richieste perché sono troppe. Aspetta un momento e ripeti la domanda.",
+      "invalid_model": "Il fornitore non accetta il modello configurato. Controlla la selezione del modello nelle impostazioni.",
+      "context_overflow": "La richiesta è troppo grande per la finestra di contesto del modello configurato. Scegli un modello con un contesto più ampio oppure avvia una nuova chat.",
+      "local_context": "La finestra di contesto del modello locale è troppo piccola per questa richiesta. Aumentala nel server del modello e ricarica il modello; nella sezione Modelli locali usa Regola. Il registro indica la dimensione necessaria.",
+      "unreachable": "Non riesco a raggiungere il fornitore, probabilmente per un problema di rete o del servizio. Riprova tra un momento.",
+      "vision_unsupported": "Nessuno degli assistenti collegati può esaminare immagini al momento. La chiave è presente, ma la visione non è disponibile. Scegli un fornitore con supporto alle immagini in Chiavi API."
+    },
+    "mid_answer_error": "Ho eseguito i passaggi, ma si è verificato un problema mentre preparavo la risposta. Ripeti la domanda tra un momento.",
+    "action_failed": "Ho riconosciuto l’azione, ma non sono riuscito a eseguirla.",
+    "lang_switch_confirm": "Fatto: d’ora in poi risponderò in italiano.",
+    "lang_switch_confirm_auto": "Fatto: d’ora in poi userò la stessa lingua che usi tu.",
+    "ack": {
+      "final_markers": "Fatto.",
+      "generic_ack": [
+        "Va bene, un momento.",
+        "Solo un secondo.",
+        "Ci penso io, dammi un momento.",
+        "Un secondo, ci sto lavorando.",
+        "D’accordo, un attimo."
+      ],
+      "shell_ack": [
+        "Un momento, controllo.",
+        "Do un’occhiata veloce.",
+        "Controllo subito.",
+        "Dammi un secondo per controllare.",
+        "Do una rapida occhiata."
+      ],
+      "cli_service_ack": [
+        "Do un’occhiata a {service}.",
+        "Un momento, controllo {service}.",
+        "Recupero i dati da {service}.",
+        "Controllo subito {service}.",
+        "Do una rapida occhiata in {service}."
+      ],
+      "harness_ack": [
+        "Ricevuto, ci penso io.",
+        "D’accordo, me ne occupo.",
+        "Capito, ci sto lavorando.",
+        "Va bene, comincio subito.",
+        "Certo, dammi un momento."
+      ],
+      "search_topic_ack": [
+        "Va bene, cerco {topic}.",
+        "Cerco subito {topic}.",
+        "Un momento, approfondisco {topic}.",
+        "Vediamo cosa trovo su {topic}."
+      ],
+      "search_generic_ack": [
+        "Va bene, faccio una ricerca.",
+        "Recupero le informazioni.",
+        "Un momento, cerco.",
+        "Dammi un momento per raccogliere i fatti."
+      ],
+      "multi_spawn_ack": [
+        "Va bene, avvio {n} attività in parallelo.",
+        "Mi occupo contemporaneamente di queste {n} attività.",
+        "{n} attività in parallelo: ci penso io."
+      ],
+      "open_app_ack": [
+        "Va bene, apro {app}.",
+        "Un secondo, avvio {app}.",
+        "Avvio {app}."
+      ],
+      "run_skill_ack": [
+        "Va bene, eseguo {skill}.",
+        "Un momento, avvio {skill}.",
+        "Avvio subito {skill}."
+      ],
+      "gmail_read_ack": [
+        "Va bene, controllo la posta.",
+        "Un momento, apro la posta in arrivo.",
+        "Do un’occhiata alla tua posta.",
+        "Controllo la tua posta in arrivo."
+      ],
+      "calendar_ack": [
+        "Va bene, controllo il calendario.",
+        "Un momento, guardo i tuoi impegni.",
+        "Controllo i tuoi appuntamenti.",
+        "Do un’occhiata al calendario."
+      ],
+      "remember_ack": [
+        "Va bene, lo annoto.",
+        "Ricevuto, lo ricorderò.",
+        "Lo scrivo."
+      ],
+      "verify_ack": [
+        "Va bene, controllo.",
+        "Un momento, faccio una prova.",
+        "Lo verifico."
+      ],
+      "server_ack": [
+        "Va bene, avvio il server.",
+        "Un momento, metto in funzione il server.",
+        "Avvio il server."
+      ],
+      "set_config_ack": [
+        "Va bene, aggiorno.",
+        "Un momento, lo modifico.",
+        "Lo regolo subito."
+      ]
+    },
+    "action_honesty": {
+      "action_not_started_phrases": "Non ho avviato alcuna azione per questa richiesta, quindi non ho ancora un risultato. Ripeti la richiesta."
+    },
+    "local_action_gate": {
+      "unsupported_response": "Non posso ancora farlo: non ho uno strumento registrato per questa azione. Indicami quale MCP o integrazione deve gestirla e potrò imparare."
+    }
+  },
+  "tool_loop": {
+    "anti_silence": "Non posso farlo al momento: manca lo strumento adatto.",
+    "meta_debug_ack": "Capito. Che cosa avrebbe dovuto essere diverso, esattamente?"
+  },
+  "output_filter": {
+    "fallback": "Si è verificato un errore."
+  },
+  "speech": {
+    "brain_unavailable": "Non riesco a raggiungere nessuno dei miei modelli linguistici. Controlla se i fornitori hanno ancora credito.",
+    "stt_unavailable": "Non ho capito. Puoi ripeterlo?",
+    "realtime_unavailable": "La connessione vocale in tempo reale non è disponibile. Passo questa sessione alla modalità vocale classica.",
+    "timeout_tool_stall": "Non ho ottenuto una risposta in tempo: uno strumento che stavo aspettando non ha risposto.",
+    "timeout_no_answer": "Non sono riuscito a scoprirlo al momento."
+  },
+  "missions": {
+    "announcer": {
+      "failed_prefix": "La missione non è riuscita.",
+      "reason_label": "Motivo",
+      "cancelled": "Missione annullata.",
+      "timed_out": "La missione ha superato il tempo limite."
+    },
+    "readback": {
+      "failure_reason": {
+        "critic_loop_exhausted": "Tre tentativi non sono bastati.",
+        "critic_rejected": "La revisione non è stata superata.",
+        "task_error": "L’esecutore si è interrotto.",
+        "attempts_timed_out": "È stato raggiunto il tempo limite.",
+        "review_time_budget_exhausted": "È stato raggiunto il tempo limite per la revisione; è disponibile un risultato parziale.",
+        "budget_exceeded": "È stato raggiunto il limite di spesa.",
+        "decompose_failed": "Non sono riuscito a suddividere l’attività.",
+        "crash_recovery": "È stata ripulita una vecchia missione.",
+        "interrupted": "Una missione in esecuzione è stata interrotta; i risultati parziali sono disponibili.",
+        "empty_diff": "Non è stato scritto alcun file.",
+        "critic_unavailable": "Il revisore si è arrestato; il lavoro è conservato nella copia di lavoro.",
+        "worktree_setup_failed": "Non sono riuscito a creare un’area di lavoro.",
+        "checkpoint_missing": "Mancano i progressi salvati, quindi non posso continuare.",
+        "git_missing": "{agents} richiedono che git sia installato e presente nel PATH.",
+        "git_not_a_repository": "{agents} richiedono una copia di lavoro git: usa il programma di installazione basato su git, non un archivio ZIP.",
+        "source_checkout_unavailable": "Questa attività di {agent} richiede una copia del sorgente, che non è disponibile in questa installazione.",
+        "provider_auth": "L’accesso al fornitore AI non è valido oppure è scaduto.",
+        "provider_quota": "La quota del fornitore AI è esaurita.",
+        "provider_unreachable": "Il fornitore AI al momento non è raggiungibile.",
+        "worker_timeout": "L’esecutore ha raggiunto il tempo limite."
+      },
+      "empty_summary": "Attività completata.",
+      "unknown_reason": "errore sconosciuto",
+      "no_tool_call": "Non sono riuscito a farlo: non è stata effettuata alcuna chiamata allo strumento.",
+      "capacity_wait_phrases": {
+        "provider_quota": "La capacità disponibile di {provider} è momentaneamente esaurita.",
+        "provider_auth": "L’accesso a {provider} è scaduto.",
+        "provider_unavailable": "{provider} al momento non è utilizzabile.",
+        "paid_cap_reached": "È stato raggiunto il limite di spesa di questa missione per {provider}.",
+        "paid_daily_cap_reached": "È stato raggiunto il limite giornaliero per l’uso automatico di {provider}.",
+        "paid_consent_revoked": "L’uso automatico di {provider} è stato disattivato.",
+        "saved": "I progressi ottenuti finora sono stati salvati.",
+        "progress": "{done} passaggi completati su {total}, {open} ancora aperti.",
+        "progress_single": "L’attività è ancora aperta.",
+        "file": "1 file salvato.",
+        "files": "{files} file salvati.",
+        "wait": "La missione è in attesa che torni disponibile la capacità necessaria.",
+        "wait_auth": "La missione è in attesa che tu acceda di nuovo.",
+        "paid": "Le API a pagamento saranno usate solo con la tua approvazione esplicita nella sezione Artefatti."
+      },
+      "provider_fallback_name": "fornitore AI",
+      "default_target": "questa azione"
+    },
+    "deliverable": {
+      "deliverable_templates": {
+        "one": "Fatto. Ho salvato {name} come artefatto.",
+        "few": "Fatto. Ho salvato {count} file come artefatti: {joined}.",
+        "many": "Fatto. Ho salvato {count} file come artefatti."
+      },
+      "mission_completed_phrases": "Missione completata.",
+      "delivered_templates": {
+        "one": "Fatto. Ho salvato {name} come artefatto.",
+        "few": "Fatto. Ho salvato {count} file come artefatti: {joined}.",
+        "many": "Fatto. Ho salvato {count} file come artefatti."
+      }
+    }
+  },
+  "realtime": {
+    "local_output_failure": "Non sono riuscito a riprodurlo: l’altoparlante non è più disponibile.",
+    "output_language_failure": "Non sono riuscito a produrre una risposta sicura in italiano.",
+    "handshake_failure": {
+      "timeout": "La connessione vocale non si è avviata in tempo, quindi mi sono fermato.",
+      "unavailable": "Non sono riuscito a stabilire la connessione vocale.",
+      "rate_limited": "La connessione vocale al momento è occupata. Riprova tra un momento.",
+      "no_credits": "Il credito per la connessione vocale è esaurito. Ricaricalo presso il fornitore per riprendere.",
+      "not_offered": "Il tuo account al momento non offre questa connessione vocale. Controlla il piano oppure seleziona un altro account.",
+      "dropped": "La connessione vocale si è interrotta."
+    },
+    "public_fact_uncertainty": "Non sono riuscito a verificarlo in modo affidabile con una fonte pubblica.",
+    "delegate_bridge_texts": [
+      "Ci sto ancora lavorando.",
+      "Un momento, ci siamo quasi.",
+      "Ci sto lavorando, dammi un momento.",
+      "Un attimo, serve ancora un po’ di tempo."
+    ],
+    "interrupt_ack_texts": [
+      "Va bene, mi sono fermato.",
+      "D’accordo, annullo.",
+      "Va bene, lascio perdere."
+    ],
+    "local_voice": {
+      "refusals": {
+        "not_set_up": "La voce locale non è ancora configurata su questa macchina. Avvia la configurazione dalla scheda Voce locale nelle Impostazioni.",
+        "loading": "La voce locale si sta ancora caricando ({percent} %). La scheda Voce locale nelle Impostazioni mostra i progressi.",
+        "failed": "La voce locale non si è avviata. La scheda Voce locale nelle Impostazioni mostra il motivo."
+      }
+    }
+  },
+  "self_mod": {
+    "short_error": {
+      "pre_validate": "il controllo preliminare ha rifiutato il valore",
+      "reload": "la prova di ricaricamento ha rifiutato il nuovo valore",
+      "rollback": "anche il ripristino non è riuscito: occorre ripristinare manualmente",
+      "unexpected": "un errore imprevisto durante la modifica dell’impostazione"
+    }
+  },
+  "voice": {
+    "action": {
+      "phrases": {
+        "cu_done": "Fatto.",
+        "lookup_unspoken": "Ho le informazioni, ma non sono riuscito a leggerle ad alta voce. Vuoi che riprovi?",
+        "lookup_empty": "Non ho trovato nulla al riguardo.",
+        "cu_done_detail": "Fatto. {detail}",
+        "cu_failed": "L’azione sullo schermo non è riuscita.",
+        "cu_failed_reason": "L’azione sullo schermo non è riuscita: {error}",
+        "cu_crashed": "Si è verificato un problema durante l’azione sullo schermo.",
+        "cu_exit_gave_up": "Ho provato sullo schermo, ma non sono riuscito a completare l’azione.",
+        "cu_exit_no_view": "Non vedevo bene lo schermo, quindi mi sono fermato.",
+        "cu_exit_confused": "Non ho ottenuto una risposta valida dal controllo dello schermo, quindi mi sono fermato.",
+        "cu_exit_no_provider": "Al momento non ho un modello AI in grado di vedere lo schermo. Controlla le chiavi API o il credito nelle impostazioni.",
+        "cu_exit_too_many_steps": "L’operazione sullo schermo richiedeva troppi passaggi, quindi mi sono fermato.",
+        "cu_exit_action_failed": "Un’azione sullo schermo non è riuscita, quindi mi sono fermato.",
+        "cu_exit_cancelled": "L’azione sullo schermo è stata annullata.",
+        "cu_exit_needs_elevation": "Ho atteso la conferma dell’amministratore, ma non è arrivata, quindi mi sono fermato.",
+        "cu_blocked_permission": "Mi sono dovuto fermare. {sentence}",
+        "cu_blocked_restart_hint": "Mi sono dovuto fermare: il permesso {permission} potrebbe avere effetto solo dopo aver chiuso e riaperto Dodaios. Riapri l’app, poi riprova.",
+        "cu_blocked_unavailable": "Mi sono dovuto fermare: Dodaios non può richiedere il permesso {permission} in questa sessione.",
+        "cu_blocked_waiting": "Mi sono dovuto fermare perché macOS sta chiedendo il permesso {permission}. Rispondi alla finestra di dialogo, poi riprova.",
+        "cu_blocked_dialog": "Mi sono dovuto fermare perché è aperta una finestra di sistema di macOS. Rispondi personalmente, poi riprova.",
+        "cu_blocked_restricted": "Mi sono dovuto fermare: un permesso necessario è limitato su questo Mac da un profilo o dal controllo parentale. Non è possibile modificarlo dall’app.",
+        "cu_blocked_generic": "Mi sono dovuto fermare perché macOS richiede un permesso per Dodaios. Concedilo in Impostazioni di Sistema, sotto Privacy e sicurezza, poi riprova.",
+        "cu_timeout": "L’azione sullo schermo ha impiegato troppo tempo, oltre {secs} secondi, ed è stata annullata.",
+        "open_app_launched": "Avviata: {app}",
+        "open_app_launched_raised": "Avviata e portata in primo piano: {app}",
+        "open_app_not_found": "L’applicazione “{app}” non è stata trovata.",
+        "cu_not_wired": "Il controllo dello schermo è disattivato su questa macchina. Attivalo nella configurazione con computer_use.enabled, poi riavviami una volta.",
+        "cu_dispatch_ack": "Ci penso io. Me ne occuperò sullo schermo e ti avviserò quando avrò finito.",
+        "cu_awaiting_elevation": "Servono i diritti di amministratore. Conferma la richiesta di sicurezza, poi continuerò.",
+        "cu_awaiting_human": "Questo passaggio richiede il tuo intervento: accedi o completa la verifica, poi continuerò.",
+        "cost_cooldown": "È attiva la pausa per i costi: il budget giornaliero è esaurito. Le nuove richieste riprenderanno al termine della pausa.",
+        "task_budget": "Il budget delle attività per questa conversazione è stato superato.",
+        "daily_budget": "Il budget giornaliero è stato superato.",
+        "tool_failed": "{tool} non è riuscito.",
+        "action_failed_generic": "Non ha funzionato.",
+        "stale_repeat_clarify": "Ho appena risposto a questa domanda. Che cosa vuoi sapere esattamente?",
+        "action_failed_reason": "Non ha funzionato: {reason}",
+        "delegate_no_brain": "Nessuno dei miei modelli ha risposto alla richiesta.",
+        "delegate_no_result": "Non ho ricevuto un risultato verificabile per questa richiesta.",
+        "delegate_failed_internal": "Si è verificato un problema interno, quindi mi sono fermato in sicurezza.",
+        "actions_unavailable": "Al momento non posso eseguire azioni, ma possiamo continuare a parlare.",
+        "actions_not_requested": "Non ho eseguito nulla. Dimmi che cosa vuoi fare.",
+        "skill_loaded_not_run": "Ho caricato le istruzioni, ma non le ho ancora eseguite.",
+        "action_timeout": "Ci è voluto troppo tempo, quindi mi sono fermato.",
+        "spawn_failed_generic": "Non sono riuscito ad avviare l’assistente in background.",
+        "spawn_failed_reason": "Non sono riuscito ad avviare l’assistente in background: {reason}",
+        "spawn_no_runner": "Non posso avviare l’attività al momento. Riavviami.",
+        "artifact_building": "Sto creando “{title}” in background e ti avviserò quando sarà pronto.",
+        "artifact_revising": "Sto rivedendo “{title}” in background e ti avviserò quando sarà pronto.",
+        "workflow_trigger_failed": "La routine {name} non è riuscita ad avviarsi. Riproverò al prossimo orario previsto.",
+        "workflow_scheduler_stalled": "Le routine pianificate al momento non sono in esecuzione. Continuerò a riprovare.",
+        "workflow_step_failed": "La routine {name} si è bloccata a {step}, quindi l’ho fermata.",
+        "workflow_step_failed_reason": "La routine {name} si è bloccata a {step}, quindi l’ho fermata. Motivo: {reason}",
+        "workflow_step_ordinal": "passaggio {n}",
+        "workflow_unnamed": "senza nome",
+        "wiki_saving": "Lo scrivo subito nella wiki.",
+        "wiki_saved": "Salvato nella wiki.",
+        "wiki_saved_detail": "Salvato nella wiki: {detail}.",
+        "wiki_save_failed": "Il salvataggio nella wiki non è riuscito.",
+        "wiki_save_failed_reason": "Il salvataggio nella wiki non è riuscito: {reason}",
+        "wiki_nothing_to_save": "Non sono sicuro di che cosa scrivere nella wiki. Ripetilo includendo il contenuto.",
+        "ide_prompt_sent": "Inviato a {terminal}.",
+        "ide_prompt_sent_files": "Inviato a {terminal}, con {count} file allegati.",
+        "ide_prompt_sent_one_file": "Inviato a {terminal}, con il file {file}.",
+        "ide_terminal_not_running": "{terminal} al momento non è in esecuzione ({status}). Non ho inviato nulla.",
+        "ide_prompt_sent_many": "Inviato a {names}.",
+        "ide_prompt_sent_partial": "Inviato a {names}. Non sono riuscito a raggiungere {failed}.",
+        "ide_prompt_sent_nobody": "Non sono riuscito a raggiungere {failed}, quindi non è in esecuzione nulla.",
+        "ide_prompt_typed_not_started": "Su {names} il testo è soltanto nella casella di inserimento.",
+        "ide_names_pair": "{head} e {last}",
+        "ide_terminals_spawned_one": "{names} è aperto.",
+        "ide_terminals_spawned": "{count} nuovi terminali: {names}.",
+        "ide_terminals_briefing_queued": "Consegnerò loro l’attività non appena i terminali saranno pronti.",
+        "ide_terminals_closed": "Ho chiuso {count} terminali: {names}.",
+        "ide_terminals_none_to_close": "Non ci sono terminali aperti corrispondenti.",
+        "ide_terminals_spawned_capped": "È stato possibile aprirne solo {count}: {names}.",
+        "ide_terminals_open_failed": "Non sono riuscito ad aprire un terminale.",
+        "ide_terminal_kind_unclear": "Ho sentito {spoken}. Intendevi {first} oppure {second}?",
+        "ide_terminal_kind_unclear_one": "Ho sentito {spoken}. Intendevi {first}?",
+        "ide_terminal_kind_unknown": "Non esiste un tipo di terminale {name}. Disponibili: {available}.",
+        "ide_terminals_opened_workspace": "Ho aperto {folder}: {names}.",
+        "ide_terminal_clarify_one": "Ho sentito {spoken}. Intendevi {name}?",
+        "ide_terminal_clarify_many": "Ho sentito {spoken}. Intendevi {names}?",
+        "ide_prompt_already_delivered": "{name} ha ricevuto l’attività alle {time}. Non la invierò due volte.",
+        "join_or": " oppure ",
+        "join_and": " e ",
+        "ide_terminal_clarify_also": "Ho sentito anche {spoken}. Intendevi {names}?",
+        "ide_terminal_who_else": "Ho identificato solo {names}. Chi altro intendevi?",
+        "ide_terminals_nowhere": "Non è aperta alcuna area di lavoro e non ce ne sono di recenti. Scegli una cartella nell’IDE agentico."
+      },
+      "permission_cause_templates": "Al momento Dodaios non dispone del permesso {name}.",
+      "permission_cause_names": {
+        "microphone": "Microfono",
+        "accessibility": "Accessibilità",
+        "screen_recording": "Registrazione schermo",
+        "input_monitoring": "Monitoraggio input",
+        "automation": "Automazione",
+        "event_posting": "Accessibilità"
+      }
+    },
+    "tool_confirmation": {
+      "tool_questions": {
+        "gmail": "Vuoi davvero che invii l’email? Rispondi sì o no.",
+        "gmail_rest": "Vuoi davvero che invii l’email? Rispondi sì o no.",
+        "call-contact": "Vuoi davvero che effettui la chiamata? Rispondi sì o no."
+      },
+      "generic_question": "Vuoi davvero che lo faccia? Rispondi sì o no.",
+      "impact_questions": {
+        "destructive": "Attenzione: questo comando eliminerebbe qualcosa ({commands}). Vuoi davvero che lo esegua? Rispondi sì o no.",
+        "modify": "Questo comando modificherebbe qualcosa sul computer ({commands}). Vuoi che lo esegua? Rispondi sì o no.",
+        "read": "Questo comando legge soltanto dati ({commands}). Vuoi che lo esegua? Rispondi sì o no."
+      },
+      "outcome": {
+        "done": "Fatto.",
+        "vetoed": "Va bene, lascio perdere.",
+        "timeout": "Non ho sentito una risposta, lascio perdere.",
+        "failed": "Non ha funzionato.",
+        "unclear": "Rispondi soltanto sì o no.",
+        "unavailable": "Serve la tua approvazione e qui nessuno può darla. Quindi non l’ho fatto."
+      }
+    },
+    "echo_confirmation": {
+      "value_words": {
+        "on": "attivo",
+        "off": "disattivo",
+        "empty": "vuoto"
+      },
+      "echo_templates": "Ricevuto: {label} passa da {old} a {new}. Confermi?",
+      "echo_templates_sensitive": "Ricevuto: {label} verrà impostato su un nuovo valore. Confermi?",
+      "outcome_words": {
+        "new_value": "il nuovo valore",
+        "old_value": "il valore precedente",
+        "validation_failed": "convalida non riuscita",
+        "unknown_error": "errore sconosciuto"
+      },
+      "outcome_templates": {
+        "safe_applied": "Ricevuto: {label} ora è {new}.",
+        "applied": "Fatto: {label} ora è {new}.",
+        "applied_restart": "Fatto: {label} ora è {new}. Riavvia Dodaios per applicare la modifica.",
+        "validate_failed": "Non è possibile: {err}. L’impostazione resta {old}.",
+        "rollback": "Non sono riuscito a salvare; ho ripristinato lo stato precedente. {err}",
+        "vetoed": "Va bene, lascio perdere.",
+        "timeout": "Non ho sentito una risposta, annullo. L’impostazione resta {old}."
+      }
+    },
+    "parked_results": {
+      "anchor_pools": [
+        "Riguardo alla tua richiesta precedente, {topic}: {result}",
+        "Tornando a {topic}: {result}",
+        "Ecco il risultato su {topic}: {result}"
+      ],
+      "anchor_pools_no_topic": [
+        "Riguardo alla tua richiesta precedente: {result}",
+        "Tornando a ciò che avevi chiesto: {result}"
+      ]
+    },
+    "config_readback": {
+      "phrases": {
+        "applied": "Fatto: {label} ora è {value}.",
+        "applied_restart": "Fatto: {label} ora è {value}. Riavvia Dodaios una volta per applicare la modifica.",
+        "refused": "Non lo modificherò tramite voce: fallo esplicitamente nelle Impostazioni.",
+        "unknown_setting": "Non è un’impostazione che posso modificare.",
+        "invalid_value": "Non è possibile: l’impostazione resta invariata.",
+        "rollback": "Non sono riuscito a salvare; ho ripristinato lo stato precedente."
+      }
+    }
+  },
+  "tools": {
+    "delegate": {
+      "ack": "{name} se ne sta occupando, ti avviserò.",
+      "quiet_ack": "{name} se ne sta occupando.",
+      "error_ack": "{name} se ne sta occupando; segnalerò eventuali impedimenti.",
+      "queued": "L’attività per {name} è stata registrata; l’avvio non è ancora confermato.",
+      "no_agent": "Non conosco un agente chiamato {target}.",
+      "ask_agent": "Intendevi {names}?",
+      "or": " oppure ",
+      "available": "Agenti disponibili: {names}.",
+      "no_fit": "Nessuno dei tuoi agenti è adatto a questa attività.",
+      "refused": "{name} non può occuparsene ora: {reason}.",
+      "not_ready": "Gli agenti non sono ancora pronti.",
+      "status_idle": "{name} al momento non ha attività da svolgere.",
+      "status_working": "{name} sta lavorando a: {text}",
+      "status_last": "{name}: ultimo evento {kind}, {text}",
+      "roster": "I tuoi agenti: {names}.",
+      "empty_roster": "Non hai ancora agenti nella squadra."
+    },
+    "dispatch_review": {
+      "voice_holding_phrases": "Dammi un momento per lavorare a questa attività.",
+      "voice_outcome_templates": {
+        "success": "Fatto: {summary}",
+        "cap_fired": "Ecco il miglior risultato ottenuto, con una riserva: {top_issue}",
+        "fail": "Così non funziona: {summary}",
+        "precheck_fail": "L’attività è troppo breve o poco chiara. Riprova fornendo più contesto."
+      },
+      "voice_fallback_fillers": {
+        "success": "completato",
+        "cap_fired": "alcuni piccoli problemi ancora aperti",
+        "fail": "un difetto architetturale"
+      }
+    }
+  },
+  "telephony": {
+    "default_greetings": "Ciao, come posso aiutarti?",
+    "named_greetings": "Sono {name}. Come posso aiutarti?",
+    "fallback_phrases": "Non ho capito. Puoi ripeterlo?"
+  },
+  "cu": {
+    "indicator": {
+      "esc_hints": "Esc per annullare"
+    }
+  },
+  "clis": {
+    "capability": {
+      "refusal_hints": {
+        "installed": " {name} è installato, ma non è ancora collegato. Dimmi quando vuoi configurarlo.",
+        "catalog": " Il catalogo CLI offre {name} per questa attività: posso aiutarti a configurarlo."
+      }
+    }
+  },
+  "ui": {
+    "desktop": {
+      "conductor_news_phrases": {
+        "failing": "L’attività pianificata {name} ha iniziato a fallire.",
+        "recovered": "L’attività pianificata {name} funziona di nuovo."
+      }
+    }
+  },
+  "harness": {
+    "step_progress": "Completato il passaggio {done} di {total}."
+  },
+  "self_build": {
+    "proposal": {
+      "memory": "Ricorda le correzioni che ripeti: \"{request}\".",
+      "skill": "Una competenza per ciò che continui a chiedere: \"{request}\".",
+      "routine": "Una routine che lo faccia prima che tu lo chieda: \"{request}\".",
+      "agent": "Un agente specializzato per il lavoro dietro \"{request}\"."
+    },
+    "case": {
+      "counted": "Richiesto {count} volte in {days} giorni diversi."
+    },
+    "code": {
+      "title": "Correggi il problema #{number} in {repo}: {title}",
+      "case": "Il problema #{number} in {repo} sembra adatto a un agente autonomo ({signal}). Un agente di programmazione potrebbe occuparsene usando il tuo abbonamento mentre sei assente, in una propria copia di lavoro e su un ramo separato, ed eseguire i test ({tests}). Il risultato è una richiesta di integrazione che chiude il problema, in bozza salvo che tu abbia autorizzato l’integrazione automatica per questo repository. {url}"
+    }
+  }
+}

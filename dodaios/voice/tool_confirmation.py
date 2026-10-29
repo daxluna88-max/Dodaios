@@ -22,8 +22,9 @@ from __future__ import annotations
 
 from dodaios.core.turn_language import DEFAULT_LOCALE, normalize_language_tag
 from dodaios.i18n import catalog as i18n_catalog
+from dodaios.i18n.locales import SUPPORTED_LOCALES
 
-_PHRASE_LANGS: frozenset[str] = frozenset({"de", "en", "es", "pt"})
+_PHRASE_LANGS: frozenset[str] = frozenset(SUPPORTED_LOCALES)
 
 
 def _phrase_lang(language: str | None) -> str:
