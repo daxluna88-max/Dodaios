@@ -58,7 +58,7 @@ export interface MissionDispatched extends BasePayload {
   prompt: string;
   parent_mission_id: string | null;
   priority: number;
-  language: "de" | "en" | "es" | "pt";
+  language: "de" | "en" | "es" | "pt" | "it";
 }
 
 export interface MissionPlanReady extends BasePayload {

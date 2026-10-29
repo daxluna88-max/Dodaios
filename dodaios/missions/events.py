@@ -22,7 +22,7 @@ from .ids import uuid7_str
 # language (``SUPPORTED_REPLY_LANGUAGES`` in dodaios/brain/manager.py minus
 # "auto"), mirrored in frontend/src/types/missions.ts. Parity is guarded by
 # tests/missions/test_mission_language_pt.py and test_mission_approved_parity.py.
-MissionLanguage = Literal["de", "en", "es", "pt"]
+MissionLanguage = Literal["de", "en", "es", "pt", "it"]
 MISSION_LANGUAGES: Final[tuple[str, ...]] = SUPPORTED_LOCALES
 
 
