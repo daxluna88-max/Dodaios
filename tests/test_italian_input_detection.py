@@ -14,13 +14,18 @@ class ItalianInputDetectionTests(unittest.TestCase):
             "Voglio scrivere una email al mio capo",
             "Cosa fai oggi?",
             "Perché non funziona?",
+            "A breve lavoro con te",
+            "Presto lavoreremo insieme",
+            "A presto",
         ):
             with self.subTest(text=text):
                 self.assertEqual(tl.resolve_output_language("auto", "unknown", text, default="en"), "it")
 
     def test_other_supported_languages_are_unchanged(self):
         for text, code in (("Hola, ¿cómo estás?", "es"), ("Olá, tudo bem?", "pt"),
-                           ("Wie geht es dir heute?", "de"), ("What is the weather today?", "en")):
+                           ("Wie geht es dir heute?", "de"), ("What is the weather today?", "en"),
+                           ("Quiero la casa con el perro", "es"), ("Dime la hora de hoy", "es"),
+                           ("Hola, ¿puedes ayudarme con una cosa?", "es")):
             with self.subTest(text=text):
                 self.assertEqual(tl.resolve_output_language("auto", "unknown", text, default="en"), code)
 
