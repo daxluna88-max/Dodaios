@@ -2324,6 +2324,28 @@ def _turn_phrase_language(owner: object, user_text: str) -> str:
     )
 
 
+def _current_time_label(now: Any) -> str:
+    """The per-turn "current date and time" line, with the zone it is read in.
+
+    An unlabelled wall-clock reading was taken for the user's local time: a
+    server running on UTC answered "21:02 in Rome" at 22:02 CET. The zone name
+    and the UTC offset ride along, so the model converts instead of guessing.
+    ``now`` must be timezone-aware (``datetime.now().astimezone()``). The weekday
+    is a fixed English tuple so the label reads the same on every OS (a
+    ``strftime('%A')`` would leak the machine's locale into the LLM context).
+    """
+    weekdays_en = (
+        "Monday", "Tuesday", "Wednesday", "Thursday",
+        "Friday", "Saturday", "Sunday",
+    )
+    offset = now.strftime("%z") or "+0000"
+    return (
+        f"[Current date and time: {weekdays_en[now.weekday()]}, "
+        f"{now.strftime('%Y-%m-%d %H:%M')} {now.tzname() or 'local time'} "
+        f"(UTC{offset[:3]}:{offset[3:5]})]"
+    )
+
+
 class BrainManager:
     """Top-level orchestrator with intent router and smart fallback."""
 
@@ -4206,16 +4228,10 @@ class BrainManager:
         # tuple by ``weekday()`` (0=Monday) so the label reads the same English on
         # every OS. The date is ISO-8601 (unambiguous internationally, unlike a
         # dotted d.m.Y); wall-clock time stays local (``datetime.now``).
-        _weekdays_en = (
-            "Monday", "Tuesday", "Wednesday", "Thursday",
-            "Friday", "Saturday", "Sunday",
-        )
-        _now = datetime.now()
         parts: list[str] = [
             # Date/time belongs per-turn, never in the cached prefix (also fixes
             # the missing BUG-005 date injection).
-            f"[Current date and time: {_weekdays_en[_now.weekday()]}, "
-            f"{_now.strftime('%Y-%m-%d %H:%M')}]"
+            _current_time_label(datetime.now().astimezone())
         ]
         private = _TURN_OVERRIDE.get()
         if private is not None and private.tool_context.get("tool_origin") == "society":
