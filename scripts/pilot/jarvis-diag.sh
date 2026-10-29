@@ -82,7 +82,7 @@ run() {
   # 6. Codex login
   if command -v codex >/dev/null 2>&1; then
     ok "codex: $(timeout 8 codex --version 2>/dev/null | head -1)"
-    cs=$(timeout 8 codex login status 2>/dev/null | head -1)
+    cs=$(timeout 8 codex login status 2>&1 | head -1)
     case "$cs" in *"Logged in"*) ok "codex: login recognized";; *) warn "codex: login not recognized";; esac
   else
     warn "codex: not installed (npm config set prefix ~/.local; npm i -g @openai/codex)"
@@ -92,7 +92,7 @@ run() {
   cnt() { get "/api/agent-chat/sessions?limit=50&surface=$1" | python3 -c 'import sys,json
 try: print(len(json.load(sys.stdin)["sessions"]))
 except Exception: print("?")'; }
-  echo "INFO  agent-chat sessions: agent=$(cnt agent) society=$(cnt society) chat=$(cnt chat)"
+  echo "INFO  agent-chat sessions: jarvis=$(cnt jarvis) agent=$(cnt agent) society=$(cnt society)"
 
   # 8. current voice + telegram state (history counts are labelled as history)
   vr=$(get /api/voice/status | jq_ ready)
