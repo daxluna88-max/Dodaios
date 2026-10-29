@@ -3195,6 +3195,10 @@
       "self_build": "Selbstbau"
     },
     "languages_group_title": "Sprachen",
+    "privacy_group_title": "Datenschutz",
+    "personal_context_title": "Mein Profil und Gedächtnis an Cloud-Modelle senden",
+    "personal_context_description": "An: Dein Profil, Gedächtnis, Personen und Kontakte werden an den Modellanbieter mitgesendet. Aus: Sie bleiben auf diesem Gerät und der Assistent weiß weniger über dich. Deine Nachrichten und alles, was er lesen soll, werden weiterhin gesendet. Gilt ab der nächsten Nachricht.",
+    "personal_context_error": "Die Einstellung konnte nicht gespeichert werden. Versuche es erneut.",
     "sections": {
       "voice": "Stimme"
     },

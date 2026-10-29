@@ -1612,6 +1612,12 @@ class BrainConfig(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     primary: str = "claude-api"
+    # Privacy switch (``[brain] personal_context_to_cloud``). When False the
+    # system prompt omits the personal blocks — user profile, learned notebook,
+    # people, contacts, identity card, core memory, per-turn wiki snippets and
+    # dated plans — so none of them leave the machine inside a request to a model
+    # provider. Turn text, history and tool results are not affected. Default True keeps today's behaviour.
+    personal_context_to_cloud: bool = True
     # For deep/code intents an API-key provider can be preferred.
     deep_brain: str | None = None
     routing_provider: str = "claude-api"

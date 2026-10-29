@@ -3195,6 +3195,10 @@
       "self_build": "自主构建"
     },
     "languages_group_title": "语言",
+    "privacy_group_title": "隐私",
+    "personal_context_title": "将我的个人资料和记忆发送给云端模型",
+    "personal_context_description": "开启：你的个人资料、记忆、人物和联系人会包含在发送给模型提供商的内容中。关闭：它们保留在本机，助手对你的了解会减少。你的消息以及你让它读取的内容仍会发送。从下一条消息起生效。",
+    "personal_context_error": "无法保存该设置，请重试。",
     "sections": {
       "voice": "语音"
     },

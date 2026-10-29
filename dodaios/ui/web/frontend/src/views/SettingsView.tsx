@@ -4,6 +4,7 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { OverlayTaskbarGroup } from "@/views/settings/OverlayTaskbarGroup";
 import { LanguagesGroup } from "@/views/settings/LanguagesGroup";
+import { PrivacyGroup } from "@/views/settings/PrivacyGroup";
 import { MusicGroup } from "@/views/settings/MusicGroup";
 import { AppSettingsGroup } from "@/views/settings/AppSettingsGroup";
 import { RealtimeVoiceGroup } from "@/views/settings/RealtimeVoiceGroup";
@@ -133,6 +134,7 @@ function VoiceSettingsGroup() {
 /** The groups in page order. */
 const SECTIONS: readonly { id: string; render: () => React.ReactNode }[] = [
   { id: "languages", render: () => <LanguagesGroup /> },
+  { id: "privacy", render: () => <PrivacyGroup /> },
   { id: "app", render: () => <AppSettingsGroup><AutopilotToastsRow /></AppSettingsGroup> },
   { id: "voice", render: () => <VoiceSettingsGroup /> },
   { id: "wake-word", render: () => <WakeWordPanel /> },

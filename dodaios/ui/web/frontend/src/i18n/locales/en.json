@@ -3195,6 +3195,10 @@
       "self_build": "Self-building"
     },
     "languages_group_title": "Languages",
+    "privacy_group_title": "Privacy",
+    "personal_context_title": "Send my profile and memory to cloud models",
+    "personal_context_description": "On: your profile, memory, people and contacts are included in what is sent to the model provider. Off: they stay on this machine and the assistant knows less about you. Your messages and what you ask it to read are still sent. Applies from the next message.",
+    "personal_context_error": "Could not save the setting. Try again.",
     "sections": {
       "voice": "Voice"
     },

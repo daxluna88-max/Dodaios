@@ -2346,6 +2346,18 @@ def _current_time_label(now: Any) -> str:
     )
 
 
+def _personal_context_allowed(config: Any) -> bool:
+    """Whether the personal blocks may go into the system prompt.
+
+    ``[brain] personal_context_to_cloud = false`` keeps the profile, learned
+    notebook, people, contacts, identity card, core memory, the per-turn wiki
+    snippets and the dated plans out of every request. It does not look at the provider: a fallback may hand the same
+    prompt to a cloud model, so the switch is applied before the chain starts.
+    """
+    brain = getattr(config, "brain", None)
+    return bool(getattr(brain, "personal_context_to_cloud", True))
+
+
 class BrainManager:
     """Top-level orchestrator with intent router and smart fallback."""
 
@@ -3926,7 +3938,8 @@ class BrainManager:
         except Exception:  # noqa: BLE001
             pass
 
-        if self._user_profile is not None:
+        _personal_ok = _personal_context_allowed(getattr(self, "_config", None))
+        if _personal_ok and self._user_profile is not None:
             try:
                 parts.append(self._user_profile.render_for_prompt())
             except Exception:  # noqa: BLE001
@@ -3938,13 +3951,13 @@ class BrainManager:
         try:
             from dodaios.memory.learning.notebook import snapshot_block
 
-            learned_block = snapshot_block()
+            learned_block = snapshot_block() if _personal_ok else ""
             if learned_block:
                 parts.append(learned_block)
         except Exception:  # noqa: BLE001 — a notebook fault never breaks a prompt build
             log.debug("learned notebook block unavailable", exc_info=True)
 
-        if self._people is not None:
+        if _personal_ok and self._people is not None:
             try:
                 people_block = self._people.render_for_prompt()
                 if people_block:
@@ -3958,7 +3971,7 @@ class BrainManager:
         # book is empty — either way no block is injected. Defensive try/except
         # so a store error never crashes the system-prompt build (AP-9-adjacent);
         # ``getattr`` guard tolerates __init__-bypassing tests (see _tools above).
-        _contacts = getattr(self, "_contacts", None)
+        _contacts = getattr(self, "_contacts", None) if _personal_ok else None
         if _contacts is not None:
             try:
                 contacts_block = _contacts.render_for_prompt(max_chars=8_000)
@@ -3978,13 +3991,15 @@ class BrainManager:
         try:
             from dodaios.brain.identity_card import identity_card_block
 
-            _identity_block = identity_card_block(getattr(self, "_config", None))
+            _identity_block = (
+                identity_card_block(getattr(self, "_config", None)) if _personal_ok else ""
+            )
             if _identity_block:
                 parts.append(_identity_block)
         except Exception:  # noqa: BLE001
             pass
 
-        if self._core_memory is not None:
+        if _personal_ok and self._core_memory is not None:
             # Mandatory: re-read BEFORE rendering. Otherwise the LLM only sees
             # facts that existed at init time — UI additions and remember-tool
             # writes from this process are in the file but not in the cache.
@@ -4105,7 +4120,11 @@ class BrainManager:
         # = no injection (no-op path, search returned nothing, or timed out).
         # Wave 2 (omni-latency): wiki context also moves to the per-turn user
         # message in cache-optimized mode (keeps the cached system prefix stable).
-        if self._wiki_context_suffix and not self._cache_optimized():
+        if (
+            self._wiki_context_suffix
+            and not self._cache_optimized()
+            and _personal_context_allowed(getattr(self, "_config", None))
+        ):
             parts.append(self._wiki_context_suffix)
 
         # Agentic IDE: while the user has the focused coding mode ON, this turn
@@ -4236,9 +4255,10 @@ class BrainManager:
         private = _TURN_OVERRIDE.get()
         if private is not None and private.tool_context.get("tool_origin") == "society":
             return "\n\n".join(parts)
-        if self._wiki_context_suffix:
+        _personal_ok = _personal_context_allowed(getattr(self, "_config", None))
+        if self._wiki_context_suffix and _personal_ok:
             parts.append(self._wiki_context_suffix)
-        upcoming = self._upcoming_block()
+        upcoming = self._upcoming_block() if _personal_ok else ""
         if upcoming:
             parts.append(upcoming)
         agentic_block = self._agentic_focus_block()

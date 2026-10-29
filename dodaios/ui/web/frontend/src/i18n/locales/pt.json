@@ -3195,6 +3195,10 @@
       "self_build": "Autoconstrução"
     },
     "languages_group_title": "Idiomas",
+    "privacy_group_title": "Privacidade",
+    "personal_context_title": "Enviar o meu perfil e a minha memória para modelos na nuvem",
+    "personal_context_description": "Ativado: o teu perfil, memória, pessoas e contactos são incluídos no que é enviado ao fornecedor do modelo. Desativado: ficam neste computador e o assistente sabe menos sobre ti. As tuas mensagens e o que lhe pedes para ler continuam a ser enviados. Aplica-se a partir da mensagem seguinte.",
+    "personal_context_error": "Não foi possível guardar a definição. Tenta novamente.",
     "sections": {
       "voice": "Voz"
     },

@@ -1133,6 +1133,11 @@ def set_reply_language(name: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
     _patch_table(path, "brain", "reply_language", name)
 
 
+def set_personal_context_to_cloud(allowed: bool, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
+    """Persist the privacy switch in ``[brain] personal_context_to_cloud``."""
+    _patch_table(path, "brain", "personal_context_to_cloud", bool(allowed))
+
+
 def set_proactivity(level: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
     """Persist the assistant's initiative level in ``[brain] proactivity``.
 

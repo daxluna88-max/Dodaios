@@ -537,6 +537,55 @@ def put_team_proxy(body: TeamProxyBody, request: Request) -> dict[str, object]:
 # over /ws). Key-free same-origin route, like reply-language.
 # ----------------------------------------------------------------------
 
+# ----------------------------------------------------------------------
+# Privacy switch: personal context (profile, memory, people, contacts, wiki
+# snippets) in the model prompt. Off = none of it leaves the machine inside a
+# request to a model provider. Applies on the next turn, no restart.
+# ----------------------------------------------------------------------
+
+
+class PersonalContextBody(BaseModel):
+    allowed: bool
+    persist: bool = Field(default=True, description="Persist as boot default in jarvis.toml")
+
+
+def _personal_context_allowed_now(request: Request) -> bool:
+    cfg = getattr(request.app.state, "config", None)
+    return bool(getattr(getattr(cfg, "brain", None), "personal_context_to_cloud", True))
+
+
+@router.get("/personal-context")
+def get_personal_context(request: Request) -> dict[str, object]:
+    return {"allowed": _personal_context_allowed_now(request)}
+
+
+@router.put("/personal-context")
+def put_personal_context(body: PersonalContextBody, request: Request) -> dict[str, object]:
+    persisted = False
+    if body.persist:
+        try:
+            from dodaios.core import config_writer
+            from dodaios.core.config import resolve_config_path
+
+            config_writer.set_personal_context_to_cloud(
+                body.allowed, path=resolve_config_path()
+            )
+            persisted = True
+        except Exception as exc:  # noqa: BLE001 — persist is best-effort
+            log.warning("personal-context persist failed: %s", exc)
+
+    cfg = getattr(request.app.state, "config", None)
+    brain_cfg = getattr(cfg, "brain", None)
+    applied = False
+    if brain_cfg is not None:
+        try:
+            brain_cfg.personal_context_to_cloud = body.allowed
+            applied = True
+        except Exception as exc:  # noqa: BLE001 — frozen model is not an error
+            log.debug("in-memory personal_context_to_cloud update skipped: %s", exc)
+    return {"allowed": body.allowed, "persisted": persisted, "applied": applied}
+
+
 _UI_LANGUAGES: tuple[str, ...] = ("en", "de", "es", "pt", "zh", "it")
 
 

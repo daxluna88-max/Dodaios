@@ -13,6 +13,7 @@ const localeTree = (language: UiLanguage): LocaleTree => LOCALES[language] ?? ui
 /** Each Settings page group owns the copy used to search its controls. */
 const SEARCH_GROUPS = [
   { id: "languages", keys: ["language", "languages_group_title"] },
+  { id: "privacy", keys: ["privacy_group_title", "personal_context"] },
   { id: "app", keys: ["app_settings_group_title", "autostart", "appearance", "jarvis_api"] },
   { id: "realtime-voice", keys: ["realtime_voice"] },
   { id: "system-prompt", keys: ["system_prompt"] },
