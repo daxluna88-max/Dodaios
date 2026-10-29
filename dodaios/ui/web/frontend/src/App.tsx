@@ -64,6 +64,7 @@ import { SubscriptionRealtimeTransportBroker } from "@/components/voice/Subscrip
 import { BrowserRealtimeControl } from "@/components/voice/BrowserRealtimeControl";
 import { cn } from "@/lib/utils";
 import { initialNavCollapsed } from "@/lib/navCollapsedDefault";
+import { useNarrowViewport } from "@/hooks/useNarrowViewport";
 
 /** Where the collapsed/expanded choice for the nav sidebar is remembered. */
 const NAV_COLLAPSED_KEY = "jarvis.sidebar.collapsed.v1";
@@ -288,6 +289,14 @@ export default function App() {
     [navCollapsed, sidebar],
   );
 
+  // Phone width: the rail has no seam to drag, so the full sidebar opens as a
+  // sheet over the page instead (and closes once a page or chat is picked).
+  const narrow = useNarrowViewport();
+  const [navSheetOpen, setNavSheetOpen] = useState(false);
+  useEffect(() => {
+    if (!narrow) setNavSheetOpen(false);
+  }, [narrow]);
+
   const activeSection = useEventStore((s) => s.activeSection);
   // Agents, Docs and the Wiki fill the window: each brings its own navigation column,
   // and the caption's home/back buttons leave it, so the app sidebar and the
@@ -365,7 +374,26 @@ export default function App() {
           <Sidebar
             width={sidebar.size}
             collapsed={navCollapsed}
+            onOpenMenu={narrow ? () => setNavSheetOpen(true) : undefined}
           />
+          {narrow && navSheetOpen && (
+            <div className="fixed inset-0 z-40 flex" data-testid="nav-sheet">
+              <button
+                type="button"
+                aria-label={t("common.close")}
+                className="absolute inset-0 bg-black/50"
+                onClick={() => setNavSheetOpen(false)}
+              />
+              <div
+                className="relative h-full max-w-[85vw] shadow-xl"
+                onClick={(event) => {
+                  if ((event.target as HTMLElement).closest("button, a")) setNavSheetOpen(false);
+                }}
+              >
+                <Sidebar width={280} collapsed={false} />
+              </div>
+            </div>
+          )}
 
           <PaneResizer
             showLine={false}

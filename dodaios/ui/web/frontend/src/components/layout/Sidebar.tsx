@@ -4,6 +4,7 @@ import {
   ChevronDown,
   MoreHorizontal,
   Plus,
+  PanelLeftOpen,
 } from "lucide-react";
 import {
   NAV_GROUPS,
@@ -112,6 +113,12 @@ export interface SidebarProps {
    * the window is for. Left optional so the sidebar still renders standalone.
    */
   collapsed?: boolean;
+  /**
+   * Phone width only: opens the full sidebar over the page. The icon rail hides
+   * the chat history and has no seam to drag on a touch screen, so without this
+   * the history would be out of reach.
+   */
+  onOpenMenu?: () => void;
 }
 
 /** Width the sidebar was designed at, and the one a double-click restores.
@@ -166,6 +173,7 @@ export const SIDEBAR_RAIL_AT_WIDTH = 168;
 export function Sidebar({
   width = SIDEBAR_DEFAULT_WIDTH,
   collapsed = false,
+  onOpenMenu,
 }: SidebarProps = {}) {
   const t = useT();
   const profilePrefetch = useSectionPrefetch("profile");
@@ -500,6 +508,18 @@ export function Sidebar({
               />
             ))}
         </div>
+        {railed && onOpenMenu && (
+          <button
+            type="button"
+            data-testid="sidebar-open-menu"
+            aria-label={t("sidebar.recent_chats")}
+            title={t("sidebar.recent_chats")}
+            onClick={onOpenMenu}
+            className="mx-auto mt-1 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <PanelLeftOpen className="h-4 w-4" aria-hidden />
+          </button>
+        )}
 
       </div>
 
