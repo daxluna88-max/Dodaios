@@ -231,9 +231,13 @@ class UpdateProfileTool:
                        "Nothing was removed; do not tell the user it was forgotten.",
             )
         try:
+            # A real forget: drop the history lines that carry the removed value
+            # (or every line of a cleared scalar field), and log the removal
+            # without the value or the user's words, so nothing is read back.
+            profile.purge_observations(f"{cluster}.{field}", str(what) if is_list else None)
             profile.append_observation(
-                f"{cluster}.{field}", f"removed {_short(what)}",
-                evidence or "via update_profile tool (remove)",
+                f"{cluster}.{field}", "an item was removed" if is_list else "cleared",
+                "forget request",
             )
             profile.save()
         except Exception as exc:  # noqa: BLE001

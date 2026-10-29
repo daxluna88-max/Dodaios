@@ -299,3 +299,37 @@ async def test_empty_literals_are_never_stored_as_facts(tmp_path, junk):
     )
     assert not result.success
     assert profile.get("values", "top_values") == ["Pizza"]
+
+
+@pytest.mark.asyncio
+async def test_forget_purges_the_value_from_the_history_lines(tmp_path):
+    path, profile = _load(tmp_path)
+    tool = _tool(profile)
+    await tool.execute(
+        {"cluster": "values", "field": "top_values", "value": "Azzurro",
+         "evidence": "Ricorda il mio colore preferito e l'azzurro"}, ctx=None)
+    assert "Azzurro" in path.read_text(encoding="utf-8")
+    result = await tool.execute(
+        {"cluster": "values", "field": "top_values", "value": "azzurro", "operation": "remove",
+         "evidence": "Dimentica che il mio colore preferito e l'azzurro"}, ctx=None)
+    assert result.success and "Removed" in result.output
+    text = path.read_text(encoding="utf-8")
+    assert "azzurro" not in text.casefold()
+    assert "Pizza" in text  # unrelated facts stay
+    assert "an item was removed" in text
+    assert UserProfile.load(path).get("values", "top_values") == ["Pizza"]
+
+
+@pytest.mark.asyncio
+async def test_forget_scalar_purges_that_fields_history(tmp_path):
+    path, profile = _load(tmp_path)
+    tool = _tool(profile)
+    await tool.execute(
+        {"cluster": "identity", "field": "preferred_address", "value": "Boss",
+         "evidence": "Call me Boss"}, ctx=None)
+    await tool.execute(
+        {"cluster": "identity", "field": "preferred_address", "value": "x", "operation": "remove"},
+        ctx=None)
+    text = path.read_text(encoding="utf-8")
+    assert "Boss" not in text
+    assert "identity.preferred_address: cleared" in text
