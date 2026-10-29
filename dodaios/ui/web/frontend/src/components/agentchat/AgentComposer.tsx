@@ -715,7 +715,7 @@ export function AgentComposer({ autoFocus = false }: { autoFocus?: boolean }) {
         className={cn("max-h-[50vh] scrollbar-jarvis", minimal ? "min-h-[64px] px-2 text-base" : "text-reading")}
       />
       {minimal ? (
-        <div className="flex min-w-0 items-center gap-0.5" data-testid="composer-row">
+        <div className="flex min-w-0 items-center gap-0.5 max-md:flex-wrap max-md:gap-y-1" data-testid="composer-row">
           <ComposerAddMenu
             key={activeSessionId ?? "new"}
             compact
