@@ -3034,3 +3034,19 @@ body {
     cursor: default;
   }
 }
+
+/*
+ * iOS Safari zooms the whole page when a text field with a font size under
+ * 16 px gets focus, and leaves it zoomed: every later screen is then cut off
+ * at the edges. Touch screens get 16 px in every text field; the desktop
+ * sizes are untouched. Unlayered on purpose so it beats the size utilities
+ * on the individual fields.
+ */
+@media (pointer: coarse) {
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="button"], [type="submit"]),
+  textarea:not(.xterm-helper-textarea),
+  select,
+  [contenteditable="true"] {
+    font-size: 16px;
+  }
+}
