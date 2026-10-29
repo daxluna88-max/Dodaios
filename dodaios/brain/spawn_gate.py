@@ -60,7 +60,7 @@ log = logging.getLogger(__name__)
 SPAWN_VEHICLE_TOOL_NAMES: frozenset[str] = frozenset({"spawn_worker", "multi_spawn"})
 
 
-# Explicit delegation vocabulary (DE/EN/ES). A bare "agent" is deliberately
+# Explicit delegation vocabulary (DE/EN/ES/IT). A bare "agent" is deliberately
 # included: the user-visible brand is "<wake-name> Agent" (dynamic, §4), so
 # "spawn einen Gustav Agent" must match for ANY wake word without resolving
 # the live brand. Over-matching is safe by construction — a match only means
@@ -71,12 +71,13 @@ _DELEGATION_MARKER_RE: re.Pattern[str] = re.compile(
     r"\bagent(?:en|es|e|s)?\b"
     r"|\bsub-?agent\w*"
     r"|\bopen[- ]?claw\w*"
-    r"|\bworker\w*|\btrabajador\w*"
-    r"|\bmission\w*|\bmisi[oó]n\w*"
+    r"|\bworker\w*|\btrabajador\w*|\blavorator\w*"  # i18n-allow: ES/IT vehicle nouns
+    r"|\bmission\w*|\bmisi[oó]n\w*|\bmissione\b|\bmissioni\b"  # i18n-allow: ES/IT
     # delegation verbs / markers
     r"|\bspawn\w*"
-    r"|\bdelegier\w*|\bdelegate\w*|\bdeleg[aá]\w*"
+    r"|\bdelegier\w*|\bdelegate\w*|\bdeleg[aá]\w*|\bdelegh\w*"  # i18n-allow: ES/IT
     r"|\bhintergrund\w*|\bbackground\b|\bsegundo\s+plano\b"
+    r"|\bsfondo\b|\bin\s+background\b"  # i18n-allow: IT background markers
     r")",
     re.IGNORECASE,
 )
@@ -176,7 +177,7 @@ def _confirm_verdicts(text: str) -> set[str]:
         from dodaios.voice.echo_confirmation import classify_response  # noqa: PLC0415
     except Exception:  # noqa: BLE001 — classifier fault = no confirmation
         return set()
-    return {classify_response(text, language=lang) for lang in ("de", "en", "es", "pt")}
+    return {classify_response(text, language=lang) for lang in ("de", "en", "es", "pt", "it")}
 
 
 class DelegationOfferWindow:

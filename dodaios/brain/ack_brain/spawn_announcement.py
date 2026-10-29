@@ -112,13 +112,14 @@ _PERSONA_LANGUAGE_NAMES: dict[str, str] = {
     "en": "English",
     "es": "Spanish (Spain)",
     "pt": "European Portuguese (pt-PT, never Brazilian Portuguese)",
+    "it": "Italian",
 }
 
 _PERSONA_LANGS: frozenset[str] = frozenset(_PERSONA_LANGUAGE_NAMES)
 
 
 def get_spawn_persona(language: str, agent_brand: str | None = None) -> str:
-    """Return the spawn persona prompt for ``language`` (de/en/es/pt).
+    """Return the spawn persona prompt for ``language`` (de/en/es/pt/it).
 
     The persona's ``{agent}`` placeholder is resolved to ``agent_brand`` (the
     wake-word-derived assistant name + "-Agent"); ``None`` keeps the neutral
@@ -183,6 +184,16 @@ _FALLBACK_SPAWN: dict[str, tuple[str, ...]] = {
         "Um {agent} já está a trabalhar nisso. Há mais por trás, por isso vai demorar um "
         "bocadinho.",
     ),
+    "it": (
+        "Ci penso io. Ho avviato un {agent} per questo compito più grande; ti avvisa a lavoro finito.",
+        "Capito. Un {agent} sta dando un'occhiata approfondita; ci può volere un momento.",
+        "Va bene, qui serve scavare a fondo. Un {agent} ci sta già lavorando in background.",
+        "Se ne occupa un {agent}. È un compito più corposo, quindi serve un momento.",
+        "Preso. Un {agent} ha in carico questo lavoro un po' più ampio.",
+        "Certo. Un {agent} ci sta già lavorando a fondo; farlo bene richiede un po' di tempo.",
+        "Ho messo un {agent} su questo tema più grande; tornerà con qualcosa di solido.",
+        "Un {agent} ci sta lavorando. C'è più dietro, quindi ci vorrà un attimo.",
+    ),
 }
 
 _FALLBACK_ALREADY_RUNNING: dict[str, tuple[str, ...]] = {
@@ -209,6 +220,12 @@ _FALLBACK_ALREADY_RUNNING: dict[str, tuple[str, ...]] = {
         "O {agent} já tem essa tarefa, um momento.",
         "Um {agent} ainda está a trabalhar nisso, está quase.",
         "Paciência, essa tarefa já está com um {agent}.",
+    ),
+    "it": (
+        "Un {agent} ci sta già lavorando; è ancora in corso.",
+        "L'{agent} ha già quel compito, un momento.",
+        "Un {agent} sta ancora lavorando a quello, quasi ci siamo.",
+        "Pazienza, quel compito è già affidato a un {agent}.",
     ),
 }
 
@@ -254,6 +271,13 @@ STILL_RUNNING_PHRASES: dict[str, tuple[str, ...]] = {
         "Ainda a trabalhar nisso. Volto a falar contigo já a seguir.",
         "Quase lá; estou a juntar as peças para ti.",
     ),
+    "it": (
+        "Sono ancora sul compito più grande. Tra un attimo avrò qualcosa di solido per te.",
+        "Questo richiede ancora un po'; continuo a lavorarci in background.",
+        "Non ho ancora finito: preferisco darti qualcosa di fatto bene che qualcosa a metà.",
+        "Ci sto ancora lavorando. Torno da te a breve.",
+        "Quasi finito; sto mettendo insieme i pezzi per te.",
+    ),
 }
 
 
@@ -272,8 +296,12 @@ _COMPLETION_CLAIM_RE = re.compile(
     r"(?:hecho|hecha|terminado|terminada|completado|completada|enviado|enviada|"  # i18n-allow
     r"reservado|reservada|feito|feita|concluído|concluída|"  # i18n-allow
     r"marcado|marcada)\b"  # i18n-allow
+    # Italian: "è stato inviato", "sono state completate", ...
+    r"|\b(?:è|sono)\s+(?:stato|stata|stati|state)\s+(?:già\s+)?"  # i18n-allow
+    r"(?:fatto|fatta|fatti|fatte|completato|completata|completati|completate|"  # i18n-allow
+    r"inviato|inviata|inviati|inviate|prenotato|prenotata|terminato|terminata)\b"  # i18n-allow
     r"|^\s*(?:erledigt|fertig|done|finished|completed|hecho|listo|feito|"  # i18n-allow
-    r"pronto|concluído)\s*[.!]?\s*$)",  # i18n-allow
+    r"pronto|concluído|fatto|finito|completato)\s*[.!]?\s*$)",  # i18n-allow
     re.IGNORECASE,
 )
 
@@ -315,12 +343,12 @@ def _fix_en_article(text: str) -> str:
 def _resolve_language(explicit: str | None, utterance: str) -> str:
     """Resolve the announcement language: explicit hint > utterance heuristic.
 
-    Supports 'de', 'en', 'es' and 'pt' (Runtime Output Language doctrine — every
-    spoken phrase table covers all four). An explicit hint wins (the
+    Supports 'de', 'en', 'es', 'pt' and 'it' (Runtime Output Language doctrine — every
+    spoken phrase table covers all five). An explicit hint wins (the
     ``brain.reply_language`` pin / STT tag reaches here as ``language`` — the
     live source on the voice path); otherwise the utterance heuristic decides,
     and an inconclusive detection falls back to the shared ``DEFAULT_LOCALE``
-    (honesty-over-guessing, never a per-layer hardcoded default). All four have
+    (honesty-over-guessing, never a per-layer hardcoded default). All five have
     an LLM persona (see ``_PERSONA_LANGS``) and a curated fallback pool.
     """
     if explicit:
@@ -331,10 +359,12 @@ def _resolve_language(explicit: str | None, utterance: str) -> str:
             return "es"
         if low.startswith("pt"):
             return "pt"
+        if low.startswith("it"):
+            return "it"
         if low.startswith("de"):
             return "de"
     detected = detect_text_language(utterance or "")
-    return detected if detected in ("de", "en", "es", "pt") else DEFAULT_LOCALE
+    return detected if detected in ("de", "en", "es", "pt", "it") else DEFAULT_LOCALE
 
 
 def _trim_to_sentences(text: str, max_words: int) -> str | None:
@@ -456,7 +486,7 @@ class SpawnAnnouncementComposer:
             return validated
 
         # The flash-LLM path only runs for a language with a spawn persona
-        # (de/en/es/pt); any other code goes straight to the curated pool.
+        # (de/en/es/pt/it); any other code goes straight to the curated pool.
         if lang in _PERSONA_LANGS:
             composed = await self._compose_via_llm(
                 utterance, lang, action, target, brand

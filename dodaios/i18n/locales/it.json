@@ -297,7 +297,7 @@
         "cu_exit_action_failed": "Un’azione sullo schermo non è riuscita, quindi mi sono fermato.",
         "cu_exit_cancelled": "L’azione sullo schermo è stata annullata.",
         "cu_exit_needs_elevation": "Ho atteso la conferma dell’amministratore, ma non è arrivata, quindi mi sono fermato.",
-        "cu_blocked_permission": "Mi sono dovuto fermare. {sentence}",
+        "cu_blocked_permission": "Mi sono dovuto fermare: Dodaios ha bisogno del permesso {permission}. Attivalo in {pane}. Poi riprova.",
         "cu_blocked_restart_hint": "Mi sono dovuto fermare: il permesso {permission} potrebbe avere effetto solo dopo aver chiuso e riaperto Dodaios. Riapri l’app, poi riprova.",
         "cu_blocked_unavailable": "Mi sono dovuto fermare: Dodaios non può richiedere il permesso {permission} in questa sessione.",
         "cu_blocked_waiting": "Mi sono dovuto fermare perché macOS sta chiedendo il permesso {permission}. Rispondi alla finestra di dialogo, poi riprova.",

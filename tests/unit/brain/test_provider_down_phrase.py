@@ -128,7 +128,7 @@ class TestCauseAwareProviderDownPhrase:
         from dodaios.brain.manager import _PROVIDER_DOWN_CAUSE_PHRASES
 
         for cause, table in _PROVIDER_DOWN_CAUSE_PHRASES.items():
-            assert set(table) == {"de", "en", "es", "pt"}, cause
+            assert set(table) == {"de", "en", "es", "pt", "it"}, cause
 
     def test_cause_phrases_are_voice_safe(self) -> None:
         from dodaios.brain.manager import _PROVIDER_DOWN_CAUSE_PHRASES
