@@ -2,7 +2,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { SectionWindowButton } from "@/components/layout/SectionWindowButton";
 import { isTourEvent } from "@/components/onboarding/tourEvents";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ComponentType, type LazyExoticComponent } from "react";
-import { Loader2, Search, X } from "lucide-react";
+import { ChevronDown, Loader2, Search, X } from "lucide-react";
 import {
   NAV_FOOTER_ITEMS,
   NAV_GROUPS,
@@ -213,6 +213,9 @@ export function SettingsHubView() {
   const solo = useEventStore((s) => s.solo);
   const setActive = useEventStore((s) => s.setActiveSection);
   const [query, setQuery] = useState("");
+  // Below md the page list starts folded: it is a stacked column there, and
+  // open it would leave the page itself a sliver of the screen.
+  const [navOpen, setNavOpen] = useState(false);
   const [searchTarget, setSearchTarget] = useState<string | null>(null);
   const { health: sectionHealth } = useSectionHealth();
 
@@ -262,6 +265,7 @@ export function SettingsHubView() {
           onClick={() => {
             setQuery("");
             setSearchTarget(null);
+            setNavOpen(false);
             setActive(item.id);
           }}
           title={hint}
@@ -325,8 +329,21 @@ export function SettingsHubView() {
             </button>}
           </div>
         </div>
+        <button
+          type="button"
+          data-testid="settings-hub-nav-toggle"
+          aria-expanded={navOpen}
+          onClick={() => setNavOpen((open) => !open)}
+          className="mx-3 mb-2 flex h-9 items-center justify-between gap-2 rounded-md bg-secondary px-2.5 text-sm font-medium text-foreground-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:hidden"
+        >
+          <span className="min-w-0 truncate">{labelOf(findNavItem(highlight))}</span>
+          <ChevronDown aria-hidden className={cn("h-4 w-4 shrink-0 transition-transform", navOpen && "rotate-180")} />
+        </button>
         <nav aria-label={t("nav.settings")}
-          className="min-h-0 flex-1 overflow-y-auto px-3 pb-5 scrollbar-jarvis">
+          className={cn(
+            "min-h-0 flex-1 overflow-y-auto px-3 pb-5 scrollbar-jarvis",
+            !navOpen && needle === "" && "max-md:hidden",
+          )}>
           <ul>
             {visibleGroups.map((group) => (
               <li key={group.labelKey}>
