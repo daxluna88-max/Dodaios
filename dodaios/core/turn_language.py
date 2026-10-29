@@ -199,6 +199,8 @@ class OutputLanguageValidation:
 # weak point to each of the two (the pan-European acute-e counts for nothing).
 _DE_SCRIPT_RE = re.compile(r"[äöüÄÖÜß]")  # i18n-allow: German-script regex
 _ES_SCRIPT_RE = re.compile(r"[ñÑ¿¡]")
+# Grave accents on e/i/o/u: Italian only (Portuguese writes "à", French is not supported).
+_IT_SCRIPT_RE = re.compile(r"[èìòùÈÌÒÙ]")
 _PT_SCRIPT_RE = re.compile(r"[ãõçâêôàÃÕÇÂÊÔÀ]")
 _IBERIAN_ACUTE_RE = re.compile(r"[áíóúÁÍÓÚ]")
 
@@ -254,11 +256,27 @@ _PT_TOKENS: frozenset[str] = frozenset({
     "são", "foi", "bem", "neste", "nesta", "nesse", "nessa",
 })
 
+# Italian words also common in Spanish or Portuguese ("la", "lo", "una", "con",
+# "te", "mi", "breve", "ma", "vai", "ci") are excluded.
+_IT_TOKENS: frozenset[str] = frozenset({
+    "il", "gli", "che", "non", "per", "sono", "ho", "hai", "ha", "di", "nel",
+    "nella", "della", "dello", "degli", "alla", "sul", "cosa", "dove", "oggi",
+    "domani", "adesso", "grazie", "ciao", "buongiorno", "buonasera", "anche",
+    "ancora", "molto", "fare", "puoi", "posso", "può", "voglio", "vorrei",
+    "potresti", "dimmi", "dammi", "apri", "leggi", "scrivi", "perché", "perche",
+    "questo", "questa", "quello", "quella", "sì", "sto", "stai", "sta", "bene",
+    "tutto", "senza", "sempre", "già", "più", "così", "mio", "mia", "tuo",
+    "io", "lui", "lei", "noi", "voi", "loro", "devo", "deve", "faccio", "fai",
+    "fatto", "poi", "però", "quindi", "inizierò", "lavorare", "scrivere",
+    "aiutare", "aiuto", "capo", "perfetto", "mostrami", "dimmelo", "vorrei",
+})
+
 _SETS: tuple[tuple[str, frozenset[str]], ...] = (
     ("de", _DE_TOKENS),
     ("en", _EN_TOKENS),
     ("es", _ES_TOKENS),
     ("pt", _PT_TOKENS),
+    ("it", _IT_TOKENS),
 )
 
 # Whisper cloud APIs return language NAMES; local faster-whisper returns ISO
@@ -378,11 +396,6 @@ _OTHER_TOKENS: dict[str, frozenset[str]] = {
             "bonjour merci oui très où c'est j'ai suis sont avez peux faire fais moi "  # i18n-allow
             "toi ça aujourd'hui demain fichier ouvre montre s'il plaît plait qu'est "  # i18n-allow
             "voudrais savoir marche "  # i18n-allow
-        ),
-        "it": (
-            "che sono è questo questa quello perché perche grazie ciao buongiorno "  # i18n-allow
-            "anche ancora molto fare puoi voglio della dello degli nel nella sul "  # i18n-allow
-            "alla gli dove oggi domani adesso io ho hai abbiamo di stai "  # i18n-allow
         ),
         "nl": (
             "het een ik jij niet wat hoe waarom waar wanneer bedankt alsjeblieft "  # i18n-allow
@@ -532,6 +545,8 @@ def _add_script_scores(text: str, scores: dict[str, int]) -> None:
         scores["es"] += 2
     if _PT_SCRIPT_RE.search(text):
         scores["pt"] += 2
+    if _IT_SCRIPT_RE.search(text):
+        scores["it"] += 2
     if _IBERIAN_ACUTE_RE.search(text):
         scores["es"] += 1
         scores["pt"] += 1
@@ -608,11 +623,6 @@ def validate_output_language(
         tokens = [token.lower() for token in _TOKEN_RE.findall(prose)]
         if _detect_gross_vietnamese_output(prose, tokens):
             detected = "vi"
-        elif target == "it" and _detect_other_language(prose)[0] == "it":
-            # Italian already has a conservative lexical detector. Consult it
-            # before the older four-language scorer can mistake shared words
-            # such as "la casa" for decisive Spanish evidence.
-            detected = "it"
         else:
             detected = _detect_strong_supported_output(prose, tokens)
 

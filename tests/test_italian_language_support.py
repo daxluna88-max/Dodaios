@@ -58,7 +58,11 @@ class ItalianLanguageSupportTests(unittest.TestCase):
         root = ROOT / "dodaios/i18n/locales"
         english = json.loads((root / "en.json").read_text())
         italian = json.loads((root / "it.json").read_text())
+        portuguese = json.loads((root / "pt.json").read_text())
         formatter = Formatter()
+        # English alone carries a pre-composed sentence there; every other
+        # language fills {permission} and {pane} (see _blocked_permission_readback).
+        by_pt = ".voice.action.phrases.cu_blocked_permission"
 
         def walk(master, translated, path=""):
             self.assertIs(type(translated), type(master), path)
@@ -72,6 +76,8 @@ class ItalianLanguageSupportTests(unittest.TestCase):
                     walk(left, right, f"{path}[{index}]")
             else:
                 fields = lambda text: sorted(field for _, field, _, _ in formatter.parse(text) if field is not None)
+                if path == by_pt:
+                    master = portuguese["voice"]["action"]["phrases"]["cu_blocked_permission"]
                 self.assertEqual(fields(master), fields(translated), path)
                 self.assertTrue(translated.strip(), path)
         walk(english, italian)
