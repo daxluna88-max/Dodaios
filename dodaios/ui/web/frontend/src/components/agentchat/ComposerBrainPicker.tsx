@@ -252,7 +252,7 @@ export function ComposerBrainPicker({
         triggerPrefix={triggerPrefix}
         chevron={chevron}
         panelMinWidth={360}
-        className={COMPOSER_CONTROL_CLASS}
+        className={cn(COMPOSER_CONTROL_CLASS, "min-w-0")}
       />
     </span>
   );

@@ -769,7 +769,7 @@ export function AgentComposer({ autoFocus = false }: { autoFocus?: boolean }) {
             {showEffort && (
               <>
                 <ControlSeparator />
-                <span className="inline-flex shrink-0" title={locks?.effort}>
+                <span className="inline-flex min-w-0 max-w-[45%] shrink" title={locks?.effort}>
                   <Combobox
                     value={draft.effort}
                     groups={effortMenuGroups}
@@ -780,7 +780,7 @@ export function AgentComposer({ autoFocus = false }: { autoFocus?: boolean }) {
                     testId="composer-effort"
                     triggerHint={false}
                     panelMinWidth={220}
-                    className={COMPOSER_CONTROL_CLASS}
+                    className={cn(COMPOSER_CONTROL_CLASS, "min-w-0")}
                   />
                 </span>
               </>
