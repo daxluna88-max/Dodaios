@@ -356,6 +356,22 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
     });
   };
 
+  // The chat on stage survives a reload (front page only): its id is kept per
+  // browser and reopened once, when the first session list arrives and shows it
+  // still exists. Starting a new chat by hand always wins over the restore.
+  const ACTIVE_KEY = `jarvis.agentChat.active.${surface}.v1` + (draftNamespace ? `:${draftNamespace}` : "");
+  let restoreArmed = surface === "jarvis";
+  const rememberActive = (sessionId: string | null) => {
+    if (surface !== "jarvis") return;
+    try {
+      if (sessionId) window.localStorage.setItem(ACTIVE_KEY, sessionId);
+      else window.localStorage.removeItem(ACTIVE_KEY);
+    } catch { /* storage blocked — the chat just opens blank after a reload */ }
+  };
+  const storedActive = (): string | null => {
+    try { return window.localStorage.getItem(ACTIVE_KEY); } catch { return null; }
+  };
+
   let catalogRequest = 0;
   const patchQueues = new Map<string, Promise<void>>();
   const patchRevisions = new Map<string, number>();
@@ -614,6 +630,13 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
             const shared = reuseHistoryRows(state.sessions, sessions, (row) => row.session_id);
             return shared === state.sessions ? state : { sessions: shared };
           });
+          if (restoreArmed) {
+            restoreArmed = false;
+            const wanted = storedActive();
+            if (wanted && get().activeSessionId === null && sessions.some((row) => row.session_id === wanted)) {
+              get().openSession(wanted);
+            }
+          }
         } catch {
           /* offline / headless — keep the list as-is */
         }
@@ -749,6 +772,8 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
       newChat: (opts) => {
         closeSocket();
         newChatLane = emptySendLane();
+        restoreArmed = false;
+        rememberActive(null);
         resetBlankComposerDraftTarget(chatStore);
         discardHeldFiles(chatStore, "");
         ++catalogRequest;
@@ -775,6 +800,8 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
         if (prev.activeSessionId && prev.activeSessionId !== sessionId) {
           rememberTimeline(prev.activeSessionId, prev.timeline);
         }
+        restoreArmed = false;
+        rememberActive(sessionId);
         set({
           activeSessionId: sessionId,
           activeSession: prev.sessions.find((s) => s.session_id === sessionId) ?? null,
@@ -843,6 +870,8 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
             set({ sessions: [session, ...get().sessions] });
             onSessionCreated?.(session);
             if (visible) {
+              restoreArmed = false;
+              rememberActive(session.session_id);
               set({ activeSessionId: session.session_id, activeSession: session, timeline: EMPTY_TIMELINE });
               bindVoice(session.session_id);
               connect(session.session_id, 0);
