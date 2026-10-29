@@ -407,7 +407,51 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
     }
   }
 
+  // A phone puts a backgrounded tab's socket to sleep without telling the page:
+  // the socket can read "open" and never deliver another event. While a chat's
+  // socket exists, coming back to the foreground after a while (or the network
+  // returning) re-opens it from the last seq — the backend replays what was
+  // missed, so a reply that finished while the screen was locked appears
+  // without a reload. The listeners live only as long as the socket.
+  const AWAY_RESYNC_MS = 10_000;
+  let wakeDispose: (() => void) | null = null;
+  let reconnectFrom: ((sessionId: string, afterSeq: number) => void) | null = null;
+
+  function detachWake(): void {
+    wakeDispose?.();
+    wakeDispose = null;
+  }
+
+  function attachWake(): void {
+    if (wakeDispose || typeof document === "undefined" || typeof window === "undefined") return;
+    let hiddenAt = 0;
+    const resync = (forced: boolean) => {
+      const st = chatStore.getState();
+      const sid = st.activeSessionId;
+      if (!sid || !reconnectFrom) return;
+      const alive = socket !== null && socket.readyState === WebSocket.OPEN;
+      if (forced || !alive) reconnectFrom(sid, st.timeline.lastSeq);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        hiddenAt = Date.now();
+        return;
+      }
+      const away = hiddenAt > 0 && Date.now() - hiddenAt >= AWAY_RESYNC_MS;
+      hiddenAt = 0;
+      resync(away);
+    };
+    const onOnline = () => resync(true);
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("online", onOnline);
+    wakeDispose = () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("online", onOnline);
+    };
+  }
+
   function closeSocket(): void {
+    detachWake();
     cancelReconnect?.();
     cancelReconnect = null;
     const s = socket;
@@ -434,6 +478,8 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
       set({ socketState: "connecting" });
       const ws = new WebSocket(agentChatSocketUrl(sessionId, afterSeq));
       socket = ws;
+      reconnectFrom = connect;
+      attachWake();
       ws.onopen = () => {
         if (socket !== ws) return;
         // A socket that opened is proof the backend is back: the next outage
