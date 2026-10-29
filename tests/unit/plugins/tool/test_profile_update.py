@@ -238,3 +238,64 @@ async def test_list_field_ignores_set_operation_and_appends(tmp_path):
     )
     assert res.success
     assert profile.get("identity", "languages") == ["English", "German"]
+
+
+@pytest.mark.asyncio
+async def test_remove_list_item_forgets_it_case_insensitively(tmp_path):
+    path, profile = _load(tmp_path)
+    bus, events = _capturing_bus()
+    result = await _tool(profile, bus).execute(
+        {"cluster": "values", "field": "top_values", "value": "pizza", "operation": "remove",
+         "evidence": "Forget my favourite food."},
+        ctx=None,
+    )
+    assert result.success
+    assert "Removed" in result.output
+    assert profile.get("values", "top_values") == []
+    assert UserProfile.load(path).get("values", "top_values") == []
+    assert [e.operation for e in events] == ["remove"]
+
+
+@pytest.mark.asyncio
+async def test_remove_missing_item_does_not_claim_success(tmp_path):
+    _path, profile = _load(tmp_path)
+    result = await _tool(profile).execute(
+        {"cluster": "values", "field": "top_values", "value": "sushi", "operation": "remove"},
+        ctx=None,
+    )
+    assert result.success
+    assert "Not found" in result.output and "do not tell the user" in result.output
+    assert profile.get("values", "top_values") == ["Pizza"]
+
+
+@pytest.mark.asyncio
+async def test_remove_scalar_clears_the_field(tmp_path):
+    path, profile = _load(tmp_path)
+    result = await _tool(profile).execute(
+        {"cluster": "identity", "field": "preferred_address", "value": "x", "operation": "remove"},
+        ctx=None,
+    )
+    assert result.success and "Removed" in result.output
+    assert profile.get("identity", "preferred_address") is None
+    assert UserProfile.load(path).get("identity", "preferred_address") is None
+
+
+@pytest.mark.asyncio
+async def test_remove_list_without_an_item_is_an_error(tmp_path):
+    _path, profile = _load(tmp_path)
+    result = await _tool(profile).execute(
+        {"cluster": "values", "field": "top_values", "value": "", "operation": "remove"},
+        ctx=None,
+    )
+    assert not result.success
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("junk", ["[]", "{}", "null", "None"])
+async def test_empty_literals_are_never_stored_as_facts(tmp_path, junk):
+    _path, profile = _load(tmp_path)
+    result = await _tool(profile).execute(
+        {"cluster": "values", "field": "top_values", "value": junk}, ctx=None,
+    )
+    assert not result.success
+    assert profile.get("values", "top_values") == ["Pizza"]
