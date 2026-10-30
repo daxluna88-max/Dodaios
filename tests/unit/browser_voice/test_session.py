@@ -426,3 +426,66 @@ async def test_empty_reply_is_silent_not_an_error():
     session = _make_session(sink, brain=_ScriptedBrain([""]), tts=tts, language_code="it-IT")
     state = await _run_stream(session)
     assert not state.cut and not state.spoken and tts.texts == []
+
+
+class _Bus:
+    def __init__(self, session_ref) -> None:
+        self.events: list[tuple[str, bool]] = []
+        self._session_ref = session_ref
+
+    async def publish(self, event) -> None:
+        self.events.append((type(event).__name__, self._session_ref[0]._speaking))
+
+
+async def test_reply_text_is_published_while_the_voice_is_still_speaking():
+    sink = _Sink()
+    ref: list = []
+    bus = _Bus(ref)
+    session = _make_session(sink, tts=_SlowTTS(chunks=15, delay=0.02), bus=bus)
+    ref.append(session)
+    await _drive_one_utterance(session)
+    published = [speaking for name, speaking in bus.events if name == "ResponseGenerated"]
+    assert published == [True]  # text appeared during speech, not after it
+
+
+async def test_speaking_over_jarvis_interrupts_and_answers_the_new_request():
+    sink = _Sink()
+    brain = FakeBrain("Una risposta lunga che continua a parlare per un bel po' di tempo.")
+    session = _make_session(
+        sink,
+        stt=FakeSTT(["Raccontami cosa puoi fare", "grazie perfetto"]),
+        brain=brain,
+        tts=_SlowTTS(chunks=40, delay=0.02),
+    )
+    await _drive_until_speaking(session)
+    assert session._speaking
+    # The person talks over the reply.
+    for _ in range(8):
+        await session.handle_audio_frame(_pcm16_frame(15000))
+    for _ in range(10):
+        await session.handle_audio_frame(_pcm16_frame(0))
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if "grazie perfetto" in brain.prompts:
+            break
+    assert sink.json_of("tts_cancel")
+    assert "grazie perfetto" in brain.prompts
+
+
+async def test_jarvis_own_voice_picked_up_by_the_mic_does_not_interrupt_it():
+    sink = _Sink()
+    brain = FakeBrain("Una risposta lunga che continua a parlare per un bel po' di tempo.")
+    session = _make_session(
+        sink,
+        stt=FakeSTT(["Raccontami cosa puoi fare", "continua a parlare per un bel po"]),
+        brain=brain,
+        tts=_SlowTTS(chunks=40, delay=0.02),
+    )
+    await _drive_until_speaking(session)
+    for _ in range(8):
+        await session.handle_audio_frame(_pcm16_frame(15000))
+    for _ in range(10):
+        await session.handle_audio_frame(_pcm16_frame(0))
+    await asyncio.sleep(0.2)
+    assert not sink.json_of("tts_cancel")
+    assert brain.prompts == ["Raccontami cosa puoi fare"]
