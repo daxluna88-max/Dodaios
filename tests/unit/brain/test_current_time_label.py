@@ -20,3 +20,28 @@ def test_negative_offset_and_english_weekday() -> None:
     assert "Sunday, 2026-11-01 08:00 EST (UTC-05:00)" in _current_time_label(
         datetime(2026, 11, 1, 8, 0, tzinfo=est)
     )
+
+
+def test_turn_now_uses_the_clients_zone_when_known():
+    """A UTC server must label the turn in the person's zone, not make the model convert."""
+    from dodaios.brain.manager import _turn_now
+    from dodaios.tasks.context import client_timezone
+
+    token = client_timezone.set("Europe/Rome")
+    try:
+        now = _turn_now()
+    finally:
+        client_timezone.reset(token)
+    assert now.utcoffset() in (timedelta(hours=1), timedelta(hours=2))
+    assert _current_time_label(now).endswith(("(UTC+01:00)]", "(UTC+02:00)]"))
+
+
+def test_turn_now_ignores_an_unknown_zone_name():
+    from dodaios.brain.manager import _turn_now
+    from dodaios.tasks.context import client_timezone
+
+    token = client_timezone.set("Not/AZone")
+    try:
+        assert _turn_now().tzinfo is not None
+    finally:
+        client_timezone.reset(token)
