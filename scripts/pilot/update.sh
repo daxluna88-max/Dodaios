@@ -59,6 +59,9 @@ ensure_env JARVIS_TRUSTED_HOSTS srv2104916.tail11f095.ts.net
 ensure_env JARVIS__STT__LANGUAGE it
 # Keep the browser session across restarts (hashed tokens, 0600 file, 30-day cookie) so Dax need not re-enter the Control Key.
 ensure_env JARVIS_SESSION_PERSIST 1
+# Free voice: the phone speaks with its built-in voice (no cloud TTS cost, uniform tone). Dax approved 2026-10-30.
+# Back to cloud TTS: set JARVIS_BROWSER_VOICE_ENGINE=cloud in ~/.dodaios.env and run update.sh --restart.
+ensure_env JARVIS_BROWSER_VOICE_ENGINE browser
 
 if [ "$applied" -gt 0 ] || [ "${1:-}" = "--restart" ]; then
   pkill -x jarvis || true
