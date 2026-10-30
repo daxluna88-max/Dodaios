@@ -2592,6 +2592,12 @@
     "file_open": "Ver archivo",
     "never_title": "Nunca se guarda",
     "never_body": "{name} se niega a guardar esto, diga lo que diga una conversación.",
+    "never_cat": {
+      "political": "Política",
+      "health": "Salud",
+      "relationship": "Conflictos de pareja",
+      "mbti": "Tipo MBTI"
+    },
     "back_to_profile": "Volver al perfil",
     "fields": {
       "name": "Nombre",

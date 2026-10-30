@@ -2592,6 +2592,12 @@
     "file_open": "Datei ansehen",
     "never_title": "Wird nie gespeichert",
     "never_body": "{name} speichert das grundsätzlich nicht, egal was im Gespräch vorkommt.",
+    "never_cat": {
+      "political": "Politik",
+      "health": "Gesundheit",
+      "relationship": "Beziehungskonflikte",
+      "mbti": "MBTI-Typ"
+    },
     "back_to_profile": "Zurück zum Profil",
     "fields": {
       "name": "Name",

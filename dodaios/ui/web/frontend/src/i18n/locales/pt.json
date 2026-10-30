@@ -2592,6 +2592,12 @@
     "file_open": "Ver ficheiro",
     "never_title": "Nunca registado",
     "never_body": "O {name} recusa-se a guardar isto, seja qual for o conteúdo de uma conversa.",
+    "never_cat": {
+      "political": "Política",
+      "health": "Saúde",
+      "relationship": "Conflitos de relacionamento",
+      "mbti": "Tipo MBTI"
+    },
     "back_to_profile": "Voltar ao perfil",
     "fields": {
       "name": "Nome",

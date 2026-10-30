@@ -2592,6 +2592,12 @@
     "file_open": "查看文件",
     "never_title": "绝不记录",
     "never_body": "无论对话中出现什么，{name} 都不会保存这些内容。",
+    "never_cat": {
+      "political": "政治",
+      "health": "健康",
+      "relationship": "情感冲突",
+      "mbti": "MBTI 类型"
+    },
     "back_to_profile": "返回个人资料",
     "fields": {
       "name": "名字",

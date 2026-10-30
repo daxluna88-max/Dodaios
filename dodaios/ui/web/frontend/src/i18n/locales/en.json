@@ -2592,6 +2592,12 @@
     "file_open": "View file",
     "never_title": "Never recorded",
     "never_body": "{name} refuses to store these, whatever a conversation contains.",
+    "never_cat": {
+      "political": "Political",
+      "health": "Health",
+      "relationship": "Relationship conflicts",
+      "mbti": "MBTI type"
+    },
     "back_to_profile": "Back to profile",
     "fields": {
       "name": "Name",

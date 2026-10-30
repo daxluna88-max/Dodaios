@@ -145,6 +145,16 @@ class TestCauseAwareProviderDownPhrase:
         got = _provider_down_phrase("en", 0, "missing_key")
         assert got == _PROVIDER_DOWN_CAUSE_PHRASES["missing_key"]["en"]
 
+    def test_italian_turn_never_gets_the_german_chain_diagnostic(self) -> None:
+        # The German "Provider X unerreichbar. Netzwerk pruefen." is the
+        # log-only chain diagnostic; the spoken/shown phrase must be Italian.
+        for cause in (None, "unreachable", "missing_key", "rate_limit"):
+            got = _provider_down_phrase("it", 0, cause)
+            assert "unerreichbar" not in got and "Netzwerk" not in got, cause
+        assert _provider_down_phrase("it", 0, "unreachable").startswith(
+            "Non riesco a raggiungere il fornitore"
+        )
+
     def test_unknown_cause_falls_back_to_generic_rotation(self) -> None:
         assert _provider_down_phrase("en", 1, "weird_kind") == (_PROVIDER_DOWN_PHRASES["en"][1])
 

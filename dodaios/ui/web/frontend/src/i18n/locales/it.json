@@ -2592,6 +2592,12 @@
     "file_open": "Visualizza il file",
     "never_title": "Mai registrati",
     "never_body": "{name} rifiuta di conservare questi dati, qualunque cosa contenga una conversazione.",
+    "never_cat": {
+      "political": "Politica",
+      "health": "Salute",
+      "relationship": "Conflitti di coppia",
+      "mbti": "Tipo MBTI"
+    },
     "back_to_profile": "Torna al profilo",
     "fields": {
       "name": "Nome",

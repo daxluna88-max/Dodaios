@@ -136,3 +136,20 @@ export function shortenCategory(text: string): string {
     .trim();
   return firstClause || withoutReason || text;
 }
+
+/**
+ * The i18n key suffix (`profile_view.never_cat.<key>`) of a known Do Not Record
+ * category, or `null` for a line the page has no translation for.
+ *
+ * Display only: the stored text in USER.md and the enforcement vocabulary in
+ * `profile_update.py` stay untouched. The match is on the category's own
+ * leading words, in the languages the profile template has shipped in.
+ */
+export function neverCategoryKey(text: string): string | null {
+  const t = text.trim().toLowerCase();
+  if (/^(political|politi|polít)/.test(t)) return "political";
+  if (/^(health|gesundheit|salud|saúde|salute)/.test(t)) return "health";
+  if (/^(relationship|beziehung|relaci|relacionamento|relazion)/.test(t)) return "relationship";
+  if (/^mbti/.test(t)) return "mbti";
+  return null;
+}

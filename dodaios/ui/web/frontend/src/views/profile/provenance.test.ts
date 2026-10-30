@@ -5,6 +5,7 @@ import {
   latestFor,
   parseDoNotRecord,
   parseObservations,
+  neverCategoryKey,
   shortenCategory,
 } from "@/views/profile/provenance";
 
@@ -138,5 +139,18 @@ describe("shortenCategory", () => {
 
   it("never returns an empty string", () => {
     expect(shortenCategory("(only a reason)")).toBe("(only a reason)");
+  });
+});
+
+describe("neverCategoryKey", () => {
+  it("maps the shipped template lines to display keys", () => {
+    expect(neverCategoryKey("Political or religious beliefs (echo-chamber risk)")).toBe("political");
+    expect(neverCategoryKey("Health or mental-health diagnoses (GDPR Art. 9)")).toBe("health");
+    expect(neverCategoryKey("Relationship conflicts as triggers for later quotes")).toBe("relationship");
+    expect(neverCategoryKey("MBTI type or similar pseudo-scientific labels")).toBe("mbti");
+  });
+
+  it("returns null for a category it has no translation for", () => {
+    expect(neverCategoryKey("Passwords")).toBeNull();
   });
 });
