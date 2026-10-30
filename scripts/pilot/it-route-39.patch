@@ -1,0 +1,16 @@
+diff --git a/dodaios/browser_voice/route.py b/dodaios/browser_voice/route.py
+index 89896c353..620360fe0 100644
+--- a/dodaios/browser_voice/route.py
++++ b/dodaios/browser_voice/route.py
+@@ -54,8 +54,9 @@ _SPEECH_STACK_UNAVAILABLE_REASON = (
+     "provider is missing. Check API Keys."
+ )
+ 
+-# BCP-47 from the canonical per-turn resolver (de/en/es/pt).
+-_LANG_MAP = {"de": "de-DE", "en": "en-US", "es": "es-ES", "pt": "pt-PT"}
++# BCP-47 from the canonical per-turn resolver (de/en/es/pt, plus Italian for the pilot: without "it" an
++# Italian pin fell back to en-US and the cloud TTS picked the English voice).
++_LANG_MAP = {"de": "de-DE", "en": "en-US", "es": "es-ES", "pt": "pt-PT", "it": "it-IT"}
+ 
+ 
+ def browser_voice_enabled(cfg: Any) -> bool:
