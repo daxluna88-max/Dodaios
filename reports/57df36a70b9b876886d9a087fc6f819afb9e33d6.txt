@@ -1,0 +1,32 @@
+sha=57df36a70b9b876886d9a087fc6f819afb9e33d6 started=2026-10-30T11:58:01Z
+= it-upstream.patch (already applied)
+= it-detect-2.patch (already applied)
+= it-time-3.patch (already applied)
+= it-forget-4.patch (already applied)
+= it-forget-5.patch (already applied)
+= it-privacy-6.patch (already applied)
+= it-shape-7.patch (already applied)
+= it-shape-8.patch (already applied)
+= it-tools-9.patch (already applied)
+= it-wiki-10.patch (already applied)
+= it-profile-11.patch (already applied)
+= it-stop-12.patch (already applied)
+= it-paths-13.patch (already applied)
+= it-clock-14.patch (already applied)
+= it-wiki-15.patch (already applied)
+= it-log-16.patch (already applied)
+= it-reply-17.patch (already applied)
+= it-retry-18.patch (already applied)
+= env JARVIS__BRAIN__WORKER__PROVIDER (already set)
+= env JARVIS__BRAIN__WORKER__MODEL (already set)
+Nothing to apply; server not restarted (use --restart to force).
+update_exit=0
+FAIL     CHK-TIME: real_rome_time=12:59 status=done secs=64 tool_errors=0 reply='Non riesco a raggiungere il fornitore, probabilmente per un problema di rete o del servizio. Riprova tra un momento.'
+PASS     CHK-STOP: first=cancelled second=done second_len=39 resumed=False leaked_internal_text=False reply='Sono le 12:59, venerdì 30 ottobre 2026.'
+BLOCKED  CHK-WIKI-HONEST: a memory tool really stored something: 'Already known — identity.about already had that value. No change.'
+PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
+SUMMARY: 2 PASS, 1 FAIL, 1 BLOCKED
+SERVER-LOG: Brain openrouter(qwen/qwen3.8-flash) fehlgeschlagen: Provider returned error | detail={'code': 429, 'message': 'Provider returned error', 'metadata': {'error_type': 'rate_limit_exceeded'}}
+SERVER-LOG: Alle 1 Provider-Versuche fehlgeschlagen. Letzter Fehler: Provider returned error
+check_exit=1
+finished=2026-10-30T12:00:29Z
