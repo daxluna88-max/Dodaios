@@ -659,3 +659,32 @@ def test_ui_fallback_ignores_an_unknown_code() -> None:
 
     assert resolve_conversation_language("auto", None, "Ricorda", fallback_language="xx") == "unknown"
     assert resolve_output_language("auto", None, "Ricorda", fallback_language="") == DEFAULT_LOCALE
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Rispondi in italiano", "it"),
+        ("Parla in italiano", "it"),
+        ("Parla italiano", "it"),
+        ("Per favore rispondi in italiano", "it"),
+        ("Puoi parlare in italiano?", "it"),
+        ("Scrivi sempre in italiano", "it"),
+        ("Rispondimi in inglese", "en"),
+        ("Passa a spagnolo", "es"),
+        ("Da ora in poi parla in tedesco", "de"),
+        ("Rispondi in francese adesso", "fr"),
+    ],
+)
+def test_italian_language_request_overrides_english_session(text: str, expected: str) -> None:
+    assert detect_language_request(text) == expected
+    if expected in {"it", "en", "de", "es", "pt"}:
+        assert resolve_output_language("auto", "en", text, conversation_language="en") == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Non parlare in italiano", "Traduci in italiano: hello", "italiano", "Il mio amico parla italiano"],
+)
+def test_italian_mentions_are_not_language_requests(text: str) -> None:
+    assert detect_language_request(text) == ""
