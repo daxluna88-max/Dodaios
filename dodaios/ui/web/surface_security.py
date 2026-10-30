@@ -563,6 +563,8 @@ def build_set_cookie_header(token: str, secure: bool) -> str:
     morsel["samesite"] = "Strict"
     if secure:
         morsel["secure"] = True
+    if os.environ.get("JARVIS_SESSION_PERSIST", "").strip().lower() in {"1", "true", "yes"}:
+        morsel["max-age"] = 30 * 24 * 3600
     return morsel.OutputString()
 
 
