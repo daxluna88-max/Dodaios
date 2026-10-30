@@ -544,6 +544,7 @@ async def run_brain_turn(
     _note_skill_trigger(brain, text)
 
     if bridge is not None:
+        from dodaios.agent_chat.destructive_guard import needs_confirmation
         from dodaios.society.surface import requires_explicit_approval
 
         bridge.arm(
@@ -559,7 +560,7 @@ async def run_brain_turn(
                     lambda name, args: requires_explicit_approval(session.session_id, name, args)
                 )
                 if session.surface == "society"
-                else lambda _name, _args: False,
+                else needs_confirmation,
             ),
         )
 
