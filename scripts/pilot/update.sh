@@ -72,6 +72,8 @@ switch_env voice-cartesia-2 JARVIS__TTS__MODEL ""
 switch_env voice-cartesia-3 JARVIS__TTS__LANGUAGE_CODE it-IT
 switch_env voice-cartesia-4 JARVIS__TTS__CARTESIA__VOICE_ID_IT 13ebc17e-5090-41eb-959b-dcdef7f6d6de
 switch_env voice-cartesia-5 JARVIS_BROWSER_VOICE_ENGINE cloud
+# Pilot is Italian-first: pin the reply language so the voice session resolves it-IT (the cloned voice) instead of en-US.
+switch_env voice-lang-it-1 JARVIS__BRAIN__REPLY_LANGUAGE it
 
 if [ "$applied" -gt 0 ] || [ "${1:-}" = "--restart" ]; then
   pkill -x jarvis || true

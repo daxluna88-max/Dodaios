@@ -791,3 +791,14 @@ async def test_realtime_socket_drop_flushes_pending_turn_to_session_store(
         assert provider.session is not None and provider.session.closed is True
     finally:
         store.close()
+
+
+def test_italian_reply_language_pin_resolves_to_it_it():
+    from types import SimpleNamespace
+
+    from dodaios.browser_voice.route import _resolve_language
+
+    cfg = SimpleNamespace(brain=SimpleNamespace(reply_language="it"))
+    assert _resolve_language(cfg) == "it-IT"
+    auto = SimpleNamespace(brain=SimpleNamespace(reply_language="auto"))
+    assert _resolve_language(auto) == "en-US"  # unchanged for everyone without a pin
