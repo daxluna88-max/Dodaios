@@ -333,3 +333,9 @@ async def test_forget_scalar_purges_that_fields_history(tmp_path):
     text = path.read_text(encoding="utf-8")
     assert "Boss" not in text
     assert "identity.preferred_address: cleared" in text
+
+
+def test_value_schema_forbids_translating_free_text():
+    """Free-text values stay in the user's language ("rosso", not "red")."""
+    desc = UpdateProfileTool.schema["properties"]["value"]["description"]
+    assert "never translate" in desc

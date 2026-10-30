@@ -156,7 +156,10 @@ class UpdateProfileTool:
                     "The value to store: a string/number/boolean for scalar "
                     "fields; for list fields (languages, devices, humor_types, "
                     "top_values, pet_peeves, motivations) pass a SINGLE item to "
-                    "append."
+                    "append. Store free-text values in the user's own words and "
+                    "language: never translate them (keep \"rosso\", not "
+                    "\"red\"). Only primary_language and languages use the "
+                    "English language name."
                 ),
             },
             "operation": {
