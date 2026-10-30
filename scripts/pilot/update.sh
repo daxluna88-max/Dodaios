@@ -10,16 +10,27 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
 curl -fsSL "$BASE/MANIFEST" -o "$TMP/MANIFEST"
 cd "$TREE"
-applied=0
+names=(); sums=()
 while read -r name sum; do
   [ -n "$name" ] || continue
   curl -fsSL "$BASE/$name" -o "$TMP/$name"
   got="$(sha256sum "$TMP/$name" | cut -d' ' -f1)"
   if [ "$got" != "$sum" ]; then echo "STOP: sha256 mismatch for $name"; exit 1; fi
-  if git apply --check -R "$TMP/$name" 2>/dev/null; then echo "= $name (already applied)"; continue; fi
-  if ! git apply --check "$TMP/$name" 2>/dev/null; then echo "STOP: $name neither applied nor applicable"; exit 1; fi
-  git apply "$TMP/$name"; echo "+ $name applied"; applied=$((applied+1))
+  names+=("$name"); sums+=("$sum")
 done < "$TMP/MANIFEST"
+
+# Patches build on each other, so only the newest applied one reverse-checks
+# cleanly: find it, treat everything up to it as applied, apply the rest.
+last=-1
+for ((i=${#names[@]}-1; i>=0; i--)); do
+  if git apply --check -R "$TMP/${names[$i]}" 2>/dev/null; then last=$i; break; fi
+done
+for ((i=0; i<=last; i++)); do echo "= ${names[$i]} (already applied)"; done
+applied=0
+for ((i=last+1; i<${#names[@]}; i++)); do
+  if ! git apply --check "$TMP/${names[$i]}" 2>/dev/null; then echo "STOP: ${names[$i]} not applicable"; exit 1; fi
+  git apply "$TMP/${names[$i]}"; echo "+ ${names[$i]} applied"; applied=$((applied+1))
+done
 
 if [ "$applied" -gt 0 ] || [ "${1:-}" = "--restart" ]; then
   pkill -x jarvis || true
