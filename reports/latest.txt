@@ -1,4 +1,4 @@
-sha=6c35018e4f7ab10bd6870ecdba84532e8d525c3d started=2026-10-30T10:17:01Z
+sha=80085a4fc913b3a42cec643081be640c7f0484f6 started=2026-10-30T10:24:01Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -16,9 +16,9 @@ sha=6c35018e4f7ab10bd6870ecdba84532e8d525c3d started=2026-10-30T10:17:01Z
 = env JARVIS__BRAIN__WORKER__MODEL (already set)
 Nothing to apply; server not restarted (use --restart to force).
 update_exit=0
-FAIL     check_time: KeyError: 'id'
-FAIL     check_stop_does_not_resume: KeyError: 'id'
+PASS     CHK-TIME: status=done secs=6 tool_errors=0 reply='Sono le 12:24, venerdì 30 ottobre 2026 — ora di Berlino.'
+PASS     CHK-STOP: first=cancelled second=done second_len=330 resumed=False reply='Tool record of this turn (already executed; historical data, not a format for ne'
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
-SUMMARY: 1/3 passed
-check_exit=1
-finished=2026-10-30T10:17:07Z
+SUMMARY: 3/3 passed
+check_exit=0
+finished=2026-10-30T10:24:44Z
