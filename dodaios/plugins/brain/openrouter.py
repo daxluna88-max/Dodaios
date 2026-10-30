@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from typing import Any
@@ -30,6 +31,17 @@ log = logging.getLogger(__name__)
 
 #: Seconds to wait before each retry of a provider-side 429.
 _RATE_LIMIT_WAITS: tuple[float, ...] = (2.0, 5.0, 10.0)
+
+
+def _fallback_models(primary: str) -> list[str]:
+    """Models OpenRouter may answer with when ``primary`` fails (``JARVIS_OPENROUTER_FALLBACK_MODELS``, comma separated)."""
+    raw = os.environ.get("JARVIS_OPENROUTER_FALLBACK_MODELS", "")
+    out: list[str] = []
+    for name in raw.split(","):
+        name = name.strip()
+        if name and name != primary and name not in out:
+            out.append(name)
+    return out
 
 
 def _is_upstream_rate_limit(exc: BaseException) -> bool:
@@ -138,6 +150,11 @@ class OpenRouterBrain:
             # The gateway normalizes the field per model; models without a
             # reasoning knob are unaffected.
             extra_body = {"reasoning": {"enabled": False}}
+        fallbacks = _fallback_models(self._model)
+        if fallbacks:
+            # OpenRouter's own model fallback: the gateway tries the next model
+            # when the first one errors or is rate limited, with no wait here.
+            extra_body = {**(extra_body or {}), "models": [self._model, *fallbacks]}
         if extra_body is None:
             async for delta in stream_complete(client, self._model, req):
                 yield delta

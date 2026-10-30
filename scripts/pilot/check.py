@@ -187,11 +187,15 @@ def check_stop_does_not_resume(api: JarvisClient) -> None:
 
 
 def check_wiki_honesty(api: JarvisClient) -> None:
-    """After the curator refuses a trivial note, the reply must say nothing was saved."""
+    """After the curator refuses a note about nobody, the reply must say nothing was saved.
+
+    The phrase is general knowledge on purpose: a sentence about the person (\"non ricordo\")
+    was taken for a profile fact and written into the real profile by earlier runs.
+    """
     for attempt in (1, 2):
         sid = new_session(api)
         try:
-            result = wait_turn(api, sid, send(api, sid, "Ricorda che non ricordo"))
+            result = wait_turn(api, sid, send(api, sid, "Ricorda che il cielo è azzurro"))
         finally:
             drop(api, sid)
         if "raggiungere il fornitore" not in result["text"].lower():
@@ -200,7 +204,8 @@ def check_wiki_honesty(api: JarvisClient) -> None:
     saved = [
         out for name, out in result["tools"]
         if name in ("wiki-ingest", "update_profile")
-        and not out.lower().startswith(("not saved", "nothing was stored"))
+        and not out.lower().startswith(("not saved", "nothing was stored", "already known"))
+        and "no change" not in out.lower()
     ]
     if saved:
         record("CHK-WIKI-HONEST", "BLOCKED", f"a memory tool really stored something: {saved[-1][:120]!r}")

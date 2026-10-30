@@ -40,6 +40,8 @@ ensure_env() {
 }
 ensure_env JARVIS__BRAIN__WORKER__PROVIDER openrouter
 ensure_env JARVIS__BRAIN__WORKER__MODEL qwen/qwen3.8-flash
+# OpenRouter tries these when the main model errors or is rate limited (429 seen repeatedly on qwen3.8-flash).
+ensure_env JARVIS_OPENROUTER_FALLBACK_MODELS qwen/qwen3.7-flash,qwen/qwen3.6-flash
 
 if [ "$applied" -gt 0 ] || [ "${1:-}" = "--restart" ]; then
   pkill -x jarvis || true
