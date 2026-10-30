@@ -39,3 +39,24 @@ def test_the_honest_phrase_follows_the_language_with_english_fallback():
     assert memory_not_saved_phrase("it").startswith("Non ho salvato nulla")
     assert memory_not_saved_phrase("en").startswith("I did not save")
     assert memory_not_saved_phrase("xx").startswith("I did not save")
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Noted. Il tuo colore di prova è verde acqua.",
+        "Ricevuto. Il tuo colore di prova è verde acqua.",
+        "Certo, lo ricorderò.",
+        "Ricorderò che il tuo colore di prova è verde acqua.",
+        "Me lo segno.",
+        "Lo terrò a mente.",
+    ],
+)
+def test_a_save_confirmed_without_any_tool_is_caught(reply):
+    assert memory_claim_language("Ricorda che il mio colore di prova è verde acqua", reply, []) == "it"
+
+
+def test_the_wider_claims_do_not_touch_a_real_save_or_a_plain_question():
+    ask = "Ricorda che il mio colore di prova è verde acqua"
+    assert memory_claim_language(ask, "Noted. Salvato.", [("update_profile", True, "updated")]) is None
+    assert memory_claim_language("Qual è il mio colore di prova?", "Non lo so: lo ricorderò se me lo dici.", []) is None
