@@ -12,7 +12,9 @@ from __future__ import annotations
 import re
 import sys
 import time
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from dodaios.cli_ctl.client import ApiError, JarvisClient
 from dodaios.cli_ctl.config import resolve_profile
@@ -78,7 +80,9 @@ def turns_finished(evs: list[dict[str, Any]]) -> int:
 def send(api: JarvisClient, sid: str, text: str) -> int:
     """Post a message; return how many turns had finished before it."""
     before = turns_finished(events(api, sid)[1])
-    api.request("POST", f"{BASE}/sessions/{sid}/messages", json={"text": text})
+    api.request(
+        "POST", f"{BASE}/sessions/{sid}/messages", json={"text": text, "timezone": "Europe/Rome"}
+    )
     return before
 
 
@@ -109,6 +113,17 @@ def wait_turn(api: JarvisClient, sid: str, before: int, timeout: float = 120.0) 
     }
 
 
+def clock_matches(text: str, tolerance_min: int = 4) -> bool:
+    """True when the reply names the real Rome time (HH:MM, within a few minutes)."""
+    now = datetime.now(ZoneInfo("Europe/Rome"))
+    for hh, mm in re.findall(r"\b(\d{1,2})[:.](\d{2})\b", text):
+        if int(hh) < 24 and int(mm) < 60:
+            delta = abs((int(hh) * 60 + int(mm)) - (now.hour * 60 + now.minute))
+            if min(delta, 1440 - delta) <= tolerance_min:
+                return True
+    return False
+
+
 def check_time(api: JarvisClient) -> None:
     sid = new_session(api)
     try:
@@ -117,15 +132,16 @@ def check_time(api: JarvisClient) -> None:
         drop(api, sid)
     ok = (
         result["status"] == "done"
-        and TIME_RE.search(result["text"])
+        and clock_matches(result["text"])
         and not result["tool_errors"]
         and result["duration_ms"] < 60_000
     )
+    now = datetime.now(ZoneInfo("Europe/Rome")).strftime("%H:%M")
     record(
         "CHK-TIME",
         "PASS" if ok else "FAIL",
-        f"status={result['status']} secs={result['duration_ms'] // 1000} "
-        f"tool_errors={len(result['tool_errors'])} reply={result['text'][:80]!r}",
+        f"real_rome_time={now} status={result['status']} secs={result['duration_ms'] // 1000} "
+        f"tool_errors={len(result['tool_errors'])} reply={result['text'][:120]!r}",
     )
 
 
@@ -141,12 +157,20 @@ def check_stop_does_not_resume(api: JarvisClient) -> None:
     finally:
         drop(api, sid)
     resumed = len(second["text"]) > 400 or "pane" in second["text"].lower()
-    ok = stopped["status"] == "cancelled" and second["status"] == "done" and not resumed
+    leaked = "tool record" in second["text"].lower() or "[the user pressed stop" in second["text"].lower()
+    ok = (
+        stopped["status"] == "cancelled"
+        and second["status"] == "done"
+        and not resumed
+        and not leaked
+        and clock_matches(second["text"])
+    )
     record(
         "CHK-STOP",
         "PASS" if ok else "FAIL",
         f"first={stopped['status']} second={second['status']} "
-        f"second_len={len(second['text'])} resumed={resumed} reply={second['text'][:80]!r}",
+        f"second_len={len(second['text'])} resumed={resumed} leaked_internal_text={leaked} "
+        f"reply={second['text'][:400]!r}",
     )
 
 
