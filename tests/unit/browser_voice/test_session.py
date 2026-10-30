@@ -333,3 +333,96 @@ def test_speak_never_runs_far_ahead_of_playback(monkeypatch):
     sess._speaking = False
     asyncio.run(sess._speak("Una frase."))
     assert sleeps and max(sleeps) > 0  # the 7th second onward had to wait
+
+
+class _RecordingTTS:
+    name = "recording-tts"
+    supports_streaming = True
+
+    def __init__(self, on_call=None) -> None:
+        self.texts: list[str] = []
+        self._on_call = on_call
+
+    async def synthesize(self, text, language_code="it-IT", voice=None):
+        self.texts.append(text)
+        if self._on_call:
+            self._on_call(text)
+        yield AudioChunk(pcm=b"\x01\x00" * 240, sample_rate=24_000, timestamp_ns=0, channels=1)
+
+
+class _ScriptedBrain:
+    """Yields the given text pieces, with a hook that fires right before the LAST one."""
+
+    def __init__(self, parts, before_last=None) -> None:
+        self._parts = parts
+        self._before_last = before_last
+
+    async def generate_stream(self, user_text, **_kw):
+        for i, part in enumerate(self._parts):
+            if i == len(self._parts) - 1 and self._before_last:
+                self._before_last()
+            yield part
+            await asyncio.sleep(0)
+
+
+_LONG_IT = (
+    "Un frigorifero sposta il calore dall'interno verso l'esterno. "
+    "Un liquido refrigerante evapora dentro lo scomparto freddo e assorbe calore. "
+)
+
+
+async def _run_stream(session, tts_texts_hook=None):
+    from dodaios.browser_voice.session import _ReplyState
+
+    state = _ReplyState()
+    await session._speak_pieces(session._reply_pieces("domanda", state))
+    return state
+
+
+async def test_speech_starts_before_the_reply_is_complete():
+    sink = _Sink()
+    finished: list[str] = []
+    tts = _RecordingTTS(on_call=lambda text: finished.append("tts"))
+    brain = _ScriptedBrain(
+        [_LONG_IT, "Il compressore comprime il gas, che si scalda e lo spinge verso il retro."],
+        before_last=lambda: finished.append("last-brain-chunk"),
+    )
+    session = _make_session(sink, brain=brain, tts=tts, language_code="it-IT")
+    state = await _run_stream(session)
+    assert finished[0] == "tts"  # the first piece was synthesized before the brain ended
+    assert "".join(state.chunks).startswith("Un frigorifero")
+    assert sink.json_of("tts_start") and sink.json_of("tts_end")
+
+
+async def test_hard_leak_in_a_later_piece_cuts_speech_and_says_the_fallback():
+    from dodaios.brain.output_filter import FALLBACK_PHRASES
+
+    sink = _Sink()
+    tts = _RecordingTTS()
+    leak = "Traceback (most recent call last):\n  File \"x.py\", line 1, in <module>\nValueError: boom"
+    brain = _ScriptedBrain([_LONG_IT, leak])
+    session = _make_session(sink, brain=brain, tts=tts, language_code="it-IT")
+    state = await _run_stream(session)
+    assert state.cut
+    assert tts.texts[-1] == FALLBACK_PHRASES["en"] or tts.texts[-1] in FALLBACK_PHRASES.values()
+    assert not any("Traceback" in text or "ValueError" in text for text in tts.texts)
+    assert sink.json_of("tts_cancel")  # audio already queued in the browser was dropped
+
+
+async def test_whole_reply_scrub_catches_a_leak_that_spans_pieces():
+    sink = _Sink()
+    tts = _RecordingTTS()
+    # "Traceback" alone is harmless; the aggregate with the next lines is the leak.
+    brain = _ScriptedBrain([_LONG_IT + "Traceback (most recent call last):", "\n  File \"x.py\", line 1\nValueError: boom"])
+    session = _make_session(sink, brain=brain, tts=tts, language_code="it-IT")
+    state = await _run_stream(session)
+    assert state.cut
+    assert not any("ValueError" in text for text in tts.texts)
+
+
+async def test_empty_reply_is_silent_not_an_error():
+    sink = _Sink()
+    tts = _RecordingTTS()
+    session = _make_session(sink, brain=_ScriptedBrain([""]), tts=tts, language_code="it-IT")
+    state = await _run_stream(session)
+    assert not state.cut and not state.spoken and tts.texts == []
