@@ -1,4 +1,4 @@
-sha=129c7ac41d0e6cdc151625fac5fc6d447a0def15 started=2026-10-30T19:48:01Z
+sha=624aefbf55f6fc13dee02a05fb455c987414489d started=2026-10-30T19:54:01Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -30,7 +30,8 @@ sha=129c7ac41d0e6cdc151625fac5fc6d447a0def15 started=2026-10-30T19:48:01Z
 = it-guard-29.patch (already applied)
 = it-session-30.patch (already applied)
 = it-voice-31.patch (already applied)
-+ it-voice-32.patch applied
+= it-voice-32.patch (already applied)
++ it-voice-33.patch applied
 = env JARVIS__BRAIN__WORKER__PROVIDER (already set)
 = env JARVIS__BRAIN__WORKER__MODEL (already set)
 = env JARVIS__BRAIN__PROVIDERS__OPENROUTER__MODEL (already set)
@@ -43,10 +44,10 @@ sha=129c7ac41d0e6cdc151625fac5fc6d447a0def15 started=2026-10-30T19:48:01Z
 = env JARVIS_SESSION_PERSIST (already set)
 RESTARTED: jarvis running
 update_exit=0
-PASS     CHK-TIME: real_rome_time=20:48 status=done secs=1 tool_errors=0 reply='Sono le venti e quarantotto, Davide.'
-PASS     CHK-STOP: first=cancelled second=done second_len=36 resumed=False leaked_internal_text=False reply='Sono le venti e quarantotto, Davide.'
+PASS     CHK-TIME: real_rome_time=20:54 status=done secs=5 tool_errors=0 reply='Sono le venti e cinquantaquattro, venerdì trenta ottobre.'
+PASS     CHK-STOP: first=cancelled second=done second_len=41 resumed=False leaked_internal_text=False reply='Sono le venti e cinquantaquattro, Davide.'
 SKIPPED  CHK-WIKI-HONEST: live memory check is off: it writes to the real profile
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
 SUMMARY: 3 PASS, 0 FAIL, 0 BLOCKED, 1 SKIPPED
 check_exit=0
-finished=2026-10-30T19:48:26Z
+finished=2026-10-30T19:54:32Z
