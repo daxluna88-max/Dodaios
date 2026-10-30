@@ -1,0 +1,41 @@
+diff --git a/dodaios/brain/manager.py b/dodaios/brain/manager.py
+index 0b426a719..f678192dc 100644
+--- a/dodaios/brain/manager.py
++++ b/dodaios/brain/manager.py
+@@ -2325,6 +2325,27 @@ def _turn_phrase_language(owner: object, user_text: str) -> str:
+     )
+ 
+ 
++def _turn_now() -> Any:
++    """Now, in the zone of the person's device when it is known, else the server's.
++
++    A server on UTC otherwise labels the turn "10:30 UTC" and the model has to
++    convert to the user's zone itself, which small models get wrong by an hour.
++    """
++    from datetime import datetime
++
++    from dodaios.tasks.context import turn_timezone
++
++    zone = turn_timezone()
++    if zone:
++        try:
++            from zoneinfo import ZoneInfo
++
++            return datetime.now(ZoneInfo(zone))
++        except Exception:  # noqa: BLE001 — an unknown zone name falls back to the server clock
++            pass
++    return datetime.now().astimezone()
++
++
+ def _current_time_label(now: Any) -> str:
+     """The per-turn "current date and time" line, with the zone it is read in.
+ 
+@@ -4266,7 +4287,7 @@ class BrainManager:
+         parts: list[str] = [
+             # Date/time belongs per-turn, never in the cached prefix (also fixes
+             # the missing BUG-005 date injection).
+-            _current_time_label(datetime.now().astimezone())
++            _current_time_label(_turn_now())
+         ]
+         private = _TURN_OVERRIDE.get()
+         if private is not None and private.tool_context.get("tool_origin") == "society":
