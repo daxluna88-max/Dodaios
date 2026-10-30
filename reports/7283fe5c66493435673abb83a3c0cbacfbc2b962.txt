@@ -1,0 +1,27 @@
+sha=7283fe5c66493435673abb83a3c0cbacfbc2b962 started=2026-10-30T11:27:02Z
+= it-upstream.patch (already applied)
+= it-detect-2.patch (already applied)
+= it-time-3.patch (already applied)
+= it-forget-4.patch (already applied)
+= it-forget-5.patch (already applied)
+= it-privacy-6.patch (already applied)
+= it-shape-7.patch (already applied)
+= it-shape-8.patch (already applied)
+= it-tools-9.patch (already applied)
+= it-wiki-10.patch (already applied)
+= it-profile-11.patch (already applied)
+= it-stop-12.patch (already applied)
+= it-paths-13.patch (already applied)
+= it-clock-14.patch (already applied)
++ it-wiki-15.patch applied
+= env JARVIS__BRAIN__WORKER__PROVIDER (already set)
+= env JARVIS__BRAIN__WORKER__MODEL (already set)
+RESTARTED: jarvis running
+update_exit=0
+PASS     CHK-TIME: real_rome_time=12:27 status=done secs=8 tool_errors=0 reply='Sono le 12:27, venerdì 30 ottobre 2026.'
+PASS     CHK-STOP: first=cancelled second=done second_len=41 resumed=False leaked_internal_text=False reply='Sono le 12:27 di venerdì, ora di Berlino.'
+BLOCKED  CHK-WIKI-HONEST: wiki-ingest not called; reply='Non riesco a raggiungere il fornitore, probabilmente per un problema di rete o del servizio. Riprova tra un momento.'
+PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
+SUMMARY: 4/4 passed
+check_exit=0
+finished=2026-10-30T11:28:01Z
