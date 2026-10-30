@@ -1,0 +1,144 @@
+diff --git a/dodaios/browser_voice/session.py b/dodaios/browser_voice/session.py
+index 75a58b8e0..aad15641d 100644
+--- a/dodaios/browser_voice/session.py
++++ b/dodaios/browser_voice/session.py
+@@ -86,6 +86,19 @@ class _ReplyState:
+         self.spoken: list[str] = []
+         self.cut = False  # a hard leak was found: nothing more is spoken
+         self.leak_actions: list[str] = []
++        self.published = False  # ResponseGenerated already sent (text shows while speech plays)
++
++
++_WORD = re.compile(r"\w+", re.UNICODE)
++
++
++def _is_echo(heard: str, spoken: str) -> bool:
++    """True when most of ``heard`` is words Jarvis itself is saying (speaker bleed)."""
++    words = [w.lower() for w in _WORD.findall(heard)]
++    if not words:
++        return True
++    ours = {w.lower() for w in _WORD.findall(spoken)}
++    return sum(1 for w in words if w in ours) / len(words) >= 0.6
+ 
+ 
+ def split_for_tts(text: str) -> list[str]:
+@@ -193,6 +206,8 @@ class BrowserVoiceSession:
+         self._speaking = False
+         self._processing = False
+         self._tts_task: asyncio.Task[None] | None = None
++        self._reply_state: _ReplyState | None = None
++        self._barge_task: asyncio.Task[None] | None = None
+         self._turn_task: asyncio.Task[None] | None = None
+         self._browser_tts_done: asyncio.Event | None = None
+         self._browser_tts_id: str | None = None
+@@ -232,6 +247,12 @@ class BrowserVoiceSession:
+                 self._run_turn(utterance), name=f"bv-turn-{self.session_id}"
+             )
+             self._turn_task.add_done_callback(self._on_turn_done)
++        elif utterance is not None and self._speaking and (
++            self._barge_task is None or self._barge_task.done()
++        ):
++            self._barge_task = asyncio.create_task(
++                self._maybe_barge_in(utterance), name=f"bv-barge-{self.session_id}"
++            )
+ 
+     async def handle_control(self, msg: dict[str, Any]) -> None:
+         """Process a JSON control frame from the browser."""
+@@ -302,7 +323,7 @@ class BrowserVoiceSession:
+ 
+     # -- turn loop ---------------------------------------------------------
+ 
+-    async def _run_turn(self, utterance_pcm16: bytes) -> None:
++    async def _run_turn(self, utterance_pcm16: bytes, transcript: str | None = None) -> None:
+         if self._ended:
+             return
+         self._processing = True
+@@ -310,7 +331,8 @@ class BrowserVoiceSession:
+         user_text = ""
+         full_reply = ""
+         try:
+-            transcript = await self._transcribe(utterance_pcm16)
++            if transcript is None:
++                transcript = await self._transcribe(utterance_pcm16)
+             text = (transcript or "").strip()
+             if not text:
+                 # End-of-turn fired but nothing transcribable — let the browser
+@@ -336,6 +358,7 @@ class BrowserVoiceSession:
+             )
+ 
+             state = _ReplyState()
++            self._reply_state = state
+             pieces = self._reply_pieces(text, state)
+             self._tts_task = asyncio.create_task(self._speak_pieces(pieces))
+             try:
+@@ -356,13 +379,14 @@ class BrowserVoiceSession:
+                 )
+                 await self._complete_bus_turn(turn_id, user_text, "")
+                 return
+-            await self._publish(
+-                ResponseGenerated(
+-                    text=full_reply,
+-                    language=self._lang_short(),
+-                    source_layer="browser_voice",
++            if not state.published:  # a barge-in cut the stream before it was published
++                await self._publish(
++                    ResponseGenerated(
++                        text=full_reply,
++                        language=self._lang_short(),
++                        source_layer="browser_voice",
++                    )
+                 )
+-            )
+             await self._publish(
+                 SpeechSpoken(
+                     text=spoken,
+@@ -463,6 +487,15 @@ class BrowserVoiceSession:
+                     yield item
+                 if state.cut:
+                     break
++        if state.chunks:
++            state.published = True
++            await self._publish(
++                ResponseGenerated(
++                    text="".join(state.chunks),
++                    language=lang,
++                    source_layer="browser_voice",
++                )
++            )
+         if not state.cut:
+             rest = f"{pending} {tail}".strip()
+             if rest:
+@@ -630,6 +663,33 @@ class BrowserVoiceSession:
+ 
+     # -- barge-in / lifecycle ---------------------------------------------
+ 
++    async def _maybe_barge_in(self, utterance_pcm16: bytes) -> None:
++        """The person spoke while Jarvis was talking: stop and answer them instead.
++
++        The microphone also hears Jarvis through the phone speaker, so the utterance
++        is transcribed first and ignored when its words are Jarvis's own (echo).
++        """
++        try:
++            text = ((await self._transcribe(utterance_pcm16)) or "").strip()
++        except Exception:  # noqa: BLE001 — a failed check must never break the session
++            log.debug("browser_voice[%s] barge-in transcription failed", self.session_id, exc_info=True)
++            return
++        state = self._reply_state
++        spoken = " ".join(state.spoken) if state is not None else ""
++        if not text or _is_echo(text, spoken) or not self._speaking or self._ended:
++            return
++        log.info("browser_voice[%s] barge-in: %s", self.session_id, text)
++        turn = self._turn_task
++        await self._barge_in()
++        if turn is not None and not turn.done():
++            await asyncio.wait({turn})
++        if self._ended:
++            return
++        self._turn_task = asyncio.create_task(
++            self._run_turn(utterance_pcm16, text), name=f"bv-turn-{self.session_id}"
++        )
++        self._turn_task.add_done_callback(self._on_turn_done)
++
+     async def _barge_in(self) -> None:
+         """Cancel in-flight TTS playback and tell the browser to flush its queue.
+ 
