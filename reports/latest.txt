@@ -1,4 +1,4 @@
-sha=b99ad4c5418d7754112e8df4ff0ae78a77b0dccf started=2026-10-30T18:04:02Z
+sha=0bdd245cc7103fbafb464fb9b7c3cc2e8665bee0 started=2026-10-30T18:27:01Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -35,12 +35,13 @@ sha=b99ad4c5418d7754112e8df4ff0ae78a77b0dccf started=2026-10-30T18:04:02Z
 = env JARVIS__TTS__MODEL (already set)
 = env JARVIS__TTS__LANGUAGE_CODE (already set)
 = env JARVIS_OPENROUTER_FALLBACK_MODELS (already set)
-Nothing to apply; server not restarted (use --restart to force).
++ env JARVIS_TRUSTED_HOSTS set
+RESTARTED: jarvis running
 update_exit=0
-PASS     CHK-TIME: real_rome_time=19:04 status=done secs=0 tool_errors=0 reply='Sono le diciannove e quattro, ora italiana.'
-FAIL     CHK-STOP: first=cancelled second=done second_len=176 resumed=True leaked_internal_text=False reply='Sono le diciannove e quattro, ora italiana. Venerdì trenta ottobre duemilaventisei.\n\nIl racconto sul pane rosso è rimasto a metà, se vuoi lo riprendo da dove si era interrotto.'
+PASS     CHK-TIME: real_rome_time=19:27 status=done secs=1 tool_errors=0 reply='Sono le diciannove e ventisette, Davide.'
+PASS     CHK-STOP: first=cancelled second=done second_len=22 resumed=False leaked_internal_text=False reply='Sono le 19:27, Davide.'
 SKIPPED  CHK-WIKI-HONEST: live memory check is off: it writes to the real profile
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
-SUMMARY: 2 PASS, 1 FAIL, 0 BLOCKED, 1 SKIPPED
-check_exit=1
-finished=2026-10-30T18:04:23Z
+SUMMARY: 3 PASS, 0 FAIL, 0 BLOCKED, 1 SKIPPED
+check_exit=0
+finished=2026-10-30T18:27:27Z
