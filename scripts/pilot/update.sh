@@ -57,6 +57,8 @@ ensure_env JARVIS_TRUSTED_HOSTS srv2104916.tail11f095.ts.net
 # Speech recognition language: with "auto" Whisper hears silence/noise as English ("Thank you. Two months ago,") and the
 # assistant then answers in English. Pilot is Italian-first; Dax measured this on the phone on 2026-10-30.
 ensure_env JARVIS__STT__LANGUAGE it
+# Keep the browser session across restarts (hashed tokens, 0600 file, 30-day cookie) so Dax need not re-enter the Control Key.
+ensure_env JARVIS_SESSION_PERSIST 1
 
 if [ "$applied" -gt 0 ] || [ "${1:-}" = "--restart" ]; then
   pkill -x jarvis || true
