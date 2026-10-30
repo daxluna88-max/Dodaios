@@ -1,4 +1,4 @@
-sha=c0650777a53c43295555d92b277d415af5f42a7f started=2026-10-30T15:17:01Z
+sha=50430540520a7dd3e721d0a52a9f03f19bb42547 started=2026-10-30T15:18:01Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -30,10 +30,10 @@ sha=c0650777a53c43295555d92b277d415af5f42a7f started=2026-10-30T15:17:01Z
 = env JARVIS_OPENROUTER_FALLBACK_MODELS (already set)
 Nothing to apply; server not restarted (use --restart to force).
 update_exit=0
-PASS     CHK-TIME: real_rome_time=16:17 status=done secs=1 tool_errors=0 reply='Sono le sedici e diciassette, ora italiana.'
-PASS     CHK-STOP: first=cancelled second=done second_len=53 resumed=False leaked_internal_text=False reply='Sono le sedici e diciassette, venerdì trenta ottobre.'
+PASS     CHK-TIME: real_rome_time=16:18 status=done secs=0 tool_errors=0 reply='Sono le sedici e diciotto, venerdì trenta ottobre.'
+PASS     CHK-STOP: first=cancelled second=done second_len=40 resumed=False leaked_internal_text=False reply='Sono le sedici e diciotto, ora italiana.'
 SKIPPED  CHK-WIKI-HONEST: live memory check is off: it writes to the real profile
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
 SUMMARY: 3 PASS, 0 FAIL, 0 BLOCKED, 1 SKIPPED
 check_exit=0
-finished=2026-10-30T15:17:21Z
+finished=2026-10-30T15:18:18Z
