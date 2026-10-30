@@ -555,3 +555,14 @@ def test_repeated_invented_sentences_are_still_invented():
     assert _is_silence_hallucination("Sottotitoli creati dalla comunità Amara.org")
     assert not _is_silence_hallucination("Grazie, e adesso raccontami un'altra storia.")
     assert not _is_silence_hallucination("Ciao")
+
+
+async def test_the_chat_turn_is_closed_while_the_voice_is_still_speaking():
+    sink = _Sink()
+    ref: list = []
+    bus = _Bus(ref)
+    session = _make_session(sink, tts=_SlowTTS(chunks=15, delay=0.02), bus=bus)
+    ref.append(session)
+    await _drive_one_utterance(session)
+    completed = [speaking for name, speaking in bus.events if name == "VoiceTurnCompleted"]
+    assert completed == [True]  # filed in the chat during speech, once

@@ -88,6 +88,9 @@ class _ReplyState:
         self.cut = False  # a hard leak was found: nothing more is spoken
         self.leak_actions: list[str] = []
         self.published = False  # ResponseGenerated already sent (text shows while speech plays)
+        self.turn_id: str | None = None
+        self.user_text = ""
+        self.completed = False  # the record turn was closed early, so the chat shows the text during speech
 
 
 def _browser_engine() -> bool:
@@ -417,6 +420,7 @@ class BrowserVoiceSession:
 
             state = _ReplyState()
             self._reply_state = state
+            state.turn_id, state.user_text = turn_id, user_text
             pieces = self._reply_pieces(text, state)
             self._tts_task = asyncio.create_task(self._speak_pieces(pieces))
             try:
@@ -465,7 +469,8 @@ class BrowserVoiceSession:
             # A turn is "complete" once the response was (at least partly) spoken,
             # mirroring the telephony session's count semantics.
             self._turns += 1
-            await self._complete_bus_turn(turn_id, user_text, full_reply)
+            if not state.completed:
+                await self._complete_bus_turn(turn_id, user_text, full_reply)
         except Exception:  # noqa: BLE001 — a turn failure must never kill the session
             log.warning("browser_voice[%s] turn failed", self.session_id, exc_info=True)
             if turn_id is not None:
@@ -563,11 +568,17 @@ class BrowserVoiceSession:
                     source_layer="browser_voice",
                 )
             )
+        remainder_items: list[object] = []
         if not state.cut:
             rest = f"{pending} {tail}".strip()
             if rest:
-                for item in _vet(rest):
-                    yield item
+                remainder_items = _vet(rest)
+        if state.spoken and not state.completed:
+            # Close the record turn now, not after the audio: the chat files the text on this event.
+            state.completed = True
+            await self._complete_bus_turn(state.turn_id, state.user_text, "".join(state.chunks))
+        for item in remainder_items:
+            yield item
         if not state.cut:
             whole = scrub_for_voice("".join(state.chunks), language=lang)
             if _is_hard_scrub_result(whole):

@@ -74,6 +74,9 @@ switch_env voice-cartesia-4 JARVIS__TTS__CARTESIA__VOICE_ID_IT 13ebc17e-5090-41e
 switch_env voice-cartesia-5 JARVIS_BROWSER_VOICE_ENGINE cloud
 # Pilot is Italian-first: pin the reply language so the voice session resolves it-IT (the cloned voice) instead of en-US.
 switch_env voice-lang-it-1 JARVIS__BRAIN__REPLY_LANGUAGE it
+# One Cartesia request per piece instead of one per sentence: fewer joins, so a cloned voice drifts less (voice change
+# and uneven intonation heard on 2026-10-30). The session already sends sentence-group pieces.
+switch_env voice-cartesia-6 JARVIS__TTS__CARTESIA__CHUNK_BY_SENTENCE false
 
 if [ "$applied" -gt 0 ] || [ "${1:-}" = "--restart" ]; then
   pkill -x jarvis || true
