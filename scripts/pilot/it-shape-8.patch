@@ -1,0 +1,27 @@
+diff --git a/dodaios/plugins/brain/_openai_base.py b/dodaios/plugins/brain/_openai_base.py
+index c7776ff6e..049d2ae13 100644
+--- a/dodaios/plugins/brain/_openai_base.py
++++ b/dodaios/plugins/brain/_openai_base.py
+@@ -10,6 +10,7 @@ from __future__ import annotations
+ import inspect
+ import json
+ import logging
++import os
+ import re
+ from collections.abc import AsyncIterator
+ from typing import Any
+@@ -574,7 +575,13 @@ async def stream_complete(
+     # tool history. Otherwise an MCP name such as ``github/search`` succeeds in
+     # the first round, then makes the provider reject the second-round history.
+     # (Token-limit param note: see _create_with_token_param_retry below.)
+-    log.info("Request shape for %s: %s", model, request_shape(req))
++    # Diagnostic: ``JARVIS_LOG_REQUEST_SHAPE=1`` prints the size breakdown of every
++    # request as a warning (the headless server drops this module's INFO lines).
++    # Off by default: one line per request would fill the log.
++    if os.environ.get("JARVIS_LOG_REQUEST_SHAPE"):
++        log.warning("Request shape for %s: %s", model, request_shape(req))
++    else:
++        log.debug("Request shape for %s: %s", model, request_shape(req))
+     name_map = _openai_tool_name_map(req.tools) if req.tools else {}
+     messages = _to_openai_messages(
+         req.messages,
