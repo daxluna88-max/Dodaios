@@ -73,6 +73,12 @@ MAX_TURNS: Final[int] = 40
 #: How much of the chat's own log rides along as history.
 _HISTORY_MAX: Final[int] = 40
 
+#: Appended to a turn the person stopped, so the next turn does not pick it up.
+_STOPPED_NOTE: Final[str] = (
+    "\n[The user pressed Stop: the request above was abandoned. Do not resume "
+    "or answer it unless the user asks for it again.]"
+)
+
 _EFFORTS: Final[frozenset[str]] = frozenset(get_args(ReasoningEffort))
 
 
@@ -98,7 +104,13 @@ def brain_history_from_events(
     validation. Capped to the last ``_HISTORY_MAX`` messages.
     """
     out: list[BrainMessage] = []
-    for message in messages_from_events(events, max_events=None if max_messages is None else 600):
+    marked: list[dict[str, Any]] = []
+    for ev in events:
+        marked.append(ev)
+        if ev.get("kind") == "turn_finished" and (ev.get("payload") or {}).get("status") == "cancelled":
+            # Without this the model sees an unanswered request and resumes it.
+            marked.append({"kind": "assistant_text", "payload": {"text": _STOPPED_NOTE}})
+    for message in messages_from_events(marked, max_events=None if max_messages is None else 600):
         if message.role == "user":
             text = message.content if isinstance(message.content, str) else ""
             if text.strip():

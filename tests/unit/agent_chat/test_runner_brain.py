@@ -458,3 +458,26 @@ async def test_a_turn_is_briefed_on_requests_still_running_behind_it(
     assert text == "What is the weather tomorrow?"  # the person's words, nothing added
     briefing = kw["turn_override"].system_extra
     assert "Tell Kai to fix the login bug." in briefing and "do not wait for it" in briefing
+
+
+def test_history_marks_a_stopped_turn_as_abandoned() -> None:
+    """After Stop the model must not resume the interrupted request."""
+    events = [
+        {"kind": "user_message", "payload": {"text": "write the report"}},
+        {"kind": "turn_finished", "payload": {"status": "cancelled"}},
+        {"kind": "user_message", "payload": {"text": "what time is it?"}},
+    ]
+    history = runner_brain.brain_history_from_events(events)
+    assert [m.role for m in history] == ["user", "assistant", "user"]
+    assert "pressed Stop" in history[1].content
+    assert history[2].content == "what time is it?"
+
+
+def test_history_leaves_finished_turns_unmarked() -> None:
+    events = [
+        {"kind": "user_message", "payload": {"text": "hi"}},
+        {"kind": "assistant_text", "payload": {"text": "hello"}},
+        {"kind": "turn_finished", "payload": {"status": "done"}},
+    ]
+    history = runner_brain.brain_history_from_events(events)
+    assert [m.content for m in history] == ["hi", "hello"]
