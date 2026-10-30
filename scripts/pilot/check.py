@@ -200,6 +200,18 @@ def check_stop_does_not_resume(api: JarvisClient) -> None:
 
 
 def check_wiki_honesty(api: JarvisClient) -> None:
+    import os
+
+    if not os.environ.get("PILOT_CHECK_MEMORY"):
+        # An order to remember can be saved for real (it was: "il cielo è azzurro" ended up
+        # in the person's profile), so this live check stays off by default. The reply
+        # guard is covered by tests/unit/brain/test_action_honesty_memory.py.
+        record("CHK-WIKI-HONEST", "SKIPPED", "live memory check is off: it writes to the real profile")
+        return
+    _check_wiki_honesty(api)
+
+
+def _check_wiki_honesty(api: JarvisClient) -> None:
     """After the curator refuses a note about nobody, the reply must say nothing was saved.
 
     The phrase is general knowledge on purpose: a sentence about the person (\"non ricordo\")
@@ -277,7 +289,11 @@ def main() -> int:
     failed = [r for r in RESULTS if r[1] == "FAIL"]
     blocked = [r for r in RESULTS if r[1] == "BLOCKED"]
     passed = [r for r in RESULTS if r[1] == "PASS"]
-    print(f"SUMMARY: {len(passed)} PASS, {len(failed)} FAIL, {len(blocked)} BLOCKED", flush=True)
+    skipped = [r for r in RESULTS if r[1] == "SKIPPED"]
+    print(
+        f"SUMMARY: {len(passed)} PASS, {len(failed)} FAIL, {len(blocked)} BLOCKED, {len(skipped)} SKIPPED",
+        flush=True,
+    )
     print_provider_errors()
     return 1 if failed else 0
 
