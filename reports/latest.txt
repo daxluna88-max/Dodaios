@@ -1,4 +1,4 @@
-sha=018c87d47f151e0a194b8dbe31cce667c9ea24ea started=2026-10-30T16:39:01Z
+sha=f67f28d868e57c83438f80ae7857851fea78fe12 started=2026-10-30T16:42:01Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -27,16 +27,16 @@ sha=018c87d47f151e0a194b8dbe31cce667c9ea24ea started=2026-10-30T16:39:01Z
 = it-engines-26.patch (already applied)
 = it-partial-27.patch (already applied)
 = it-honesty-28.patch (already applied)
-+ it-guard-29.patch applied
+= it-guard-29.patch (already applied)
 = env JARVIS__BRAIN__WORKER__PROVIDER (already set)
 = env JARVIS__BRAIN__WORKER__MODEL (already set)
 = env JARVIS_OPENROUTER_FALLBACK_MODELS (already set)
-RESTARTED: jarvis running
+Nothing to apply; server not restarted (use --restart to force).
 update_exit=0
-PASS     CHK-TIME: real_rome_time=17:39 status=done secs=5 tool_errors=0 reply='Sono le 17:39, Davide.'
-PASS     CHK-STOP: first=cancelled second=done second_len=22 resumed=False leaked_internal_text=False reply='Sono le 17:39, Davide.'
+PASS     CHK-TIME: real_rome_time=17:42 status=done secs=23 tool_errors=0 reply='Sono le diciassette e quarantadue, Davide.'
+PASS     CHK-STOP: first=cancelled second=done second_len=42 resumed=False leaked_internal_text=False reply='Sono le diciassette e quarantadue, Davide.'
 SKIPPED  CHK-WIKI-HONEST: live memory check is off: it writes to the real profile
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
 SUMMARY: 3 PASS, 0 FAIL, 0 BLOCKED, 1 SKIPPED
 check_exit=0
-finished=2026-10-30T16:39:35Z
+finished=2026-10-30T16:42:45Z
