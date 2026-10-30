@@ -1,4 +1,4 @@
-sha=fa46589bae0622db65e79465b9a25c8c10fc7077 started=2026-10-30T10:04:01Z
+sha=6c35018e4f7ab10bd6870ecdba84532e8d525c3d started=2026-10-30T10:17:01Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -16,6 +16,9 @@ sha=fa46589bae0622db65e79465b9a25c8c10fc7077 started=2026-10-30T10:04:01Z
 = env JARVIS__BRAIN__WORKER__MODEL (already set)
 Nothing to apply; server not restarted (use --restart to force).
 update_exit=0
-BLOCKED  server: no usable session file at /home/dax/.dodaios-data/session.json (exists=False)
-check_exit=2
-finished=2026-10-30T10:05:35Z
+FAIL     check_time: KeyError: 'id'
+FAIL     check_stop_does_not_resume: KeyError: 'id'
+PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
+SUMMARY: 1/3 passed
+check_exit=1
+finished=2026-10-30T10:17:07Z

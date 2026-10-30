@@ -1,0 +1,24 @@
+sha=6c35018e4f7ab10bd6870ecdba84532e8d525c3d started=2026-10-30T10:17:01Z
+= it-upstream.patch (already applied)
+= it-detect-2.patch (already applied)
+= it-time-3.patch (already applied)
+= it-forget-4.patch (already applied)
+= it-forget-5.patch (already applied)
+= it-privacy-6.patch (already applied)
+= it-shape-7.patch (already applied)
+= it-shape-8.patch (already applied)
+= it-tools-9.patch (already applied)
+= it-wiki-10.patch (already applied)
+= it-profile-11.patch (already applied)
+= it-stop-12.patch (already applied)
+= it-paths-13.patch (already applied)
+= env JARVIS__BRAIN__WORKER__PROVIDER (already set)
+= env JARVIS__BRAIN__WORKER__MODEL (already set)
+Nothing to apply; server not restarted (use --restart to force).
+update_exit=0
+FAIL     check_time: KeyError: 'id'
+FAIL     check_stop_does_not_resume: KeyError: 'id'
+PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
+SUMMARY: 1/3 passed
+check_exit=1
+finished=2026-10-30T10:17:07Z
