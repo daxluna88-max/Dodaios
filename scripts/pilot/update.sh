@@ -40,6 +40,10 @@ ensure_env() {
 }
 ensure_env JARVIS__BRAIN__WORKER__PROVIDER openrouter
 ensure_env JARVIS__BRAIN__WORKER__MODEL qwen/qwen3.8-flash
+# Default brain model (fast, deep and code all resolve to it). The free Nemotron it replaced did not call the
+# memory tools (answered in 1.6 s without saving). Dax chose DeepSeek V4.1 Flash on 2026-10-30; this is the id
+# his chat picker saved (`selection.model` in /api/agent-chat/catalog). Env wins over jarvis.toml.
+ensure_env JARVIS__BRAIN__PROVIDERS__OPENROUTER__MODEL deepseek/deepseek-v4.1-flash
 # OpenRouter tries these when the main model errors or is rate limited (429 seen repeatedly on qwen3.8-flash).
 ensure_env JARVIS_OPENROUTER_FALLBACK_MODELS qwen/qwen3.7-flash,qwen/qwen3.6-flash
 
