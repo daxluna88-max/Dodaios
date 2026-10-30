@@ -1087,6 +1087,10 @@ class ToolUseLoop:
 
             # Accumulate final text
             if agg.text:
+                if final_agg.text and not final_agg.text[-1].isspace() and not agg.text[0].isspace():
+                    # Text written before a tool call and the answer after it are
+                    # separate paragraphs, not one run-on ("…ti serve.Ciao Davide!").
+                    final_agg.text += "\n\n"
                 final_agg.text += agg.text
             final_agg.finish_reason = agg.finish_reason
             for k, v in agg.usage.items():
