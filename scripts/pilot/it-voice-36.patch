@@ -1,0 +1,43 @@
+diff --git a/dodaios/browser_voice/session.py b/dodaios/browser_voice/session.py
+index aad15641d..54e8f57d1 100644
+--- a/dodaios/browser_voice/session.py
++++ b/dodaios/browser_voice/session.py
+@@ -101,6 +101,26 @@ def _is_echo(heard: str, spoken: str) -> bool:
+     return sum(1 for w in words if w in ours) / len(words) >= 0.6
+ 
+ 
++# Whisper invents these on silence or speaker bleed. A bare one is never taken as an interruption.
++_PHANTOM_PHRASES = frozenset(
++    {
++        "grazie",
++        "grazie a tutti",
++        "ciao",
++        "ok",
++        "thank you",
++        "thanks",
++        "thanks for watching",
++        "you",
++        "bye",
++    }
++)
++
++
++def _is_phantom(heard: str) -> bool:
++    return " ".join(w.lower() for w in _WORD.findall(heard)) in _PHANTOM_PHRASES
++
++
+ def split_for_tts(text: str) -> list[str]:
+     """Split a reply into pieces so the first audio starts after one sentence.
+ 
+@@ -676,7 +696,10 @@ class BrowserVoiceSession:
+             return
+         state = self._reply_state
+         spoken = " ".join(state.spoken) if state is not None else ""
+-        if not text or _is_echo(text, spoken) or not self._speaking or self._ended:
++        if not text or not self._speaking or self._ended:
++            return
++        if _is_echo(text, spoken) or _is_phantom(text):
++            log.warning("browser_voice[%s] barge-in ignored (echo/phantom): %r", self.session_id, text)
+             return
+         log.info("browser_voice[%s] barge-in: %s", self.session_id, text)
+         turn = self._turn_task
