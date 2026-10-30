@@ -54,6 +54,9 @@ ensure_env JARVIS__TTS__LANGUAGE_CODE it-IT
 ensure_env JARVIS_OPENROUTER_FALLBACK_MODELS qwen/qwen3.7-flash,qwen/qwen3.6-flash
 # Tailscale Serve (tailnet-only HTTPS) proxies with this Host header; without it Jarvis answers "Untrusted Host header".
 ensure_env JARVIS_TRUSTED_HOSTS srv2104916.tail11f095.ts.net
+# Speech recognition language: with "auto" Whisper hears silence/noise as English ("Thank you. Two months ago,") and the
+# assistant then answers in English. Pilot is Italian-first; Dax measured this on the phone on 2026-10-30.
+ensure_env JARVIS__STT__LANGUAGE it
 
 if [ "$applied" -gt 0 ] || [ "${1:-}" = "--restart" ]; then
   pkill -x jarvis || true
