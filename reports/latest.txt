@@ -1,4 +1,4 @@
-sha=5f658e6a27e5de139b044939e503cab58387642f started=2026-10-30T22:14:02Z
+sha=680e4087a8b90411df0f5d9f894b3220d85c28ae started=2026-10-30T22:24:01Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -36,7 +36,8 @@ sha=5f658e6a27e5de139b044939e503cab58387642f started=2026-10-30T22:14:02Z
 = it-voice-35.patch (already applied)
 = it-voice-36.patch (already applied)
 = it-voice-37.patch (already applied)
-+ it-cartesia-38.patch applied
+= it-cartesia-38.patch (already applied)
++ it-route-39.patch applied
 = env JARVIS__BRAIN__WORKER__PROVIDER (already set)
 = env JARVIS__BRAIN__WORKER__MODEL (already set)
 = env JARVIS__BRAIN__PROVIDERS__OPENROUTER__MODEL (already set)
@@ -44,17 +45,18 @@ sha=5f658e6a27e5de139b044939e503cab58387642f started=2026-10-30T22:14:02Z
 = env JARVIS_TRUSTED_HOSTS (already set)
 = env JARVIS__STT__LANGUAGE (already set)
 = env JARVIS_SESSION_PERSIST (already set)
-+ env JARVIS__TTS__PROVIDER switched (voice-cartesia-1)
-+ env JARVIS__TTS__MODEL switched (voice-cartesia-2)
-+ env JARVIS__TTS__LANGUAGE_CODE switched (voice-cartesia-3)
-+ env JARVIS__TTS__CARTESIA__VOICE_ID_IT switched (voice-cartesia-4)
-+ env JARVIS_BROWSER_VOICE_ENGINE switched (voice-cartesia-5)
+= env JARVIS__TTS__PROVIDER (already switched: voice-cartesia-1)
+= env JARVIS__TTS__MODEL (already switched: voice-cartesia-2)
+= env JARVIS__TTS__LANGUAGE_CODE (already switched: voice-cartesia-3)
+= env JARVIS__TTS__CARTESIA__VOICE_ID_IT (already switched: voice-cartesia-4)
+= env JARVIS_BROWSER_VOICE_ENGINE (already switched: voice-cartesia-5)
++ env JARVIS__BRAIN__REPLY_LANGUAGE switched (voice-lang-it-1)
 RESTARTED: jarvis running
 update_exit=0
-PASS     CHK-TIME: real_rome_time=23:14 status=done secs=1 tool_errors=0 reply='Sono le ventitré e quattordici, Davide.'
-PASS     CHK-STOP: first=cancelled second=done second_len=34 resumed=False leaked_internal_text=False reply='Sono le 23:14, venerdì 30 ottobre.'
+PASS     CHK-TIME: real_rome_time=23:24 status=done secs=1 tool_errors=0 reply='Sono le ventitré e ventiquattro, Davide.'
+PASS     CHK-STOP: first=cancelled second=done second_len=56 resumed=False leaked_internal_text=False reply='Sono le ventitré e ventiquattro, venerdì trenta ottobre.'
 SKIPPED  CHK-WIKI-HONEST: live memory check is off: it writes to the real profile
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
 SUMMARY: 3 PASS, 0 FAIL, 0 BLOCKED, 1 SKIPPED
 check_exit=0
-finished=2026-10-30T22:14:30Z
+finished=2026-10-30T22:24:27Z
