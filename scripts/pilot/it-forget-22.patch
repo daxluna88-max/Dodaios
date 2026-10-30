@@ -1,0 +1,174 @@
+diff --git a/dodaios/memory/user_profile.py b/dodaios/memory/user_profile.py
+index 0fb52121f..70d07c433 100644
+--- a/dodaios/memory/user_profile.py
++++ b/dodaios/memory/user_profile.py
+@@ -219,6 +219,33 @@ class UserProfile:
+             self._body = self._body[: i + len(start)] + new_block + self._body[j:]
+         return dropped
+ 
++    def forget(self, cluster: str, field_name: str, value: Any = None) -> tuple[bool, int]:
++        """One real forget, shared by the Profile UI and the ``update_profile`` tool.
++
++        A list field forgets ``value`` (case-insensitive); a scalar field, or a list with
++        no value named, is cleared whole.
++        Either way the observation lines that carry the forgotten value go too, and
++        the audit trail gets one neutral line that never repeats the value or the
++        person's words: the model reads those lines back on later turns. Returns
++        ``(changed, observation_lines_dropped)``; the caller saves.
++        """
++        label = f"{cluster}.{field_name}"
++        current = self.get(cluster, field_name)
++        needle = str(value).strip() if value is not None else ""
++        if isinstance(current, list) and needle:
++            match = next((c for c in current if str(c).strip().casefold() == needle.casefold()), None)
++            removed = match is not None and self.remove_list_item(cluster, field_name, match)
++            dropped = self.purge_observations(label, str(match) if match is not None else needle)
++            neutral = "an item was removed"
++        else:  # a scalar field, or no value named: the whole field goes
++            removed = self.clear(cluster, field_name)
++            dropped = self.purge_observations(label)
++            neutral = "cleared"
++        changed = bool(removed) or dropped > 0
++        if changed:
++            self.append_observation(label, neutral, "forget request")
++        return changed, dropped
++
+     def set_section(self, marker: str, content: str) -> None:
+         """Replaces the context/projects/calibration section entirely."""
+         self._body = replace_section(self._body, marker, content)
+diff --git a/dodaios/plugins/tool/profile_update.py b/dodaios/plugins/tool/profile_update.py
+index d43c58a7b..f81518a68 100644
+--- a/dodaios/plugins/tool/profile_update.py
++++ b/dodaios/plugins/tool/profile_update.py
+@@ -205,47 +205,32 @@ class UpdateProfileTool:
+         profile = self._resolve_profile()
+         if profile is None:
+             return ToolResult(success=False, output="", error="user profile not available")
+-        try:
+-            if is_list:
+-                item = value if not isinstance(value, (list, tuple)) else (value[0] if value else None)
+-                if item is None or (isinstance(item, str) and not item.strip()):
+-                    return ToolResult(
+-                        success=False, output="",
+-                        error=f"name the item to remove from {cluster}.{field}",
+-                    )
+-                current = profile.get(cluster, field)
+-                match = next(
+-                    (c for c in (current if isinstance(current, list) else [])
+-                     if str(c).strip().casefold() == str(item).strip().casefold()),
+-                    None,
++        item: Any = None
++        if is_list:
++            item = value if not isinstance(value, (list, tuple)) else (value[0] if value else None)
++            if item is None or (isinstance(item, str) and not item.strip()):
++                return ToolResult(
++                    success=False, output="",
++                    error=f"name the item to remove from {cluster}.{field}",
+                 )
+-                changed = match is not None and profile.remove_list_item(cluster, field, match)
+-                what = match if match is not None else item
+-            else:
+-                changed = profile.clear(cluster, field)
+-                what = f"{cluster}.{field}"
++        try:
++            # Same forget as the Profile UI: the field AND the note lines that carry
++            # the value. Nothing below repeats the value or the person's words.
++            changed, _dropped = profile.forget(cluster, field, item)
++            if changed:
++                profile.save()
+         except ValueError as exc:
+             return ToolResult(success=False, output="", error=str(exc))
++        except Exception as exc:  # noqa: BLE001
++            log.warning("update_profile: remove not persisted: %s", exc)
++            return ToolResult(success=False, output="", error=f"could not persist profile: {exc}")
+ 
+         if not changed:
+             return ToolResult(
+                 success=True,
+-                output=f"Not found — {cluster}.{field} did not contain {what!s}. "
++                output=f"Not found — {cluster}.{field} did not contain it. "
+                        "Nothing was removed; do not tell the user it was forgotten.",
+             )
+-        try:
+-            # A real forget: drop the history lines that carry the removed value
+-            # (or every line of a cleared scalar field), and log the removal
+-            # without the value or the user's words, so nothing is read back.
+-            profile.purge_observations(f"{cluster}.{field}", str(what) if is_list else None)
+-            profile.append_observation(
+-                f"{cluster}.{field}", "an item was removed" if is_list else "cleared",
+-                "forget request",
+-            )
+-            profile.save()
+-        except Exception as exc:  # noqa: BLE001
+-            log.warning("update_profile: remove not persisted: %s", exc)
+-            return ToolResult(success=False, output="", error=f"could not persist profile: {exc}")
+         if self._bus is not None:
+             try:
+                 from dodaios.core.events import ProfileUpdated
+@@ -253,15 +238,17 @@ class UpdateProfileTool:
+                 await self._bus.publish(
+                     ProfileUpdated(
+                         subject="user", cluster=cluster, field=field,
+-                        operation="remove", confidence=1.0, evidence=evidence[:200],
++                        operation="remove", confidence=1.0, evidence="forget request",
+                     )
+                 )
+             except Exception:  # noqa: BLE001
+                 log.debug("update_profile: ProfileUpdated publish failed", exc_info=True)
+-        log.info("update_profile: remove %s.%s %r", cluster, field, what)
++        log.info("update_profile: remove %s.%s", cluster, field)
+         return ToolResult(
+             success=True,
+-            output=f"Removed {what!s} from {cluster}.{field}. It is forgotten.",
++            output=f"Removed from {cluster}.{field} and from the note lines about it. "
++                   "It may still exist elsewhere (chat history, wiki pages, backups): "
++                   "do not say it is erased everywhere.",
+         )
+ 
+     async def execute(self, args: dict[str, Any], ctx: Any) -> ToolResult:
+diff --git a/dodaios/ui/web/profile_routes.py b/dodaios/ui/web/profile_routes.py
+index f52d68a31..89a1dcb53 100644
+--- a/dodaios/ui/web/profile_routes.py
++++ b/dodaios/ui/web/profile_routes.py
+@@ -583,28 +583,25 @@ async def patch_field(request: Request, body: FieldEditBody) -> dict[str, Any]:
+     try:
+         if op == "set":
+             changed = profile.set(cluster, field, value)
+-        elif op == "clear":
+-            changed = profile.clear(cluster, field)
+         elif op == "append":
+             changed = profile.append_list(cluster, field, value)
+-        else:  # remove
+-            changed = profile.remove_list_item(cluster, field, value)
++        else:  # clear / remove: the same real forget the update_profile tool uses
++            changed, _dropped = profile.forget(
++                cluster, field, value if op == "remove" else None
++            )
+     except ValueError as exc:  # defensive — allow-list already guards this
+         raise HTTPException(status_code=400, detail=str(exc)) from exc
+ 
+     if changed:
+-        # Audit trail (best-effort — never block the write) mirroring update_profile.
+-        try:
+-            label = f"{cluster}.{field}"
+-            if op == "clear":
+-                obs_value = "(cleared)"
+-            elif op == "remove":
+-                obs_value = f"(removed {value})"
+-            else:
+-                obs_value = str(value)
+-            profile.append_observation(label, obs_value, "manual edit via profile UI")
+-        except Exception:  # noqa: BLE001
+-            log.debug("profile field edit: append_observation failed", exc_info=True)
++        if op in ("set", "append"):
++            # Audit trail (best-effort — never block the write) mirroring update_profile.
++            # Never for a forget: that already left one neutral line without the value.
++            try:
++                profile.append_observation(
++                    f"{cluster}.{field}", str(value), "manual edit via profile UI"
++                )
++            except Exception:  # noqa: BLE001
++                log.debug("profile field edit: append_observation failed", exc_info=True)
+ 
+         try:
+             profile.save()
