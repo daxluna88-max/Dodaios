@@ -256,6 +256,7 @@ class BrowserVoiceSession:
         self._processing = False
         self._tts_task: asyncio.Task[None] | None = None
         self._reply_state: _ReplyState | None = None
+        self._audio_seconds_total = 0.0
         self._barge_task: asyncio.Task[None] | None = None
         self._turn_task: asyncio.Task[None] | None = None
         self._browser_tts_done: asyncio.Event | None = None
@@ -426,6 +427,15 @@ class BrowserVoiceSession:
                 await pieces.aclose()
             full_reply = "".join(state.chunks)
             spoken = " ".join(state.spoken)
+            log.warning(
+                "browser_voice[%s] turn summary: %d pieces, %d chars spoken, %.1f s of audio sent, reply %d chars, cut=%s",
+                self.session_id,
+                len(state.spoken),
+                len(spoken),
+                self._audio_seconds_total,
+                len(full_reply),
+                state.cut,
+            )
             if not spoken.strip():
                 # Empty reply, or the whole reply was filler / an honorific: nothing
                 # failed, so say nothing rather than claim an error.
@@ -625,6 +635,7 @@ class BrowserVoiceSession:
         spoken_pieces: list[str] = []
         clock_start: float | None = None
         audio_seconds = 0.0
+        self._audio_seconds_total = 0.0
         try:
             async for piece in pieces:
                 if piece is _CUT:
@@ -689,6 +700,7 @@ class BrowserVoiceSession:
                     if lead > _MAX_LEAD_S:
                         await asyncio.sleep(lead - _MAX_LEAD_S)
                     audio_seconds += len(pcm) / 2 / TTS_SAMPLE_RATE
+                    self._audio_seconds_total += len(pcm) / 2 / TTS_SAMPLE_RATE
                     await self._send_binary(pcm)
                     sent += 1
 
