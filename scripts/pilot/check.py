@@ -55,7 +55,15 @@ def new_session(api: JarvisClient, effort: str = "none") -> str:
         "surface": "jarvis",
         "title": "pilot-check",
     }
-    return api.request("POST", f"{BASE}/sessions", json=body)["id"]
+    return api.request("POST", f"{BASE}/sessions", json=body)["session_id"]
+
+
+def drop(api: JarvisClient, sid: str) -> None:
+    """Remove a check's chat so collaudo sessions do not pile up in the sidebar."""
+    try:
+        api.request("DELETE", f"{BASE}/sessions/{sid}")
+    except ApiError:
+        pass
 
 
 def events(api: JarvisClient, sid: str) -> tuple[bool, list[dict[str, Any]]]:
@@ -103,7 +111,10 @@ def wait_turn(api: JarvisClient, sid: str, before: int, timeout: float = 120.0) 
 
 def check_time(api: JarvisClient) -> None:
     sid = new_session(api)
-    result = wait_turn(api, sid, send(api, sid, "Che ore sono?"))
+    try:
+        result = wait_turn(api, sid, send(api, sid, "Che ore sono?"))
+    finally:
+        drop(api, sid)
     ok = (
         result["status"] == "done"
         and TIME_RE.search(result["text"])
@@ -120,12 +131,15 @@ def check_time(api: JarvisClient) -> None:
 
 def check_stop_does_not_resume(api: JarvisClient) -> None:
     sid = new_session(api)
-    before = send(api, sid, "Scrivimi un racconto di 2000 parole sul pane rosso.")
-    time.sleep(5)
-    api.request("POST", f"{BASE}/sessions/{sid}/cancel")
-    stopped = wait_turn(api, sid, before, timeout=60.0)
-    after = send(api, sid, "Che ore sono?")
-    second = wait_turn(api, sid, after)
+    try:
+        before = send(api, sid, "Scrivimi un racconto di 2000 parole sul pane rosso.")
+        time.sleep(5)
+        api.request("POST", f"{BASE}/sessions/{sid}/cancel")
+        stopped = wait_turn(api, sid, before, timeout=60.0)
+        after = send(api, sid, "Che ore sono?")
+        second = wait_turn(api, sid, after)
+    finally:
+        drop(api, sid)
     resumed = len(second["text"]) > 400 or "pane" in second["text"].lower()
     ok = stopped["status"] == "cancelled" and second["status"] == "done" and not resumed
     record(
