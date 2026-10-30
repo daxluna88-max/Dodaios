@@ -688,3 +688,21 @@ def test_italian_language_request_overrides_english_session(text: str, expected:
 )
 def test_italian_mentions_are_not_language_requests(text: str) -> None:
     assert detect_language_request(text) == ""
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["No lo sé", "Buenas noches señor", "Ayúdame con esto", "Dime qué hora es"],
+)
+def test_short_spanish_phrases_are_not_taken_for_italian(text: str) -> None:
+    from dodaios.core.turn_language import resolve_conversation_language
+
+    assert detect_text_language(text) == "es"
+    assert resolve_conversation_language(
+        "auto", "", text, conversation_language="", fallback_language="it",
+    ) == "es"
+
+
+@pytest.mark.parametrize("text", ["Non lo so", "Buona notte", "Che ora è"])
+def test_short_italian_phrases_stay_italian(text: str) -> None:
+    assert detect_text_language(text) == "it"
