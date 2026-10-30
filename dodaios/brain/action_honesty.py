@@ -435,8 +435,80 @@ def replace_unbacked_action_claim(
     return text
 
 
+# A reply that says "saved / noted" to an order to remember something, when no
+# memory tool actually saved anything. Live 2026-10-30: "Ricorda che non
+# ricordo" was answered with "Ho salvato questa informazione nel tuo profilo"
+# after the wiki curator had refused the note, and once with no tool call at all.
+_MEMORY_TOOLS: frozenset[str] = frozenset({"wiki-ingest", "update_profile"})
+
+_MEMORY_REQUEST_IT_RE = re.compile(r"\b(?:ricorda(?:ti)?|memorizza|salva|segna|annota|tieni\s+a\s+mente)\b")
+_MEMORY_REQUEST_EN_RE = re.compile(r"\b(?:remember|save|note\s+that|keep\s+in\s+mind|make\s+a\s+note)\b")
+
+_MEMORY_CLAIM_RE = re.compile(
+    r"\b(?:ho|l'ho|lo\s+ho|ti\s+ho)\s+(?:salvat|memorizzat|registrat|annotat|segnat|aggiunt)\w*|"
+    r"\b(?:segnato|notato|annotato|memorizzato|salvato)\b|"
+    r"\bnel\s+(?:tuo|mio)\s+profilo\b|"
+    r"\bd'ora\s+in\s+poi\s+(?:mi\s+occupo|memorizzo|ricordo)\b|"
+    r"\bi(?:'ve|\s+have)\s+(?:saved|stored|noted|recorded|logged|remembered)\b|"
+    r"\b(?:noted|saved|stored)\s*(?:[\u2014:,-]|that\b|it\b)|"
+    r"\bin\s+(?:your|my)\s+profile\b"
+)
+_MEMORY_DENIAL_RE = re.compile(
+    r"\bnon\s+(?:ho|l'ho|lo\s+ho)\s+(?:salvat|memorizzat|registrat|annotat|segnat)|"
+    r"\b(?:i\s+did\s+not|i\s+didn't|i\s+have\s+not|i\s+haven't|nothing\s+was)\s+(?:save|saved|store|stored|record)"
+)
+
+_MEMORY_NOT_SAVED_PHRASES: dict[str, str] = {
+    "it": "Non ho salvato nulla: in quella frase non c'era niente di abbastanza rilevante da ricordare.",
+    "en": "I did not save anything: there was nothing in that worth remembering.",
+}
+
+
+def memory_claim_language(
+    request: str,
+    reply: str,
+    results: Collection[tuple[str, bool, str]],
+) -> str | None:
+    """``"it"``/``"en"`` when ``reply`` claims a save that did not happen, else ``None``.
+
+    ``results`` are the turn's finished tool calls as ``(name, ok, output)``. Only
+    an order to remember something can trigger it, and only when no memory tool
+    saved anything and no other tool ran successfully (a reminder or a note tool
+    may legitimately make "noted" true).
+    """
+    asked = _normalize(request)
+    language = (
+        "it"
+        if _MEMORY_REQUEST_IT_RE.search(asked)
+        else "en"
+        if _MEMORY_REQUEST_EN_RE.search(asked)
+        else None
+    )
+    if language is None:
+        return None
+    said = _normalize(reply)
+    if not _MEMORY_CLAIM_RE.search(said) or _MEMORY_DENIAL_RE.search(said):
+        return None
+    for name, ok, output in results:
+        if not ok:
+            continue
+        if name in _MEMORY_TOOLS:
+            if not _normalize(output).startswith(("not saved", "nothing was stored")):
+                return None
+        else:
+            return None
+    return language
+
+
+def memory_not_saved_phrase(language: str) -> str:
+    """The honest sentence for a claimed save that never happened."""
+    return _MEMORY_NOT_SAVED_PHRASES.get(language, _MEMORY_NOT_SAVED_PHRASES["en"])
+
+
 __all__ = [
     "action_not_started_phrase",
+    "memory_claim_language",
+    "memory_not_saved_phrase",
     "has_deferred_action_claim",
     "has_false_completion_claim",
     "has_unbacked_action_claim",

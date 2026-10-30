@@ -306,7 +306,7 @@ class _StepMirror:
     defensive: a malformed event never reaches the brain (AP-18).
     """
 
-    __slots__ = ("_bus", "_children", "_emit", "_open", "_seen_text", "_trace_id", "_turn_id")
+    __slots__ = ("_bus", "_children", "_emit", "_open", "_seen_text", "_trace_id", "_turn_id", "results")
 
     def __init__(self, emit: Any, turn_id: str, bus: Any | None, trace_id: UUID) -> None:
         self._emit = emit
@@ -314,6 +314,7 @@ class _StepMirror:
         self._bus = bus
         self._trace_id = trace_id
         self._open: list[tuple[str, str]] = []  # (tool name, call id)
+        self.results: list[tuple[str, bool, str]] = []  # (tool name, ok, output), as they finish
         self._children: set[UUID] = set()
         self._seen_text: set[str] = set()
 
@@ -365,6 +366,7 @@ class _StepMirror:
             # without a start) would draw a headless row; drop it.
             return
         _, call_id = self._open.pop(index)
+        self.results.append((tool_name, ok, str(output)[:300]))
         await self._emit(
             "tool_result",
             {
@@ -601,6 +603,12 @@ async def run_brain_turn(
         status = "cancelled"
     if status == "done":
         answer = (reply or "").strip() or "".join(seen).strip()
+        from dodaios.brain.action_honesty import memory_claim_language, memory_not_saved_phrase
+
+        claimed = memory_claim_language(person_request or text, answer, mirror.results)
+        if claimed is not None:
+            log.warning("agent chat %s: reply claimed a save that did not happen", session.session_id)
+            answer = memory_not_saved_phrase(claimed)
         if answer:
             await emit(
                 "assistant_text", {"turn_id": turn_id, "message_id": message_id, "text": answer}
