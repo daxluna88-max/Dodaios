@@ -1,4 +1,4 @@
-sha=d81c319dc5b1984c5eacaeb1033a3c819378b59d started=2026-10-30T12:27:02Z
+sha=259991a63527b6ce551251ca103bc2a371c66500 started=2026-10-30T12:54:02Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -23,10 +23,10 @@ sha=d81c319dc5b1984c5eacaeb1033a3c819378b59d started=2026-10-30T12:27:02Z
 = env JARVIS_OPENROUTER_FALLBACK_MODELS (already set)
 Nothing to apply; server not restarted (use --restart to force).
 update_exit=0
-PASS     CHK-TIME: real_rome_time=13:27 status=done secs=2 tool_errors=0 reply="Sono le 13:27 di venerdì 30 ottobre 2026, ora dell'Europa centrale."
-PASS     CHK-STOP: first=cancelled second=done second_len=39 resumed=False leaked_internal_text=False reply='Sono le 13:27, venerdì 30 ottobre 2026.'
-BLOCKED  CHK-WIKI-HONEST: a memory tool really stored something: "unknown field 'about' for cluster 'values'; expected one of ['motivations', 'pet_peeves', 'top_values']"
+PASS     CHK-TIME: real_rome_time=13:54 status=done secs=2 tool_errors=0 reply='Sono le 13:54, venerdì 30 ottobre 2026.'
+PASS     CHK-STOP: first=cancelled second=done second_len=39 resumed=False leaked_internal_text=False reply='Sono le 13:54, venerdì 30 ottobre 2026.'
+BLOCKED  CHK-WIKI-HONEST: a memory tool really stored something: "Stored values.top_values = il cielo è azzurro (append). I'll remember that."
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
 SUMMARY: 3 PASS, 0 FAIL, 1 BLOCKED
 check_exit=0
-finished=2026-10-30T12:27:27Z
+finished=2026-10-30T12:54:35Z
