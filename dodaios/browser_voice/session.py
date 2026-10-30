@@ -68,6 +68,7 @@ _BROWSER_TTS_ACK_TIMEOUT_S = 120.0
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
 _TTS_MIN_CHARS = 80
 _TTS_MAX_CHARS = 400
+_MAX_LEAD_S = 6.0
 
 
 def split_for_tts(text: str) -> list[str]:
@@ -417,6 +418,8 @@ class BrowserVoiceSession:
 
         self._speaking = True
         sent = 0
+        clock_start: float | None = None
+        audio_seconds = 0.0
         try:
             for piece in split_for_tts(text):
                 stream = self._tts.synthesize(piece, language_code=self.language_code)
@@ -461,6 +464,14 @@ class BrowserVoiceSession:
                         sample_rate=TTS_SAMPLE_RATE,
                         limiter=self._out_limiter,
                     )
+                    # The browser's playback ring holds ~10 s and drops the OLDEST audio
+                    # on overrun, so never run more than _MAX_LEAD_S ahead of real time.
+                    if clock_start is None:
+                        clock_start = time.monotonic()
+                    lead = audio_seconds - (time.monotonic() - clock_start)
+                    if lead > _MAX_LEAD_S:
+                        await asyncio.sleep(lead - _MAX_LEAD_S)
+                    audio_seconds += len(pcm) / 2 / TTS_SAMPLE_RATE
                     await self._send_binary(pcm)
                     sent += 1
 

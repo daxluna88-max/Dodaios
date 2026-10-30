@@ -299,3 +299,36 @@ def test_split_for_tts_keeps_first_piece_short_and_loses_no_text():
     assert all(len(piece) <= 400 for piece in pieces)
     assert split_for_tts("Ciao.") == ["Ciao."]
     assert " ".join(split_for_tts("parola " * 200)) == ("parola " * 200).strip()
+
+
+def test_speak_never_runs_far_ahead_of_playback(monkeypatch):
+    import asyncio
+
+    from dodaios.browser_voice import session as mod
+
+    class Chunk:
+        sample_rate = mod.TTS_SAMPLE_RATE
+        pcm = b"\x01\x00" * mod.TTS_SAMPLE_RATE  # 1 s of audio
+
+    class FakeTts:
+        async def synthesize(self, text, language_code=None):
+            for _ in range(12):  # 12 s of audio, produced instantly
+                yield Chunk()
+
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(mod.asyncio, "sleep", fake_sleep)
+    sess = mod.BrowserVoiceSession.__new__(mod.BrowserVoiceSession)
+    sess._tts, sess._config, sess._out_limiter = FakeTts(), None, None
+    sess.language_code, sess.session_id = "it-IT", "t"
+
+    async def noop(*_a, **_k):
+        return None
+
+    sess._send_json = sess._send_binary = noop
+    sess._speaking = False
+    asyncio.run(sess._speak("Una frase."))
+    assert sleeps and max(sleeps) > 0  # the 7th second onward had to wait
