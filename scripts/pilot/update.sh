@@ -52,6 +52,8 @@ ensure_env JARVIS__TTS__MODEL google/gemini-3.1-flash-tts-preview
 ensure_env JARVIS__TTS__LANGUAGE_CODE it-IT
 # OpenRouter tries these when the main model errors or is rate limited (429 seen repeatedly on qwen3.8-flash).
 ensure_env JARVIS_OPENROUTER_FALLBACK_MODELS qwen/qwen3.7-flash,qwen/qwen3.6-flash
+# Tailscale Serve (tailnet-only HTTPS) proxies with this Host header; without it Jarvis answers "Untrusted Host header".
+ensure_env JARVIS_TRUSTED_HOSTS srv2104916.tail11f095.ts.net
 
 if [ "$applied" -gt 0 ] || [ "${1:-}" = "--restart" ]; then
   pkill -x jarvis || true
