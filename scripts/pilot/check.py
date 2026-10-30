@@ -114,7 +114,7 @@ def wait_turn(api: JarvisClient, sid: str, before: int, timeout: float = 120.0) 
         (names.get(str((e.get("payload") or {}).get("call_id")), "?"),
          str((e.get("payload") or {}).get("output") or "")[:300])
         for e in turn
-        if e["kind"] == "tool_result"
+        if e["kind"] == "tool_result" and not (e.get("payload") or {}).get("is_error")
     ]
     return {
         "status": finished.get("status"),
