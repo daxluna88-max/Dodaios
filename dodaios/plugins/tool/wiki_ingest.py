@@ -49,7 +49,8 @@ class WikiIngestTool:
         "('remember that', 'save this') or when you have finished "
         "a substantial piece of work whose outcome should outlive this session. "
         "The curator decides which pages to touch — give it the content as one "
-        "self-contained block."
+        "self-contained block. Read the result before answering: tell the user "
+        "it was saved only when the result says pages were touched."
     )
     # H10 (2026-05-17 audit): `safe` is wrong for an LLM-and-disk tool.
     # wiki-ingest spawns the WikiCuratorLLM (Gemini/Grok call) and writes
@@ -119,10 +120,11 @@ class WikiIngestTool:
             return ToolResult(
                 success=True,
                 output=(
-                    "Nothing was stored: the curator judged this content not "
-                    "worth a wiki page. This is a normal outcome, not an error. "
-                    "Do not claim it was saved; tell the user in their own "
-                    "language that nothing needed saving."
+                    "NOT SAVED. Nothing was stored: the curator judged this "
+                    "content not worth a wiki page. This is a normal outcome, "
+                    "not an error. Tell the user, in their own language, that "
+                    "you did NOT save it. Do not say 'noted', 'saved' or 'I "
+                    "will remember it'."
                 ),
             )
         if not outcome.success:

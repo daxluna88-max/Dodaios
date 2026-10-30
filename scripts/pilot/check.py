@@ -197,7 +197,7 @@ def check_wiki_honesty(api: JarvisClient) -> None:
     if not ingests:
         record("CHK-WIKI-HONEST", "BLOCKED", f"wiki-ingest not called; reply={result['text'][:160]!r}")
         return
-    if not ingests[-1].lower().startswith("nothing was stored"):
+    if "nothing was stored" not in ingests[-1].lower():
         record("CHK-WIKI-HONEST", "BLOCKED", f"curator stored something: {ingests[-1][:120]!r}")
         return
     text = result["text"].lower()
