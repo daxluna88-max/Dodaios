@@ -1,4 +1,4 @@
-sha=d26a8bb9483fd34872b6ebcd8219c6b234c462d1 started=2026-10-30T09:53:02Z
+sha=fa46589bae0622db65e79465b9a25c8c10fc7077 started=2026-10-30T10:04:01Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -16,6 +16,6 @@ sha=d26a8bb9483fd34872b6ebcd8219c6b234c462d1 started=2026-10-30T09:53:02Z
 = env JARVIS__BRAIN__WORKER__MODEL (already set)
 Nothing to apply; server not restarted (use --restart to force).
 update_exit=0
-BLOCKED  server: Jarvis did not answer within 90 s
+BLOCKED  server: no usable session file at /home/dax/.dodaios-data/session.json (exists=False)
 check_exit=2
-finished=2026-10-30T09:54:36Z
+finished=2026-10-30T10:05:35Z

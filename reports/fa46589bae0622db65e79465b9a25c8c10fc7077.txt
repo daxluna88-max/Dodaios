@@ -1,0 +1,21 @@
+sha=fa46589bae0622db65e79465b9a25c8c10fc7077 started=2026-10-30T10:04:01Z
+= it-upstream.patch (already applied)
+= it-detect-2.patch (already applied)
+= it-time-3.patch (already applied)
+= it-forget-4.patch (already applied)
+= it-forget-5.patch (already applied)
+= it-privacy-6.patch (already applied)
+= it-shape-7.patch (already applied)
+= it-shape-8.patch (already applied)
+= it-tools-9.patch (already applied)
+= it-wiki-10.patch (already applied)
+= it-profile-11.patch (already applied)
+= it-stop-12.patch (already applied)
+= it-paths-13.patch (already applied)
+= env JARVIS__BRAIN__WORKER__PROVIDER (already set)
+= env JARVIS__BRAIN__WORKER__MODEL (already set)
+Nothing to apply; server not restarted (use --restart to force).
+update_exit=0
+BLOCKED  server: no usable session file at /home/dax/.dodaios-data/session.json (exists=False)
+check_exit=2
+finished=2026-10-30T10:05:35Z
