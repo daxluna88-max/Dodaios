@@ -44,6 +44,12 @@ ensure_env JARVIS__BRAIN__WORKER__MODEL qwen/qwen3.8-flash
 # memory tools (answered in 1.6 s without saving). Dax chose DeepSeek V4.1 Flash on 2026-10-30; this is the id
 # his chat picker saved (`selection.model` in /api/agent-chat/catalog). Env wins over jarvis.toml.
 ensure_env JARVIS__BRAIN__PROVIDERS__OPENROUTER__MODEL deepseek/deepseek-v4.1-flash
+# Browser voice (phone microphone), cloud pipeline chosen by Dax on 2026-10-30: speech out through OpenRouter's
+# multilingual Gemini Flash TTS (language agnostic, covers Italian). JARVIS_VOICE stays 0: that only disables the
+# local microphone/wake-word stack, which a VPS does not have.
+ensure_env JARVIS__TTS__PROVIDER openrouter
+ensure_env JARVIS__TTS__MODEL google/gemini-3.1-flash-tts-preview
+ensure_env JARVIS__TTS__LANGUAGE_CODE it-IT
 # OpenRouter tries these when the main model errors or is rate limited (429 seen repeatedly on qwen3.8-flash).
 ensure_env JARVIS_OPENROUTER_FALLBACK_MODELS qwen/qwen3.7-flash,qwen/qwen3.6-flash
 
