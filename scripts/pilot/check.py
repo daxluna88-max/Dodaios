@@ -188,11 +188,15 @@ def check_stop_does_not_resume(api: JarvisClient) -> None:
 
 def check_wiki_honesty(api: JarvisClient) -> None:
     """After the curator refuses a trivial note, the reply must say nothing was saved."""
-    sid = new_session(api)
-    try:
-        result = wait_turn(api, sid, send(api, sid, "Ricorda che non ricordo"))
-    finally:
-        drop(api, sid)
+    for attempt in (1, 2):
+        sid = new_session(api)
+        try:
+            result = wait_turn(api, sid, send(api, sid, "Ricorda che non ricordo"))
+        finally:
+            drop(api, sid)
+        if "raggiungere il fornitore" not in result["text"].lower():
+            break
+        print(f"note: provider hiccup on attempt {attempt}", flush=True)
     ingests = [out for name, out in result["tools"] if name == "wiki-ingest"]
     if not ingests:
         record("CHK-WIKI-HONEST", "BLOCKED", f"wiki-ingest not called; reply={result['text'][:160]!r}")
@@ -221,6 +225,19 @@ def check_windows_path_refused() -> None:
     del Path
 
 
+def print_provider_errors() -> None:
+    """The newest provider failures from the server log, so a BLOCKED has its cause."""
+    from pathlib import Path
+
+    try:
+        lines = (Path.home() / "jarvis-serve.log").read_text(errors="replace").splitlines()
+    except OSError:
+        return
+    hits = [ln for ln in lines if "fehlgeschlagen" in ln or "returned error" in ln][-3:]
+    for ln in hits:
+        print("SERVER-LOG:", ln[:500], flush=True)
+
+
 def main() -> int:
     api = client()
     for fn in (check_time, check_stop_does_not_resume, check_wiki_honesty):
@@ -235,7 +252,10 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         record("CHK-WINPATH", "BLOCKED", f"{type(exc).__name__}: {str(exc)[:160]}")
     failed = [r for r in RESULTS if r[1] == "FAIL"]
-    print(f"SUMMARY: {len(RESULTS) - len(failed)}/{len(RESULTS)} passed", flush=True)
+    blocked = [r for r in RESULTS if r[1] == "BLOCKED"]
+    passed = [r for r in RESULTS if r[1] == "PASS"]
+    print(f"SUMMARY: {len(passed)} PASS, {len(failed)} FAIL, {len(blocked)} BLOCKED", flush=True)
+    print_provider_errors()
     return 1 if failed else 0
 
 

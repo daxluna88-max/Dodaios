@@ -12045,7 +12045,10 @@ class BrainManager:
                     provider_errors.append(
                         (prov_name, model, "rate_limit", "HTTP 429"))
                 else:
-                    log.warning("Brain %s(%s) fehlgeschlagen: %s", prov_name, model, exc)
+                    log.warning(
+                        "Brain %s(%s) fehlgeschlagen: %s | detail=%.400s",
+                        prov_name, model, exc, getattr(exc, "body", None),
+                    )
                     if (
                         turn_override is None
                         and kind in _DEAD_LIST_KINDS
