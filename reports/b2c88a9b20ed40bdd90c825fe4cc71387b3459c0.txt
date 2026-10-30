@@ -1,0 +1,35 @@
+sha=b2c88a9b20ed40bdd90c825fe4cc71387b3459c0 started=2026-10-30T14:36:01Z
+= it-upstream.patch (already applied)
+= it-detect-2.patch (already applied)
+= it-time-3.patch (already applied)
+= it-forget-4.patch (already applied)
+= it-forget-5.patch (already applied)
+= it-privacy-6.patch (already applied)
+= it-shape-7.patch (already applied)
+= it-shape-8.patch (already applied)
+= it-tools-9.patch (already applied)
+= it-wiki-10.patch (already applied)
+= it-profile-11.patch (already applied)
+= it-stop-12.patch (already applied)
+= it-paths-13.patch (already applied)
+= it-clock-14.patch (already applied)
+= it-wiki-15.patch (already applied)
+= it-log-16.patch (already applied)
+= it-reply-17.patch (already applied)
+= it-retry-18.patch (already applied)
+= it-fallback-19.patch (already applied)
+= it-rounds-20.patch (already applied)
+= it-lang-21.patch (already applied)
+= it-forget-22.patch (already applied)
+= env JARVIS__BRAIN__WORKER__PROVIDER (already set)
+= env JARVIS__BRAIN__WORKER__MODEL (already set)
+= env JARVIS_OPENROUTER_FALLBACK_MODELS (already set)
+Nothing to apply; server not restarted (use --restart to force).
+update_exit=0
+PASS     CHK-TIME: real_rome_time=15:36 status=done secs=6 tool_errors=0 reply='Sono le 15:36, venerdì 30 ottobre 2026.'
+PASS     CHK-STOP: first=cancelled second=done second_len=54 resumed=False leaked_internal_text=False reply='Sono le quindici e trentasei, venerdì 30 ottobre 2026.'
+SKIPPED  CHK-WIKI-HONEST: live memory check is off: it writes to the real profile
+PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
+SUMMARY: 3 PASS, 0 FAIL, 0 BLOCKED, 1 SKIPPED
+check_exit=0
+finished=2026-10-30T14:36:37Z
