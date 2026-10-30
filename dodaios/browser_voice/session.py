@@ -127,6 +127,16 @@ def _is_phantom(heard: str) -> bool:
     return " ".join(w.lower() for w in _WORD.findall(heard)) in _PHANTOM_PHRASES
 
 
+# What Whisper writes for silence or room noise. Unlike ``_PHANTOM_PHRASES`` this list leaves out "ciao" and "ok",
+# which are real one-word turns; a bare "grazie" stays in because it is the most common invention.
+_SILENCE_HALLUCINATIONS = _PHANTOM_PHRASES - {"ciao", "ok"}
+
+
+def _is_silence_hallucination(heard: str) -> bool:
+    words = " ".join(w.lower() for w in _WORD.findall(heard))
+    return words in _SILENCE_HALLUCINATIONS or words.startswith(("sottotitoli", "sottotitolato", "subtitles by"))
+
+
 def split_for_tts(text: str) -> list[str]:
     """Split a reply into pieces so the first audio starts after one sentence.
 
@@ -363,6 +373,14 @@ class BrowserVoiceSession:
             if not text:
                 # End-of-turn fired but nothing transcribable — let the browser
                 # reset any "thinking" affordance (AD-OE6: never a silent drop).
+                await self._send_json({"type": "vad_silence"})
+                return
+            if _is_silence_hallucination(text):
+                log.warning(
+                    "browser_voice[%s] ignored a transcript that looks invented from silence: %r",
+                    self.session_id,
+                    text,
+                )
                 await self._send_json({"type": "vad_silence"})
                 return
             log.info("browser_voice[%s] user: %s", self.session_id, text)

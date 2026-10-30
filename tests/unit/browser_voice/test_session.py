@@ -528,3 +528,20 @@ async def test_browser_engine_speaks_with_the_phone_and_never_calls_cloud_tts(mo
     assert tts.texts == []  # no cloud synthesis
     assert sink.json_of("tts_browser_fallback")
     assert sink.binary == []
+
+
+async def test_a_transcript_invented_from_silence_does_not_start_a_turn():
+    sink = _Sink()
+    brain = FakeBrain("risposta")
+    session = _make_session(sink, stt=FakeSTT(["Grazie."]), brain=brain)
+    await _drive_one_utterance(session)
+    assert brain.prompts == []
+    assert sink.json_of("vad_silence")
+
+
+async def test_a_real_short_turn_is_still_answered():
+    sink = _Sink()
+    brain = FakeBrain("risposta")
+    session = _make_session(sink, stt=FakeSTT(["Ciao"]), brain=brain)
+    await _drive_one_utterance(session)
+    assert brain.prompts == ["Ciao"]
