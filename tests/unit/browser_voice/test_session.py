@@ -545,3 +545,13 @@ async def test_a_real_short_turn_is_still_answered():
     session = _make_session(sink, stt=FakeSTT(["Ciao"]), brain=brain)
     await _drive_one_utterance(session)
     assert brain.prompts == ["Ciao"]
+
+
+def test_repeated_invented_sentences_are_still_invented():
+    from dodaios.browser_voice.session import _is_silence_hallucination
+
+    assert _is_silence_hallucination("Grazie. Grazie.")
+    assert _is_silence_hallucination("Grazie.")
+    assert _is_silence_hallucination("Sottotitoli creati dalla comunità Amara.org")
+    assert not _is_silence_hallucination("Grazie, e adesso raccontami un'altra storia.")
+    assert not _is_silence_hallucination("Ciao")

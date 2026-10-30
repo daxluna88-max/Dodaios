@@ -133,8 +133,21 @@ _SILENCE_HALLUCINATIONS = _PHANTOM_PHRASES - {"ciao", "ok"}
 
 
 def _is_silence_hallucination(heard: str) -> bool:
-    words = " ".join(w.lower() for w in _WORD.findall(heard))
-    return words in _SILENCE_HALLUCINATIONS or words.startswith(("sottotitoli", "sottotitolato", "subtitles by"))
+    """True when every sentence is an invented one (so "Grazie. Grazie." counts too)."""
+    sentences = [
+        " ".join(w.lower() for w in _WORD.findall(part))
+        for part in re.split(r"[.!?…]+", heard)
+        if part.strip()
+    ]
+    if not sentences:
+        return False
+    if sentences[0].startswith(("sottotitoli", "sottotitolato", "subtitles by")):
+        return True  # "Sottotitoli creati dalla comunità Amara.org" splits at the dot
+    return all(
+        sentence in _SILENCE_HALLUCINATIONS
+        or sentence.startswith(("sottotitoli", "sottotitolato", "subtitles by"))
+        for sentence in sentences
+    )
 
 
 def split_for_tts(text: str) -> list[str]:
