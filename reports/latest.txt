@@ -1,4 +1,4 @@
-sha=9cce1baea2332693a0d977d129ff43a73df50a3e started=2026-10-30T13:00:02Z
+sha=023782dd66bc22ffe018393ebfc19f33a2e891cc started=2026-10-30T13:04:02Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -18,15 +18,16 @@ sha=9cce1baea2332693a0d977d129ff43a73df50a3e started=2026-10-30T13:00:02Z
 = it-reply-17.patch (already applied)
 = it-retry-18.patch (already applied)
 = it-fallback-19.patch (already applied)
++ it-rounds-20.patch applied
 = env JARVIS__BRAIN__WORKER__PROVIDER (already set)
 = env JARVIS__BRAIN__WORKER__MODEL (already set)
 = env JARVIS_OPENROUTER_FALLBACK_MODELS (already set)
-Nothing to apply; server not restarted (use --restart to force).
+RESTARTED: jarvis running
 update_exit=0
-PASS     CHK-TIME: real_rome_time=14:00 status=done secs=9 tool_errors=0 reply='Sono le 14:00, Davide — venerdì 30 ottobre 2026.'
-PASS     CHK-STOP: first=cancelled second=done second_len=45 resumed=False leaked_internal_text=False reply='Sono le 14:00 di venerdì, il 30 ottobre 2026.'
+PASS     CHK-TIME: real_rome_time=14:04 status=done secs=6 tool_errors=0 reply='Sono le 14:04, venerdì 30 ottobre 2026.'
+PASS     CHK-STOP: first=cancelled second=done second_len=39 resumed=False leaked_internal_text=False reply='Sono le 14:04, venerdì 30 ottobre 2026.'
 SKIPPED  CHK-WIKI-HONEST: live memory check is off: it writes to the real profile
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
 SUMMARY: 3 PASS, 0 FAIL, 0 BLOCKED, 1 SKIPPED
 check_exit=0
-finished=2026-10-30T13:00:33Z
+finished=2026-10-30T13:04:32Z
