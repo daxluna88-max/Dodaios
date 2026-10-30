@@ -73,6 +73,43 @@ describe("late restore never overrides the person", () => {
   });
 });
 
+describe("restore after a failed first list", () => {
+  it("does not fire on a later poll once the person edited the draft", async () => {
+    let fail = true;
+    vi.stubGlobal("fetch", vi.fn(async (input: string) => {
+      if (String(input).startsWith("/api/agent-chat/sessions")) {
+        if (fail) throw new Error("offline");
+        return reply({ sessions: [row("a")] });
+      }
+      return reply({ providers: [], selection: null, default_cwd: "", shell: "test", mapping: [] });
+    }));
+    localStorage.setItem(KEY, "a");
+    const store = makeStore();
+    await store.getState().loadSessions();
+    await store.getState().setDraft({ cwd: "/tmp" });
+    fail = false;
+    await store.getState().loadSessions();
+    expect(store.getState().activeSessionId).toBeNull();
+  });
+
+  it("still restores on a later poll when the person did nothing", async () => {
+    let fail = true;
+    vi.stubGlobal("fetch", vi.fn(async (input: string) => {
+      if (String(input).startsWith("/api/agent-chat/sessions")) {
+        if (fail) throw new Error("offline");
+        return reply({ sessions: [row("a")] });
+      }
+      return reply({ providers: [], selection: null, default_cwd: "", shell: "test", mapping: [] });
+    }));
+    localStorage.setItem(KEY, "a");
+    const store = makeStore();
+    await store.getState().loadSessions();
+    fail = false;
+    await store.getState().loadSessions();
+    expect(store.getState().activeSessionId).toBe("a");
+  });
+});
+
 describe("snapshots belong to the open chat", () => {
   it("ignores a snapshot that names another session", () => {
     vi.stubGlobal("fetch", vi.fn(async () => reply({ sessions: [] })));

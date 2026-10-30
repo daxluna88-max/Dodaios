@@ -708,7 +708,7 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
             const shared = reuseHistoryRows(state.sessions, sessions, (row) => row.session_id);
             return shared === state.sessions ? state : { sessions: shared };
           });
-          if (restoreArmed && epoch === interactionEpoch) {
+          if (restoreArmed && epoch === interactionEpoch && interactionEpoch === 0) {
             restoreArmed = false;
             const wanted = storedActive();
             if (wanted && get().activeSessionId === null && sessions.some((row) => row.session_id === wanted)) {
