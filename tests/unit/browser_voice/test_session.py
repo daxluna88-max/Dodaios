@@ -508,3 +508,23 @@ async def test_a_phantom_grazie_does_not_interrupt_the_story():
     await asyncio.sleep(0.2)
     assert not sink.json_of("tts_cancel")
     assert brain.prompts == ["Raccontami cosa puoi fare"]
+
+
+async def test_browser_engine_speaks_with_the_phone_and_never_calls_cloud_tts(monkeypatch):
+    monkeypatch.setenv("JARVIS_BROWSER_VOICE_ENGINE", "browser")
+    sink = _Sink()
+    tts = _RecordingTTS()
+    session = _make_session(sink, brain=_ScriptedBrain([_LONG_IT]), tts=tts, language_code="it-IT")
+
+    async def ack_soon():
+        for _ in range(200):
+            await asyncio.sleep(0.005)
+            for msg in sink.json_of("tts_browser_fallback"):
+                await session.handle_control({"type": "tts_browser_done", "id": msg["id"], "outcome": "ended"})
+
+    acker = asyncio.create_task(ack_soon())
+    await _run_stream(session)
+    acker.cancel()
+    assert tts.texts == []  # no cloud synthesis
+    assert sink.json_of("tts_browser_fallback")
+    assert sink.binary == []

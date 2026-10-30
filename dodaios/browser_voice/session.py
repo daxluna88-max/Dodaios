@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import time
 from collections.abc import AsyncIterator
@@ -87,6 +88,11 @@ class _ReplyState:
         self.cut = False  # a hard leak was found: nothing more is spoken
         self.leak_actions: list[str] = []
         self.published = False  # ResponseGenerated already sent (text shows while speech plays)
+
+
+def _browser_engine() -> bool:
+    """``JARVIS_BROWSER_VOICE_ENGINE=browser``: speak with the phone's own voice instead of cloud TTS."""
+    return os.environ.get("JARVIS_BROWSER_VOICE_ENGINE", "").strip().lower() == "browser"
 
 
 _WORD = re.compile(r"\w+", re.UNICODE)
@@ -565,6 +571,23 @@ class BrowserVoiceSession:
         vol = getattr(getattr(self._config, "tts", None), "volume", 1.0)
         if self._out_limiter is None:
             self._out_limiter = PeakLimiter()
+
+        if _browser_engine():
+            # Free engine: the phone speaks with its built-in voice (no cloud TTS call).
+            self._speaking = True
+            try:
+                spoken = 0
+                async for piece in pieces:
+                    if piece is _CUT:
+                        if spoken:
+                            await self._send_json({"type": "tts_cancel"})
+                        continue
+                    assert isinstance(piece, str)
+                    await self._speak_in_browser(piece, volume=vol)
+                    spoken += 1
+                return spoken
+            finally:
+                self._speaking = False
 
         self._speaking = True
         sent = 0
