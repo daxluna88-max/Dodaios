@@ -138,9 +138,12 @@ def clock_matches(text: str, tolerance_min: int = 4) -> bool:
     spoken = text.lower().replace("é", "e").replace("à", "a")
     for shift in (-tolerance_min, 0, tolerance_min):
         minutes = (now.hour * 60 + now.minute + shift) % 1440
-        word = _HOUR_WORDS[minutes // 60]
-        if re.search(rf"\bsono\s+le\s+{word}\b|\bl'?{word}\b|\b{word}\s+e\s+\w+", spoken):
-            return True
+        hour = minutes // 60
+        # Spoken Italian often uses the 12-hour clock ("le quattro e otto del pomeriggio").
+        words = {_HOUR_WORDS[hour], _HOUR_WORDS[(hour % 12) or 12]}
+        for word in words:
+            if re.search(rf"\bsono\s+le\s+{word}\b|\bl'?{word}\b|\b{word}\s+e\s+\w+", spoken):
+                return True
     for hh, mm in re.findall(r"\b(\d{1,2})[:.](\d{2})\b", text):
         if int(hh) < 24 and int(mm) < 60:
             delta = abs((int(hh) * 60 + int(mm)) - (now.hour * 60 + now.minute))
