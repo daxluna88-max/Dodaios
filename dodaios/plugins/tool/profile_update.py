@@ -205,47 +205,32 @@ class UpdateProfileTool:
         profile = self._resolve_profile()
         if profile is None:
             return ToolResult(success=False, output="", error="user profile not available")
-        try:
-            if is_list:
-                item = value if not isinstance(value, (list, tuple)) else (value[0] if value else None)
-                if item is None or (isinstance(item, str) and not item.strip()):
-                    return ToolResult(
-                        success=False, output="",
-                        error=f"name the item to remove from {cluster}.{field}",
-                    )
-                current = profile.get(cluster, field)
-                match = next(
-                    (c for c in (current if isinstance(current, list) else [])
-                     if str(c).strip().casefold() == str(item).strip().casefold()),
-                    None,
+        item: Any = None
+        if is_list:
+            item = value if not isinstance(value, (list, tuple)) else (value[0] if value else None)
+            if item is None or (isinstance(item, str) and not item.strip()):
+                return ToolResult(
+                    success=False, output="",
+                    error=f"name the item to remove from {cluster}.{field}",
                 )
-                changed = match is not None and profile.remove_list_item(cluster, field, match)
-                what = match if match is not None else item
-            else:
-                changed = profile.clear(cluster, field)
-                what = f"{cluster}.{field}"
+        try:
+            # Same forget as the Profile UI: the field AND the note lines that carry
+            # the value. Nothing below repeats the value or the person's words.
+            changed, _dropped = profile.forget(cluster, field, item)
+            if changed:
+                profile.save()
         except ValueError as exc:
             return ToolResult(success=False, output="", error=str(exc))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("update_profile: remove not persisted: %s", exc)
+            return ToolResult(success=False, output="", error=f"could not persist profile: {exc}")
 
         if not changed:
             return ToolResult(
                 success=True,
-                output=f"Not found — {cluster}.{field} did not contain {what!s}. "
+                output=f"Not found — {cluster}.{field} did not contain it. "
                        "Nothing was removed; do not tell the user it was forgotten.",
             )
-        try:
-            # A real forget: drop the history lines that carry the removed value
-            # (or every line of a cleared scalar field), and log the removal
-            # without the value or the user's words, so nothing is read back.
-            profile.purge_observations(f"{cluster}.{field}", str(what) if is_list else None)
-            profile.append_observation(
-                f"{cluster}.{field}", "an item was removed" if is_list else "cleared",
-                "forget request",
-            )
-            profile.save()
-        except Exception as exc:  # noqa: BLE001
-            log.warning("update_profile: remove not persisted: %s", exc)
-            return ToolResult(success=False, output="", error=f"could not persist profile: {exc}")
         if self._bus is not None:
             try:
                 from dodaios.core.events import ProfileUpdated
@@ -253,15 +238,17 @@ class UpdateProfileTool:
                 await self._bus.publish(
                     ProfileUpdated(
                         subject="user", cluster=cluster, field=field,
-                        operation="remove", confidence=1.0, evidence=evidence[:200],
+                        operation="remove", confidence=1.0, evidence="forget request",
                     )
                 )
             except Exception:  # noqa: BLE001
                 log.debug("update_profile: ProfileUpdated publish failed", exc_info=True)
-        log.info("update_profile: remove %s.%s %r", cluster, field, what)
+        log.info("update_profile: remove %s.%s", cluster, field)
         return ToolResult(
             success=True,
-            output=f"Removed {what!s} from {cluster}.{field}. It is forgotten.",
+            output=f"Removed from {cluster}.{field} and from the note lines about it. "
+                   "It may still exist elsewhere (chat history, wiki pages, backups): "
+                   "do not say it is erased everywhere.",
         )
 
     async def execute(self, args: dict[str, Any], ctx: Any) -> ToolResult:

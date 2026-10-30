@@ -339,3 +339,35 @@ def test_value_schema_forbids_translating_free_text():
     """Free-text values stay in the user's language ("rosso", not "red")."""
     desc = UpdateProfileTool.schema["properties"]["value"]["description"]
     assert "never translate" in desc
+
+
+@pytest.mark.asyncio
+async def test_forget_result_and_event_do_not_repeat_the_value_or_the_words(tmp_path):
+    """The result, the log line and the event carry no copy of what was forgotten."""
+    _path, profile = _load(tmp_path)
+    bus, events = _capturing_bus()
+    tool = _tool(profile, bus)
+    await tool.execute(
+        {"cluster": "values", "field": "top_values", "value": "Azzurro",
+         "evidence": "il mio colore preferito e l'azzurro"}, ctx=None)
+    events.clear()
+    result = await tool.execute(
+        {"cluster": "values", "field": "top_values", "value": "azzurro", "operation": "remove",
+         "evidence": "dimentica che amo l'azzurro"}, ctx=None)
+    assert result.success
+    assert "azzurro" not in result.output.casefold()
+    assert "erased everywhere" in result.output  # the promise is bounded
+    assert events and all("azzurro" not in (e.evidence or "").casefold() for e in events)
+
+
+@pytest.mark.asyncio
+async def test_forget_removes_a_value_that_only_lives_in_the_note_lines(tmp_path):
+    """A value gone from the field (an older UI forget) but still in the notes is purged."""
+    path, profile = _load(tmp_path)
+    profile.append_observation("values.top_values", "Azzurro", "il cielo")
+    profile.save()
+    result = await _tool(profile).execute(
+        {"cluster": "values", "field": "top_values", "value": "azzurro", "operation": "remove"},
+        ctx=None)
+    assert result.success and "Removed" in result.output
+    assert "azzurro" not in path.read_text(encoding="utf-8").casefold()
