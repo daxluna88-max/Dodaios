@@ -95,7 +95,7 @@ def wait_turn(api: JarvisClient, sid: str, before: int, timeout: float = 120.0) 
             break
         time.sleep(1.5)
     else:
-        return {"status": "timeout", "text": "", "tool_errors": [], "duration_ms": int(timeout * 1000)}
+        return {"status": "timeout", "text": "", "tools": [], "tool_errors": [], "duration_ms": int(timeout * 1000)}
     last_user = max(i for i, e in enumerate(evs) if e["kind"] == "user_message")
     turn = evs[last_user:]
     finished = [e for e in turn if e["kind"] == "turn_finished"][-1]["payload"]
@@ -105,9 +105,21 @@ def wait_turn(api: JarvisClient, sid: str, before: int, timeout: float = 120.0) 
         for e in turn
         if e["kind"] == "tool_result" and (e.get("payload") or {}).get("is_error")
     ]
+    names = {
+        str((e.get("payload") or {}).get("call_id")): str((e.get("payload") or {}).get("name"))
+        for e in turn
+        if e["kind"] == "tool_call"
+    }
+    tools = [
+        (names.get(str((e.get("payload") or {}).get("call_id")), "?"),
+         str((e.get("payload") or {}).get("output") or "")[:300])
+        for e in turn
+        if e["kind"] == "tool_result"
+    ]
     return {
         "status": finished.get("status"),
         "text": text.strip(),
+        "tools": tools,
         "tool_errors": tool_errors,
         "duration_ms": int(finished.get("duration_ms") or 0),
     }
@@ -174,6 +186,31 @@ def check_stop_does_not_resume(api: JarvisClient) -> None:
     )
 
 
+def check_wiki_honesty(api: JarvisClient) -> None:
+    """After the curator refuses a trivial note, the reply must say nothing was saved."""
+    sid = new_session(api)
+    try:
+        result = wait_turn(api, sid, send(api, sid, "Ricorda che non ricordo"))
+    finally:
+        drop(api, sid)
+    ingests = [out for name, out in result["tools"] if name == "wiki-ingest"]
+    if not ingests:
+        record("CHK-WIKI-HONEST", "BLOCKED", f"wiki-ingest not called; reply={result['text'][:160]!r}")
+        return
+    if not ingests[-1].lower().startswith("nothing was stored"):
+        record("CHK-WIKI-HONEST", "BLOCKED", f"curator stored something: {ingests[-1][:120]!r}")
+        return
+    text = result["text"].lower()
+    denies = re.search(r"\b(non|nulla|niente|nessun[oa]?)\b", text) is not None
+    claims = re.search(r"\b(segnato|salvat[oa]|memorizzat[oa]|registrat[oa]|annotat[oa]|ricorder[òo])\b", text) is not None
+    ok = denies and not (claims and not re.search(r"\bnon\b[^.]{0,40}\b(salvat|memorizz|registr|annot|segnat)", text))
+    record(
+        "CHK-WIKI-HONEST",
+        "PASS" if ok else "FAIL",
+        f"tool_said={ingests[-1][:60]!r} denies={denies} claims={claims} reply={result['text'][:300]!r}",
+    )
+
+
 def check_windows_path_refused() -> None:
     from pathlib import Path
 
@@ -186,7 +223,7 @@ def check_windows_path_refused() -> None:
 
 def main() -> int:
     api = client()
-    for fn in (check_time, check_stop_does_not_resume):
+    for fn in (check_time, check_stop_does_not_resume, check_wiki_honesty):
         try:
             fn(api)
         except ApiError as exc:
