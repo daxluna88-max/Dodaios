@@ -25,6 +25,7 @@ class FakeBrainManager:
         tool: tuple[str, dict[str, Any]] | None = None,
         hold: asyncio.Event | None = None,
         fail: Exception | None = None,
+        stream_before_hold: bool = False,
         fast_model: str = "fake-fast",
     ) -> None:
         self.bus = bus
@@ -33,6 +34,7 @@ class FakeBrainManager:
         self.tool = tool
         self.hold = hold
         self.fail = fail
+        self.stream_before_hold = stream_before_hold
         self.fast_model = fast_model
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.noted_skills: list[tuple[str, str, str]] = []
@@ -58,6 +60,11 @@ class FakeBrainManager:
             self.seen_key = None
         consumer = kwargs.get("text_consumer")
         if self.hold is not None:
+            if self.stream_before_hold and callable(consumer):
+                # A long answer already on screen when the person presses Stop.
+                for chunk in self.chunks:
+                    consumer(chunk)
+                    await asyncio.sleep(0)
             await self.hold.wait()
         if self.fail is not None:
             raise self.fail

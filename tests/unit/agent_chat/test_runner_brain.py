@@ -238,6 +238,45 @@ async def test_cancel_ends_a_running_brain_turn(
     assert not svc.is_running(session.session_id)
 
 
+async def test_words_already_on_screen_survive_a_stop_and_a_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_cli
+):
+    hold = asyncio.Event()
+    fake = FakeBrainManager(hold=hold, stream_before_hold=True)
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: fake)
+    svc = _service(None)
+    session = _jarvis_session(svc, tmp_path)
+    q = svc.subscribe(session.session_id)
+    await svc.send(session.session_id, "tell a long story")
+    await _drain(q, "reasoning_started")
+    await asyncio.sleep(0.05)  # the streamed words reach the screen
+    assert await svc.cancel(session.session_id)
+    events = await _drain(q, "turn_finished")
+    assert events[-1]["payload"]["status"] == "cancelled"
+    # A reload reads the stored log, where text_delta never is.
+    stored = svc.store.list_events(session.session_id)
+    texts = [e for e in stored if e["kind"] == "assistant_text"]
+    assert [e["payload"]["text"] for e in texts] == ["Hello from Jarvis"]
+    assert texts[0]["payload"]["partial"] is True
+
+
+async def test_a_stop_before_any_words_stores_no_empty_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_cli
+):
+    hold = asyncio.Event()
+    fake = FakeBrainManager(hold=hold)
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: fake)
+    svc = _service(None)
+    session = _jarvis_session(svc, tmp_path)
+    q = svc.subscribe(session.session_id)
+    await svc.send(session.session_id, "take your time")
+    await _drain(q, "reasoning_started")
+    assert await svc.cancel(session.session_id)
+    await _drain(q, "turn_finished")
+    stored = svc.store.list_events(session.session_id)
+    assert not [e for e in stored if e["kind"] == "assistant_text"]
+
+
 async def test_a_brain_error_ends_the_turn_honestly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_cli
 ):
