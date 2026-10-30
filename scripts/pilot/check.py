@@ -15,7 +15,7 @@ import time
 from typing import Any
 
 from dodaios.cli_ctl.client import ApiError, JarvisClient
-from dodaios.cli_ctl.discovery import discover
+from dodaios.cli_ctl.discovery import discover, session_file
 
 BASE = "/api/agent-chat"
 TIME_RE = re.compile(r"\b\d{1,2}[:.]\d{2}\b")
@@ -29,17 +29,21 @@ def record(check_id: str, verdict: str, evidence: str) -> None:
 
 def client() -> JarvisClient:
     deadline = time.time() + 90
+    reason = "not tried"
     while True:
-        info = discover()
-        if info is not None:
+        info = discover() or discover(check_pid=False)
+        if info is None:
+            path = session_file()
+            reason = f"no usable session file at {path} (exists={bool(path and path.exists())})"
+        else:
             api = JarvisClient(info.base_url, info.token, timeout=60.0)
             try:
                 api.request("GET", f"{BASE}/commands")
                 return api
-            except ApiError:
-                pass
+            except ApiError as exc:
+                reason = f"{info.base_url} auth={api.has_auth} -> {exc.message[:160]}"
         if time.time() > deadline:
-            print("BLOCKED  server: Jarvis did not answer within 90 s")
+            print(f"BLOCKED  server: {reason}")
             sys.exit(2)
         time.sleep(3)
 
