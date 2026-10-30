@@ -621,6 +621,39 @@ async def run_brain_turn(
     await finish(status, override.receipt.usage(), error)
 
 
+def _ui_language_fallback(brain: Any, text: str, history: list[BrainMessage]) -> str:
+    """The language to force for a turn whose own text names none, else ``""``.
+
+    A short message ("Ricorda", "Salvalo") has no detectable language, and the
+    first turn of a chat has no history to inherit one from, so the model got
+    only the soft "mirror the user" line and answered in English even in an
+    Italian-only UI. Same resolver as the brain's own, with the configured
+    ``ui.language`` as the last resort; detected text and history still win,
+    and a ``brain.reply_language`` pin is left to the brain.
+    """
+    from dodaios.core.turn_language import (
+        conversation_language_from_history,
+        resolve_conversation_language,
+    )
+
+    from dodaios.agent_chat.delegation_wait import CONTINUE_TURN
+
+    if text == CONTINUE_TURN:  # neutral English line, not the person's words
+        return ""
+    ui_language = getattr(getattr(getattr(brain, "_config", None), "ui", None), "language", "")
+    if not isinstance(ui_language, str) or not is_known_language(ui_language):
+        return ""
+    pin = getattr(brain, "reply_language", "auto") or "auto"
+    language = resolve_conversation_language(
+        pin,
+        "unknown",
+        text,
+        conversation_language=conversation_language_from_history(history, reply_language=pin),
+        fallback_language=ui_language,
+    )
+    return language if is_known_language(language) else ""
+
+
 async def _generate(
     brain: Any,
     text: str,
@@ -646,6 +679,8 @@ async def _generate(
         output_language = await resolve_agent_reply_language(
             session.session_id, text, output_language
         )
+    if not output_language and session.surface != "society" and not handle.continuation:
+        output_language = _ui_language_fallback(brain, text, history)
     handle.output_language = output_language
     kwargs: dict[str, Any] = {
         "use_history": False,

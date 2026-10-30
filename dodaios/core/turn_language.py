@@ -770,6 +770,7 @@ def resolve_conversation_language(
     text: str,
     *,
     conversation_language: object = "",
+    fallback_language: object = "",
 ) -> str:
     """The language the person is speaking in this turn: any code, or ``unknown``.
 
@@ -789,7 +790,10 @@ def resolve_conversation_language(
        cannot replace an established language;
     4. else the detected language of the turn (text first, the STT tag breaks
        ties), an ambiguous substantive turn inheriting ``conversation_language``;
-    5. else ``"unknown"``.
+    5. else ``fallback_language`` (the app's configured UI language) when it
+       names a known language: a short Italian message such as "Ricorda" has no
+       detectable language and no history yet, and the pilot's UI is Italian;
+    6. else ``"unknown"``.
     """
     pin = str(reply_language or "").strip().lower()
     if pin in _REPLY_PINS:
@@ -813,7 +817,10 @@ def resolve_conversation_language(
         return detected
     if detected != "unknown":
         return detected
-    return normalize_any_language_tag(stt_language)
+    tagged = normalize_any_language_tag(stt_language)
+    if tagged != "unknown":
+        return tagged
+    return _known_language(fallback_language) or "unknown"
 
 
 def resolve_output_language(
@@ -823,6 +830,7 @@ def resolve_output_language(
     *,
     default: str = DEFAULT_LOCALE,
     conversation_language: object = "",
+    fallback_language: object = "",
 ) -> str:
     """The SINGLE authoritative output language for one turn (de/en/es/pt).
 
@@ -842,12 +850,15 @@ def resolve_output_language(
     that is not a pin (``"auto"``, ``""``, ``None``, a typo) means "no pin —
     mirror the input". ``conversation_language`` is the language of the
     conversation so far (any code); pass ``""`` when none is established yet.
+    ``fallback_language`` is the configured UI language, used before ``default``
+    when neither the text, the history nor the STT tag name a language.
     """
     language = resolve_conversation_language(
         reply_language,
         stt_language,
         text,
         conversation_language=conversation_language,
+        fallback_language=fallback_language,
     )
     if language in _REPLY_PINS:
         return language

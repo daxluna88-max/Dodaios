@@ -481,3 +481,38 @@ def test_history_leaves_finished_turns_unmarked() -> None:
     ]
     history = runner_brain.brain_history_from_events(events)
     assert [m.content for m in history] == ["hi", "hello"]
+
+
+async def test_a_short_italian_turn_is_forced_to_the_ui_language(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_cli
+):
+    """Live 2026-10-30: "Ricorda" has no detectable language and the chat had
+    no history, so the brain only got the soft mirror line and answered in
+    English in an Italian-only UI. The configured ui.language is the fallback."""
+    fake = FakeBrainManager()
+    fake._config = SimpleNamespace(ui=SimpleNamespace(language="it"))
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: fake)
+    svc = _service(None)
+    session = _jarvis_session(svc, tmp_path)
+    q = svc.subscribe(session.session_id)
+
+    await svc.send(session.session_id, "Ricorda")
+    await _drain(q, "turn_finished")
+
+    assert fake.calls[0][1]["force_output_language"] == "it"
+
+
+async def test_ui_language_does_not_override_a_detected_turn_language(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_cli
+):
+    fake = FakeBrainManager()
+    fake._config = SimpleNamespace(ui=SimpleNamespace(language="it"))
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: fake)
+    svc = _service(None)
+    session = _jarvis_session(svc, tmp_path)
+    q = svc.subscribe(session.session_id)
+
+    await svc.send(session.session_id, "What is the weather like today?")
+    await _drain(q, "turn_finished")
+
+    assert fake.calls[0][1]["force_output_language"] == "en"

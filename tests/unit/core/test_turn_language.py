@@ -627,3 +627,35 @@ def test_output_language_validator_flags_portuguese_under_es_pin() -> None:
 
     assert result.status == "mismatch"
     assert result.detected_language == "pt"
+
+
+@pytest.mark.parametrize("text", ["Ricorda", "Salvalo", "ok"])
+def test_short_text_without_history_falls_back_to_the_ui_language(text: str) -> None:
+    from dodaios.core.turn_language import resolve_conversation_language
+
+    assert resolve_conversation_language("auto", None, text) == "unknown"
+    assert resolve_conversation_language("auto", None, text, fallback_language="it") == "it"
+    assert resolve_output_language("auto", None, text, fallback_language="it") == "it"
+
+
+def test_ui_fallback_never_overrides_history_text_pin_or_stt_tag() -> None:
+    from dodaios.core.turn_language import resolve_conversation_language
+
+    kw = {"fallback_language": "it"}
+    # History wins over the UI language for a thin turn.
+    assert resolve_conversation_language(
+        "auto", None, "Ricorda", conversation_language="de", **kw
+    ) == "de"
+    # Clearly detected text wins.
+    assert resolve_conversation_language("auto", None, "What is the weather like today?", **kw) == "en"
+    # An explicit pin wins.
+    assert resolve_conversation_language("es", None, "Ricorda", **kw) == "es"
+    # The STT tag is evidence, the UI language is only a last resort.
+    assert resolve_conversation_language("auto", "german", "Ricorda", **kw) == "de"
+
+
+def test_ui_fallback_ignores_an_unknown_code() -> None:
+    from dodaios.core.turn_language import resolve_conversation_language
+
+    assert resolve_conversation_language("auto", None, "Ricorda", fallback_language="xx") == "unknown"
+    assert resolve_output_language("auto", None, "Ricorda", fallback_language="") == DEFAULT_LOCALE
