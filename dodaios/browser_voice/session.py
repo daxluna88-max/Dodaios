@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -62,6 +63,48 @@ SendJson = Callable[[dict[str, Any]], Awaitable[None]]
 # detector while its own voice is still audible through the microphone.
 _BROWSER_TTS_ACK_TIMEOUT_S = 120.0
 
+
+
+_SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
+_TTS_MIN_CHARS = 80
+_TTS_MAX_CHARS = 400
+
+
+def split_for_tts(text: str) -> list[str]:
+    """Split a reply into short pieces so the first audio starts after one sentence.
+
+    One long request made the cloud TTS model synthesize the whole reply before
+    answering (about 14 s on five sentences, with distorted or skipped speech
+    on the phone). Sentences are grouped to at least ``_TTS_MIN_CHARS`` and never
+    exceed ``_TTS_MAX_CHARS`` unless a single word is longer.
+    """
+    pieces: list[str] = []
+    current = ""
+    for sentence in _SENTENCE_END.split(text.strip()):
+        for part in _wrap(sentence):
+            current = f"{current} {part}".strip()
+            if len(current) >= _TTS_MIN_CHARS:
+                pieces.append(current)
+                current = ""
+    if current:
+        if pieces and len(current) < _TTS_MIN_CHARS // 2 and len(pieces[-1]) + len(current) < _TTS_MAX_CHARS:
+            pieces[-1] = f"{pieces[-1]} {current}"
+        else:
+            pieces.append(current)
+    return pieces or [text]
+
+
+def _wrap(sentence: str) -> list[str]:
+    words, parts, line = sentence.split(), [], ""
+    for word in words:
+        if line and len(line) + 1 + len(word) > _TTS_MAX_CHARS:
+            parts.append(line)
+            line = word
+        else:
+            line = f"{line} {word}".strip()
+    if line:
+        parts.append(line)
+    return parts
 
 class BrowserVoiceSession:
     """One browser microphone/speaker session over a ``/ws/audio`` socket.
@@ -375,50 +418,51 @@ class BrowserVoiceSession:
         self._speaking = True
         sent = 0
         try:
-            stream = self._tts.synthesize(text, language_code=self.language_code)
-            iterator = stream.__aiter__()
-            while True:
-                try:
-                    chunk = await anext(iterator)
-                except StopAsyncIteration:
-                    break
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:  # noqa: BLE001 - cross output family once
-                    if sent:
-                        log.warning(
-                            "browser_voice[%s] server TTS failed after audio started",
-                            self.session_id,
-                            exc_info=True,
-                        )
-                        await self._send_json({"type": "tts_end", "partial": True})
+            for piece in split_for_tts(text):
+                stream = self._tts.synthesize(piece, language_code=self.language_code)
+                iterator = stream.__aiter__()
+                while True:
+                    try:
+                        chunk = await anext(iterator)
+                    except StopAsyncIteration:
+                        break
+                    except asyncio.CancelledError:
                         raise
-                    log.warning(
-                        "browser_voice[%s] server TTS unavailable; using browser speech: %s",
-                        self.session_id,
-                        exc,
-                    )
-                    await self._speak_in_browser(text, volume=vol)
-                    return 0
+                    except Exception as exc:  # noqa: BLE001 - cross output family once
+                        if sent:
+                            log.warning(
+                                "browser_voice[%s] server TTS failed after audio started",
+                                self.session_id,
+                                exc_info=True,
+                            )
+                            await self._send_json({"type": "tts_end", "partial": True})
+                            raise
+                        log.warning(
+                            "browser_voice[%s] server TTS unavailable; using browser speech: %s",
+                            self.session_id,
+                            exc,
+                        )
+                        await self._speak_in_browser(text, volume=vol)
+                        return 0
 
-                pcm = getattr(chunk, "pcm", b"")
-                rate = int(getattr(chunk, "sample_rate", TTS_SAMPLE_RATE) or TTS_SAMPLE_RATE)
-                if not pcm:
-                    continue
-                if sent == 0:
-                    await self._send_json(
-                        {"type": "tts_start", "sample_rate": TTS_SAMPLE_RATE}
+                    pcm = getattr(chunk, "pcm", b"")
+                    rate = int(getattr(chunk, "sample_rate", TTS_SAMPLE_RATE) or TTS_SAMPLE_RATE)
+                    if not pcm:
+                        continue
+                    if sent == 0:
+                        await self._send_json(
+                            {"type": "tts_start", "sample_rate": TTS_SAMPLE_RATE}
+                        )
+                    if rate != TTS_SAMPLE_RATE:
+                        pcm = resample_pcm16(pcm, rate, TTS_SAMPLE_RATE)
+                    pcm = apply_output_gain_pcm16(
+                        pcm,
+                        vol,
+                        sample_rate=TTS_SAMPLE_RATE,
+                        limiter=self._out_limiter,
                     )
-                if rate != TTS_SAMPLE_RATE:
-                    pcm = resample_pcm16(pcm, rate, TTS_SAMPLE_RATE)
-                pcm = apply_output_gain_pcm16(
-                    pcm,
-                    vol,
-                    sample_rate=TTS_SAMPLE_RATE,
-                    limiter=self._out_limiter,
-                )
-                await self._send_binary(pcm)
-                sent += 1
+                    await self._send_binary(pcm)
+                    sent += 1
 
             if sent == 0:
                 log.warning(

@@ -281,3 +281,21 @@ async def test_browser_voice_fallback_ack_is_scoped_to_current_id():
         {"type": "tts_browser_done", "id": messages[0]["id"], "outcome": "ended"}
     )
     assert await task == 0
+
+
+def test_split_for_tts_keeps_first_piece_short_and_loses_no_text():
+    from dodaios.browser_voice.session import split_for_tts
+
+    text = (
+        "Un frigorifero sposta il calore dall'interno verso l'esterno. "
+        "Un liquido refrigerante evapora dentro lo scomparto freddo e assorbe calore. "
+        "Il compressore comprime il gas, che si scalda. "
+        "Nel condensatore sul retro il gas cede calore e torna liquido. "
+        "Un termostato accende e spegne il compressore."
+    )
+    pieces = split_for_tts(text)
+    assert len(pieces) > 1
+    assert " ".join(pieces) == text
+    assert all(len(piece) <= 400 for piece in pieces)
+    assert split_for_tts("Ciao.") == ["Ciao."]
+    assert " ".join(split_for_tts("parola " * 200)) == ("parola " * 200).strip()
