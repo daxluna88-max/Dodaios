@@ -1,4 +1,4 @@
-sha=57df36a70b9b876886d9a087fc6f819afb9e33d6 started=2026-10-30T11:58:01Z
+sha=c36b10d1552f98cdf1dff121ef583b212c2e1caf started=2026-10-30T12:05:01Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -17,16 +17,16 @@ sha=57df36a70b9b876886d9a087fc6f819afb9e33d6 started=2026-10-30T11:58:01Z
 = it-log-16.patch (already applied)
 = it-reply-17.patch (already applied)
 = it-retry-18.patch (already applied)
++ it-fallback-19.patch applied
 = env JARVIS__BRAIN__WORKER__PROVIDER (already set)
 = env JARVIS__BRAIN__WORKER__MODEL (already set)
-Nothing to apply; server not restarted (use --restart to force).
++ env JARVIS_OPENROUTER_FALLBACK_MODELS set
+RESTARTED: jarvis running
 update_exit=0
-FAIL     CHK-TIME: real_rome_time=12:59 status=done secs=64 tool_errors=0 reply='Non riesco a raggiungere il fornitore, probabilmente per un problema di rete o del servizio. Riprova tra un momento.'
-PASS     CHK-STOP: first=cancelled second=done second_len=39 resumed=False leaked_internal_text=False reply='Sono le 12:59, venerdì 30 ottobre 2026.'
-BLOCKED  CHK-WIKI-HONEST: a memory tool really stored something: 'Already known — identity.about already had that value. No change.'
+PASS     CHK-TIME: real_rome_time=13:05 status=done secs=12 tool_errors=0 reply='Sono le 13:05, venerdì 30 ottobre 2026.'
+FAIL     CHK-STOP: first=cancelled second=done second_len=49 resumed=False leaked_internal_text=False reply='Sono le tredici e cinque, venerdì trenta ottobre.'
+PASS     CHK-WIKI-HONEST: tools=[] denies=True false_claim=False reply="Non ho salvato nulla: in quella frase non c'era niente di abbastanza rilevante da ricordare."
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
-SUMMARY: 2 PASS, 1 FAIL, 1 BLOCKED
-SERVER-LOG: Brain openrouter(qwen/qwen3.8-flash) fehlgeschlagen: Provider returned error | detail={'code': 429, 'message': 'Provider returned error', 'metadata': {'error_type': 'rate_limit_exceeded'}}
-SERVER-LOG: Alle 1 Provider-Versuche fehlgeschlagen. Letzter Fehler: Provider returned error
+SUMMARY: 3 PASS, 1 FAIL, 0 BLOCKED
 check_exit=1
-finished=2026-10-30T12:00:29Z
+finished=2026-10-30T12:06:03Z
