@@ -28,6 +28,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import re
 import time
 from collections.abc import (
@@ -2344,6 +2345,21 @@ def _current_time_label(now: Any) -> str:
         f"{now.strftime('%Y-%m-%d %H:%M')} {now.tzname() or 'local time'} "
         f"(UTC{offset[:3]}:{offset[3:5]})]"
     )
+
+
+def _configured_direct_tools(config: Any) -> int:
+    """How many tools a request may show directly, or 0 for no limit.
+
+    ``JARVIS_MAX_DIRECT_TOOLS`` wins over ``[brain] max_direct_tools``; anything
+    that is not a positive integer means "no limit".
+    """
+    raw = os.environ.get("JARVIS_MAX_DIRECT_TOOLS")
+    if raw is None or not raw.strip():
+        raw = getattr(getattr(config, "brain", None), "max_direct_tools", 0)
+    try:
+        return max(int(raw), 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _personal_context_allowed(config: Any) -> bool:
@@ -6278,7 +6294,8 @@ class BrainManager:
         except (TypeError, ValueError):
             # A malformed tool limit means 'unknown'; no trimming then.
             max_tools = 0
-        if window <= 0 and max_tools <= 0 and direct_tools is None:
+        configured = _configured_direct_tools(getattr(self, "_config", None))
+        if window <= 0 and max_tools <= 0 and direct_tools is None and configured <= 0:
             return tools, nothing
         keep: set[str] = {name for name in own_tools if name in tools}
         mandated = getattr(self, "_evidence_required_tool", None)
@@ -6296,6 +6313,8 @@ class BrainManager:
         limits = [max(max_tools - 1, 1)] if max_tools > 0 else []
         if 0 < window <= _SMALL_WINDOW_TOKENS:
             limits.append(_SMALL_MODEL_DIRECT_TOOLS + len(keep))
+        if configured > 0:
+            limits.append(configured + len(keep))
         max_direct = min(limits) if limits else 0
         only = None if direct_tools is None else {*direct_tools, *ROLE_BASE}
         plan = plan_surface(

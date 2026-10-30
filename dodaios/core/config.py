@@ -1618,6 +1618,12 @@ class BrainConfig(BaseModel):
     # dated plans — so none of them leave the machine inside a request to a model
     # provider. Turn text, history and tool results are not affected. Default True keeps today's behaviour.
     personal_context_to_cloud: bool = True
+    # Tools shown to the model on every request, besides the ones a turn mandates
+    # (``[brain] max_direct_tools``; env ``JARVIS_MAX_DIRECT_TOOLS`` wins). 0 shows
+    # all of them. The rest stays callable behind ``find_tools``. A hosted model
+    # with a large window was handed every declaration: ~90k characters (~22k
+    # tokens) of tool schemas for a one-word message.
+    max_direct_tools: int = Field(default=0, ge=0)
     # For deep/code intents an API-key provider can be preferred.
     deep_brain: str | None = None
     routing_provider: str = "claude-api"

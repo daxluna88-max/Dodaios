@@ -453,3 +453,66 @@ def test_a_count_cap_of_one_still_caps() -> None:
         tools, _One(1_048_576), system_prompt="", history=None
     )
     assert len(deferred) == 4
+
+
+# ── The configured limit for hosted models ───────────────────────────────
+
+
+def _many(n: int = 91) -> dict[str, Any]:
+    return {f"t{i}": _tool(f"t{i}", size=10) for i in range(n)}
+
+
+def _mgr_limit(limit: int) -> BrainManager:
+    from types import SimpleNamespace
+
+    m = _mgr()
+    m._config = SimpleNamespace(brain=SimpleNamespace(max_direct_tools=limit))
+    return m
+
+
+def test_the_limit_is_off_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("JARVIS_MAX_DIRECT_TOOLS", raising=False)
+    tools = _many()
+    surface, deferred = _mgr_limit(0)._shortlist_tools(
+        tools, _Brain(1_048_576), system_prompt="x", history=None
+    )
+    assert surface is tools and deferred == frozenset()
+
+
+def test_a_configured_limit_shows_that_many_and_defers_the_rest(monkeypatch) -> None:
+    monkeypatch.delenv("JARVIS_MAX_DIRECT_TOOLS", raising=False)
+    tools = _many()
+    surface, deferred = _mgr_limit(20)._shortlist_tools(
+        tools, _Brain(1_048_576), system_prompt="x", history=None
+    )
+    shown = _shown(surface, deferred)
+    assert len(shown) == 20 + 1  # plus find_tools
+    assert FIND_TOOLS_NAME in shown
+    assert len(deferred) == 91 - 20
+    assert set(tools) <= set(surface)  # nothing became uncallable
+
+
+def test_the_mandated_tool_is_shown_on_top_of_the_limit(monkeypatch) -> None:
+    monkeypatch.delenv("JARVIS_MAX_DIRECT_TOOLS", raising=False)
+    tools = _many()
+    m = _mgr_limit(5)
+    m._evidence_required_tool = "t90"
+    surface, deferred = m._shortlist_tools(
+        tools, _Brain(1_048_576), system_prompt="x", history=None
+    )
+    shown = _shown(surface, deferred)
+    assert "t90" in shown and len(shown) == 5 + 1 + 1
+
+
+def test_the_environment_wins_and_junk_means_no_limit(monkeypatch) -> None:
+    tools = _many()
+    monkeypatch.setenv("JARVIS_MAX_DIRECT_TOOLS", "7")
+    surface, deferred = _mgr_limit(30)._shortlist_tools(
+        tools, _Brain(1_048_576), system_prompt="x", history=None
+    )
+    assert len(_shown(surface, deferred)) == 7 + 1
+    monkeypatch.setenv("JARVIS_MAX_DIRECT_TOOLS", "many")
+    surface, deferred = _mgr_limit(0)._shortlist_tools(
+        tools, _Brain(1_048_576), system_prompt="x", history=None
+    )
+    assert surface is tools and deferred == frozenset()
