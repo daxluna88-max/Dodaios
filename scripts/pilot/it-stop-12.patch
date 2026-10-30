@@ -1,5 +1,5 @@
 diff --git a/dodaios/agent_chat/runner_brain.py b/dodaios/agent_chat/runner_brain.py
-index 218710c55..2ea03292c 100644
+index b35df2b..8d72cbd 100644
 --- a/dodaios/agent_chat/runner_brain.py
 +++ b/dodaios/agent_chat/runner_brain.py
 @@ -73,6 +73,12 @@ MAX_TURNS: Final[int] = 40
@@ -15,10 +15,10 @@ index 218710c55..2ea03292c 100644
  _EFFORTS: Final[frozenset[str]] = frozenset(get_args(ReasoningEffort))
  
  
-@@ -98,7 +104,13 @@ def brain_history_from_events(
-     validation. Capped to the last ``_HISTORY_MAX`` messages.
-     """
-     out: list[BrainMessage] = []
+@@ -115,7 +121,13 @@ def brain_history_from_events(
+         calls.clear()
+         by_id.clear()
+ 
 -    for message in messages_from_events(events, max_events=None if max_messages is None else 600):
 +    marked: list[dict[str, Any]] = []
 +    for ev in events:
