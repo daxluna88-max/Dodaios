@@ -1,0 +1,93 @@
+diff --git a/dodaios/agent_chat/destructive_guard.py b/dodaios/agent_chat/destructive_guard.py
+new file mode 100644
+index 000000000..6f913b813
+--- /dev/null
++++ b/dodaios/agent_chat/destructive_guard.py
+@@ -0,0 +1,66 @@
++"""Calls that must always show the approval card, even in a "bypass" chat.
++
++The Jarvis chat runs with the "bypass" stance by default, so ``RunCommand`` ran with no card:
++one wrong "cancella tutto" could become ``rm -rf`` or a script that wipes the chats, the profile
++or the notebook. :func:`needs_confirmation` is the ``ChatGrant.force_ask`` hook: it answers True
++for a shell command that deletes or overwrites, for any command that writes to the app's own data,
++and for a file write aimed at it. A plain read is never asked about.
++
++A regex cannot see everything a script does; it is a safety net for the obvious and the
++irreversible, not a sandbox.
++"""
++
++from __future__ import annotations
++
++import re
++from typing import Any, Final
++
++#: Shell tools whose ``command`` argument is inspected.
++SHELL_TOOLS: Final[frozenset[str]] = frozenset({"RunCommand", "run_shell", "run-shell", "Bash"})
++#: File tools whose ``file_path`` argument is inspected.
++WRITE_TOOLS: Final[frozenset[str]] = frozenset({"Write", "Edit"})
++
++#: Verbs that delete, overwrite, stop or rewrite history. Matched anywhere in the command.
++_DESTRUCTIVE: Final[re.Pattern[str]] = re.compile(
++    r"(?<![\w-])(?:rm|rmdir|unlink|shred|truncate|mkfs\w*|dd|wipefs|killall|pkill|shutdown|reboot|halt)(?![\w-])"
++    r"|find\b[^|;&]*\s-delete\b"
++    r"|git\s+(?:clean|reset\s+--hard|checkout\s+--\s|restore\b|push\s+(?:-f|--force))"
++    r"|(?:drop|delete\s+from|truncate)\s+(?:table|database|schema|\w+)"
++    r"|\bsqlite3\b[^|;&]*\b(?:delete|drop|update)\b"
++    r"|rmtree|os\.(?:remove|unlink|rmdir)|\.unlink\(|shutil\.move|\bsystemctl\s+(?:stop|disable|mask)\b"
++    r"|\bchmod\s+-R\b|\bchown\s+-R\b",
++    re.IGNORECASE,
++)
++
++#: Where the app keeps what the person owns.
++_APP_DATA: Final[re.Pattern[str]] = re.compile(
++    r"\.dodaios|agent_chat|flight_recorder|USER\.md|MEMORY\.md|jarvis\.toml|dodaios\.env|"
++    r"/data/(?:wiki|vault|memory)|\.env\b",
++    re.IGNORECASE,
++)
++#: A command that writes, as opposed to reads.
++_WRITES: Final[re.Pattern[str]] = re.compile(
++    r"(?<![<\d])>{1,2}(?!&)|(?<![\w-])(?:mv|tee|sed\s+-i|perl\s+-i|cp|ln|python3?|node|sqlite3)(?![\w-])",
++    re.IGNORECASE,
++)
++
++
++def needs_confirmation(tool_name: str, args: dict[str, Any] | None) -> bool:
++    """True when this call must be confirmed by the person, whatever the stance."""
++    name = tool_name or ""
++    if name.startswith("mcp__"):
++        name = name.split("__", 2)[-1]
++    data = args or {}
++    if name in SHELL_TOOLS:
++        command = str(data.get("command") or data.get("cmd") or "")
++        if not command.strip():
++            return False
++        if _DESTRUCTIVE.search(command):
++            return True
++        return bool(_APP_DATA.search(command) and _WRITES.search(command))
++    if name in WRITE_TOOLS:
++        return bool(_APP_DATA.search(str(data.get("file_path") or data.get("path") or "")))
++    return False
++
++
++__all__ = ["SHELL_TOOLS", "WRITE_TOOLS", "needs_confirmation"]
+diff --git a/dodaios/agent_chat/runner_brain.py b/dodaios/agent_chat/runner_brain.py
+index 1fea451c6..3bd0a786a 100644
+--- a/dodaios/agent_chat/runner_brain.py
++++ b/dodaios/agent_chat/runner_brain.py
+@@ -544,6 +544,7 @@ async def run_brain_turn(
+     _note_skill_trigger(brain, text)
+ 
+     if bridge is not None:
++        from dodaios.agent_chat.destructive_guard import needs_confirmation
+         from dodaios.society.surface import requires_explicit_approval
+ 
+         bridge.arm(
+@@ -559,7 +560,7 @@ async def run_brain_turn(
+                     lambda name, args: requires_explicit_approval(session.session_id, name, args)
+                 )
+                 if session.surface == "society"
+-                else lambda _name, _args: False,
++                else needs_confirmation,
+             ),
+         )
+ 
