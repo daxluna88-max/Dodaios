@@ -4,7 +4,7 @@
 # already applied, verifies and applies the rest, then restarts the server.
 set -euo pipefail
 BRANCH="${JARVIS_PILOT_BRANCH:-claude/it-complete}"
-BASE="https://raw.githubusercontent.com/daxluna88-max/Dodaios/${BRANCH}/scripts/pilot"
+BASE="${JARVIS_PILOT_BASE:-https://raw.githubusercontent.com/daxluna88-max/Dodaios/${BRANCH}/scripts/pilot}"
 TREE="$HOME/.dodaios"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
@@ -46,7 +46,8 @@ if [ "$applied" -gt 0 ] || [ "${1:-}" = "--restart" ]; then
   sleep 2
   cd "$HOME"
   set -a; . "$HOME/.dodaios.env"; set +a
-  nohup jarvis serve > "$HOME/jarvis-serve.log" 2>&1 &
+  # Detached from the caller: a CI runner reaps its job's children at the end.
+  RUNNER_TRACKING_ID= setsid nohup jarvis serve > "$HOME/jarvis-serve.log" 2>&1 < /dev/null &
   sleep 6
   if pgrep -x jarvis >/dev/null; then echo "RESTARTED: jarvis running"; else echo "FAIL: jarvis not running"; tail -20 "$HOME/jarvis-serve.log"; exit 1; fi
 else
