@@ -260,6 +260,7 @@ class BrowserVoiceSession:
         self._tts_task: asyncio.Task[None] | None = None
         self._reply_state: _ReplyState | None = None
         self._audio_seconds_total = 0.0
+        self._last_stt_confidence: float | None = None
         self._barge_task: asyncio.Task[None] | None = None
         self._turn_task: asyncio.Task[None] | None = None
         self._browser_tts_done: asyncio.Event | None = None
@@ -392,6 +393,15 @@ class BrowserVoiceSession:
                 # reset any "thinking" affordance (AD-OE6: never a silent drop).
                 await self._send_json({"type": "vad_silence"})
                 return
+            confidence = self._last_stt_confidence
+            log.warning(
+                "browser_voice[%s] heard %.1f s, confidence %s, speaking=%s: %r",
+                self.session_id,
+                len(utterance_pcm16) / 2 / STT_SAMPLE_RATE,
+                f"{confidence:.2f}" if isinstance(confidence, (int, float)) else "n/a",
+                self._speaking,
+                text,
+            )
             if _is_silence_hallucination(text):
                 log.warning(
                     "browser_voice[%s] ignored a transcript that looks invented from silence: %r",
@@ -498,6 +508,7 @@ class BrowserVoiceSession:
 
     async def _transcribe(self, pcm16: bytes) -> str:
         result = await self._stt.transcribe_pcm(pcm16, sample_rate=STT_SAMPLE_RATE)
+        self._last_stt_confidence = getattr(result, "confidence", None)
         return getattr(result, "text", "") or ""
 
     async def _reply_pieces(self, user_text: str, state: _ReplyState) -> AsyncIterator[object]:
