@@ -2388,11 +2388,23 @@ def _personal_context_allowed(config: Any) -> bool:
 
     ``[brain] personal_context_to_cloud = false`` keeps the profile, learned
     notebook, people, contacts, identity card, core memory, the per-turn wiki
-    snippets and the dated plans out of every request. It does not look at the provider: a fallback may hand the same
-    prompt to a cloud model, so the switch is applied before the chain starts.
+    snippets and the dated plans out of every request, and withdraws the tools
+    that read that data back (``_PERSONAL_READ_TOOLS``). It does not look at the
+    provider: a fallback may hand the same prompt to a cloud model, so the
+    switch is applied before the chain starts. What the person already typed in
+    the chat history, and what an earlier turn already sent, stays as it is.
     """
     brain = getattr(config, "brain", None)
     return bool(getattr(brain, "personal_context_to_cloud", True))
+
+
+#: Tools whose RESULT is the person's own stored data (profile summary, wiki
+#: pages, contacts). With ``personal_context_to_cloud`` off they are withdrawn
+#: for the turn: leaving the prompt blocks out is pointless if a tool call can
+#: read the same data back into the request.
+_PERSONAL_READ_TOOLS: frozenset[str] = frozenset(
+    {"whoami", "wiki-list", "wiki-page-read", "wiki-recall", "contact-lookup"}
+)
 
 
 class BrainManager:
@@ -3399,6 +3411,8 @@ class BrainManager:
         the only others that are (``TurnOverride.tools_direct``).
         """
         tools = tools_override if tools_override is not None else self._tools
+        if not _personal_context_allowed(getattr(self, "_config", None)):
+            tools = {name: tool for name, tool in tools.items() if name not in _PERSONAL_READ_TOOLS}
         system_prompt = self._build_system_prompt()
         history = _TURN_HISTORY_OVERRIDE.get()
         if history is None:
