@@ -37,7 +37,7 @@ import {
   type PatchSessionInput,
   type ProviderHealth,
 } from "@/lib/agentChatApi";
-import { EMPTY_TIMELINE, reduceEvent, reduceEvents, settleApproval, type Timeline } from "@/components/agentchat/reduce";
+import { EMPTY_TIMELINE, reduceEvent, reduceEvents, runningTurn, settleApproval, type Timeline } from "@/components/agentchat/reduce";
 import { jitteredDelay, requestConnect } from "../lib/connectBudget";
 import { reuseHistoryRows } from "@/lib/historyRequests";
 
@@ -518,7 +518,20 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
           // A snapshot after a reconnect only carries events past `after`;
           // fold them onto what is already there, else start fresh.
           const base = afterSeq > 0 && prev.activeSessionId === sessionId ? prev.timeline : EMPTY_TIMELINE;
-          const tl = reduceEvents(base, frame.events ?? []);
+          let tl = reduceEvents(base, frame.events ?? []);
+          // The session is the authority on whether a turn is live: if it says
+          // idle while the timeline still shows one running (its terminal event
+          // was lost or replayed out of order), settle it so the composer never
+          // sticks on "working".
+          const stuck = frame.session.running === false ? runningTurn(tl) : null;
+          if (stuck) {
+            tl = reduceEvent(tl, {
+              seq: 0,
+              ts_ms: Date.now(),
+              kind: "turn_finished",
+              payload: { turn_id: stuck.id, status: "done" },
+            });
+          }
           set({
             activeSession: frame.session,
             timeline: { ...tl, sessionPatch: null },

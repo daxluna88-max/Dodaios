@@ -113,3 +113,24 @@ describe("online bursts are coalesced", () => {
     expect(sockets.length - before).toBe(1);
   });
 });
+
+describe("a turn the session reports idle is closed", () => {
+  it("settles a running turn when the snapshot says running=false", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => reply({ sessions: [] })));
+    const store = makeStore();
+    store.getState().openSession("a");
+    sockets[0].open();
+    const started = { seq: 1, ts_ms: 1, kind: "turn_started", payload: { turn_id: "t1", provider: "p", model: "m" } };
+    sockets[0].send({ type: "snapshot", session: { ...row("a"), running: true }, events: [started] });
+    const items = () => store.getState().timeline.items.filter((i) => i.type === "turn");
+    expect(items().map((i) => (i as { status: string }).status)).toEqual(["running"]);
+    // The resync after a lock screen reconnects from seq 1 and the terminal
+    // event never arrives; only the session's own flag says the turn is over.
+    window.dispatchEvent(new Event("online"));
+    const again = sockets[sockets.length - 1];
+    expect(again.url).toContain("after=1");
+    again.open();
+    again.send({ type: "snapshot", session: { ...row("a"), running: false }, events: [] });
+    expect(items().map((i) => (i as { status: string }).status)).toEqual(["done"]);
+  });
+});
