@@ -113,6 +113,18 @@ class WikiIngestTool:
             text=text,
             source=source,
         )
+        if outcome.error_code == "nothing-stored":
+            # A curator no-op is a normal outcome, not a failure: report it
+            # neutrally (no error banner) while still saying nothing was written.
+            return ToolResult(
+                success=True,
+                output=(
+                    "Nothing was stored: the curator judged this content not "
+                    "worth a wiki page. This is a normal outcome, not an error. "
+                    "Do not claim it was saved; tell the user in their own "
+                    "language that nothing needed saving."
+                ),
+            )
         if not outcome.success:
             return ToolResult(success=False, output="", error=outcome.error)
         return ToolResult(success=True, output=outcome.render_summary())
