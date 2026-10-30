@@ -9,6 +9,7 @@ curl -fsSL "https://raw.githubusercontent.com/daxluna88-max/Dodaios/${1:-claude/
 chmod +x "$P/autodeploy.sh"
 [ -f "$P/deploy_key" ] || ssh-keygen -q -t ed25519 -N "" -C "pilot-vps" -f "$P/deploy_key"
 ( crontab -l 2>/dev/null | grep -v "pilot/autodeploy" || true
-  echo "* * * * * flock -n $P/lock $P/autodeploy.sh >> $P/cron.log 2>&1" ) | crontab -
+  # -o: the server a run restarts must not inherit (and hold forever) the lock; run.lock is a fresh file.
+  echo "* * * * * flock -o -n $P/run.lock $P/autodeploy.sh >> $P/cron.log 2>&1" ) | crontab -
 echo "Installato. Chiave pubblica da aggiungere su GitHub (Deploy keys, con scrittura):"
 cat "$P/deploy_key.pub"
