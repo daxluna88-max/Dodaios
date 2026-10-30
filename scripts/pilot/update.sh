@@ -32,6 +32,15 @@ for ((i=last+1; i<${#names[@]}; i++)); do
   git apply "$TMP/${names[$i]}"; echo "+ ${names[$i]} applied"; applied=$((applied+1))
 done
 
+# Pilot env defaults: written once, never overwritten if already present.
+ENVF="$HOME/.dodaios.env"
+ensure_env() {
+  if grep -q "^$1=" "$ENVF" 2>/dev/null; then echo "= env $1 (already set)"; else
+    echo "$1=$2" >> "$ENVF"; echo "+ env $1 set"; applied=$((applied+1)); fi
+}
+ensure_env JARVIS__BRAIN__WORKER__PROVIDER openrouter
+ensure_env JARVIS__BRAIN__WORKER__MODEL qwen/qwen3.8-flash
+
 if [ "$applied" -gt 0 ] || [ "${1:-}" = "--restart" ]; then
   pkill -x jarvis || true
   sleep 2
