@@ -79,6 +79,7 @@ class CartesiaTTS:
         voice_id_en: str | None = None,
         voice_id_es: str | None = None,
         voice_id_pt: str | None = None,
+        voice_id_it: str | None = None,
         language: str = "auto",
         chunk_by_sentence: bool = True,
         speed: float = 1.0,
@@ -99,6 +100,10 @@ class CartesiaTTS:
             "es": voice_id_es or DEFAULT_VOICE_ID_ES,
             "pt": voice_id_pt or DEFAULT_VOICE_ID_PT,
         }
+        # Italian has no built-in default: only a configured voice enables it, otherwise
+        # Italian falls back to the doctrine default locale as before.
+        if voice_id_it:
+            self._voice_by_lang["it"] = voice_id_it
         self._language = language
         # Voice used when neither a per-call language_code nor the text sniff
         # resolves a language. A configured concrete language pins it; else the

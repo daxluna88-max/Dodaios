@@ -369,3 +369,15 @@ def test_list_voices_with_language_filter(patched_secret) -> None:
     )
     assert tts.list_voices(language="de-DE") == ["DE-V"]
     assert tts.list_voices(language="es") == ["ES-V"]
+
+
+def test_italian_uses_the_configured_voice_and_not_the_english_default():
+    from dodaios.plugins.tts.cartesia_tts import DEFAULT_VOICE_ID_EN, CartesiaTTS
+
+    italian = "13ebc17e-5090-41eb-959b-dcdef7f6d6de"
+    with_it = CartesiaTTS(voice_id=DEFAULT_VOICE_ID_EN, voice_id_it=italian, language="it-IT")
+    assert with_it._resolve_voice("Ciao, come stai?", None, "it-IT") == italian
+    # English turns keep the English voice, Italian without a configured voice is unchanged.
+    assert with_it._resolve_voice("Hello there", None, "en-US") == DEFAULT_VOICE_ID_EN
+    without_it = CartesiaTTS(voice_id=DEFAULT_VOICE_ID_EN, language="it-IT")
+    assert without_it._resolve_voice("Ciao", None, "it-IT") == DEFAULT_VOICE_ID_EN
