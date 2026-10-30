@@ -296,7 +296,8 @@ def test_split_for_tts_keeps_first_piece_short_and_loses_no_text():
     pieces = split_for_tts(text)
     assert len(pieces) > 1
     assert " ".join(pieces) == text
-    assert all(len(piece) <= 400 for piece in pieces)
+    assert all(len(piece) <= 450 for piece in pieces)
+    assert len(pieces[0]) < len(pieces[1])  # short first piece, longer next ones
     assert split_for_tts("Ciao.") == ["Ciao."]
     assert " ".join(split_for_tts("parola " * 200)) == ("parola " * 200).strip()
 

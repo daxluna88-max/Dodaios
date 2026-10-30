@@ -66,29 +66,32 @@ _BROWSER_TTS_ACK_TIMEOUT_S = 120.0
 
 
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
-_TTS_MIN_CHARS = 80
-_TTS_MAX_CHARS = 400
+_TTS_MIN_CHARS = 80  # first piece: short, so the voice starts early
+_TTS_NEXT_MIN_CHARS = 240  # later pieces: longer, so the intonation resets less often
+_TTS_MAX_CHARS = 450
 _MAX_LEAD_S = 6.0
 
 
 def split_for_tts(text: str) -> list[str]:
-    """Split a reply into short pieces so the first audio starts after one sentence.
+    """Split a reply into pieces so the first audio starts after one sentence.
 
     One long request made the cloud TTS model synthesize the whole reply before
     answering (about 14 s on five sentences, with distorted or skipped speech
-    on the phone). Sentences are grouped to at least ``_TTS_MIN_CHARS`` and never
-    exceed ``_TTS_MAX_CHARS`` unless a single word is longer.
+    on the phone). Every join restarts the model's intonation, so only the first
+    piece is short (``_TTS_MIN_CHARS``); later ones are grouped to at least
+    ``_TTS_NEXT_MIN_CHARS`` and never exceed ``_TTS_MAX_CHARS`` unless a single
+    word is longer. Later pieces are synthesized while earlier ones play.
     """
     pieces: list[str] = []
     current = ""
     for sentence in _SENTENCE_END.split(text.strip()):
         for part in _wrap(sentence):
             current = f"{current} {part}".strip()
-            if len(current) >= _TTS_MIN_CHARS:
+            if len(current) >= (_TTS_MIN_CHARS if not pieces else _TTS_NEXT_MIN_CHARS):
                 pieces.append(current)
                 current = ""
     if current:
-        if pieces and len(current) < _TTS_MIN_CHARS // 2 and len(pieces[-1]) + len(current) < _TTS_MAX_CHARS:
+        if pieces and len(current) < _TTS_NEXT_MIN_CHARS // 2 and len(pieces[-1]) + len(current) < _TTS_MAX_CHARS:
             pieces[-1] = f"{pieces[-1]} {current}"
         else:
             pieces.append(current)
