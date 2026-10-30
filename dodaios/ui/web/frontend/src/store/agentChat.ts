@@ -361,6 +361,10 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
   // still exists. Starting a new chat by hand always wins over the restore.
   const ACTIVE_KEY = `jarvis.agentChat.active.${surface}.v1` + (draftNamespace ? `:${draftNamespace}` : "");
   let restoreArmed = surface === "jarvis";
+  // Bumped by every deliberate act (new chat, open, send, draft edit,
+  // disconnect): a session list that was already in flight when one happened
+  // must not restore the stored chat over it.
+  let interactionEpoch = 0;
   const rememberActive = (sessionId: string | null) => {
     if (surface !== "jarvis") return;
     try {
@@ -414,6 +418,7 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
   // missed, so a reply that finished while the screen was locked appears
   // without a reload. The listeners live only as long as the socket.
   const AWAY_RESYNC_MS = 10_000;
+  const FORCED_RESYNC_GAP_MS = 2_000;
   let wakeDispose: (() => void) | null = null;
   let reconnectFrom: ((sessionId: string, afterSeq: number) => void) | null = null;
 
@@ -425,12 +430,21 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
   function attachWake(): void {
     if (wakeDispose || typeof document === "undefined" || typeof window === "undefined") return;
     let hiddenAt = 0;
+    let lastForcedAt = 0;
     const resync = (forced: boolean) => {
       const st = chatStore.getState();
       const sid = st.activeSessionId;
       if (!sid || !reconnectFrom) return;
       const alive = socket !== null && socket.readyState === WebSocket.OPEN;
-      if (forced || !alive) reconnectFrom(sid, st.timeline.lastSeq);
+      if (forced || !alive) {
+        // A flapping network fires `online` in bursts; one socket in flight
+        // (or just opened by a forced resync) already covers the rest.
+        const now = Date.now();
+        if (socket !== null && socket.readyState === WebSocket.CONNECTING) return;
+        if (forced && now - lastForcedAt < FORCED_RESYNC_GAP_MS) return;
+        if (forced) lastForcedAt = now;
+        reconnectFrom(sid, st.timeline.lastSeq);
+      }
     };
     const onVisibility = () => {
       if (document.visibilityState === "hidden") {
@@ -496,6 +510,10 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
           return;
         }
         if (frame.type === "snapshot" && frame.session) {
+          // Only the open chat's own snapshot may replace its state: a frame
+          // for another session or surface must not overwrite it.
+          if (frame.session.session_id !== sessionId || get().activeSessionId !== sessionId) return;
+          if (frame.session.surface !== undefined && frame.session.surface !== surface) return;
           const prev = get();
           // A snapshot after a reconnect only carries events past `after`;
           // fold them onto what is already there, else start fresh.
@@ -666,6 +684,7 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
 
       loadSessions: async () => {
         try {
+          const epoch = interactionEpoch;
           const rows = await fetchAgentChatSessions(SESSION_LIST_LIMIT, surface);
           // The backend filters by surface; a row that names another surface
           // anyway is dropped here too. A row with no surface at all comes
@@ -676,7 +695,7 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
             const shared = reuseHistoryRows(state.sessions, sessions, (row) => row.session_id);
             return shared === state.sessions ? state : { sessions: shared };
           });
-          if (restoreArmed) {
+          if (restoreArmed && epoch === interactionEpoch) {
             restoreArmed = false;
             const wanted = storedActive();
             if (wanted && get().activeSessionId === null && sessions.some((row) => row.session_id === wanted)) {
@@ -723,6 +742,7 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
       providerById: (id) => get().providerOptions().find((p) => p.id === id) ?? null,
 
       setDraft: async (patch) => {
+        interactionEpoch += 1;
         const st = get();
         const changesSelection = patch.provider !== undefined || patch.model !== undefined || patch.effort !== undefined;
         if (changesSelection) ++selectionRevision;
@@ -816,6 +836,7 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
       },
 
       newChat: (opts) => {
+        interactionEpoch += 1;
         closeSocket();
         newChatLane = emptySendLane();
         restoreArmed = false;
@@ -847,6 +868,7 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
           rememberTimeline(prev.activeSessionId, prev.timeline);
         }
         restoreArmed = false;
+        interactionEpoch += 1;
         rememberActive(sessionId);
         set({
           activeSessionId: sessionId,
@@ -875,6 +897,7 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
       },
 
       send: async (text, attachments = [], toolChoices = [], onSessionCreated) => {
+        interactionEpoch += 1;
         const content = text.trim();
         // A message may be files alone — dropping a screenshot and pressing
         // Enter is a complete gesture — but never nothing at all.
@@ -1009,6 +1032,7 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
       },
 
       disconnect: () => {
+        interactionEpoch += 1;
         closeSocket();
         set({ socketState: "idle" });
       },
