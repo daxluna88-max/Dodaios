@@ -489,3 +489,22 @@ async def test_jarvis_own_voice_picked_up_by_the_mic_does_not_interrupt_it():
     await asyncio.sleep(0.2)
     assert not sink.json_of("tts_cancel")
     assert brain.prompts == ["Raccontami cosa puoi fare"]
+
+
+async def test_a_phantom_grazie_does_not_interrupt_the_story():
+    sink = _Sink()
+    brain = FakeBrain("Una risposta lunga che continua a parlare per un bel po' di tempo.")
+    session = _make_session(
+        sink,
+        stt=FakeSTT(["Raccontami cosa puoi fare", "Grazie."]),
+        brain=brain,
+        tts=_SlowTTS(chunks=40, delay=0.02),
+    )
+    await _drive_until_speaking(session)
+    for _ in range(8):
+        await session.handle_audio_frame(_pcm16_frame(15000))
+    for _ in range(10):
+        await session.handle_audio_frame(_pcm16_frame(0))
+    await asyncio.sleep(0.2)
+    assert not sink.json_of("tts_cancel")
+    assert brain.prompts == ["Raccontami cosa puoi fare"]
