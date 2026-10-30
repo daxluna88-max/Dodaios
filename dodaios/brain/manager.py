@@ -10366,6 +10366,72 @@ class BrainManager:
             needs_tools=bool(getattr(self, "_turn_needs_tools", False)),
         )
 
+    def engine_trace(self) -> dict[str, Any]:
+        """Which engines a turn would use, per level — names only, no secrets.
+
+        Read-only answer to "who answers, and who takes over": the active
+        provider, the resolved fallback chain for each level, the configured
+        tiers (router / worker / deep) and why a subscription-CLI brain such as
+        Codex is, or is not, on the generic chain. Building a chain touches the
+        per-turn router-lead marker, so it is saved and restored.
+        """
+        saved_lead = getattr(self, "_router_lead_key", None)
+
+        def _pair(entry: tuple[str, str | None]) -> dict[str, str | None]:
+            return {"provider": entry[0], "model": entry[1]}
+
+        def _tier(tier: Any) -> dict[str, str | None] | None:
+            if tier is None:
+                return None
+            return {
+                "provider": getattr(tier, "provider", None),
+                "model": getattr(tier, "model", None),
+                "fallback_provider": getattr(tier, "fallback_provider", None),
+                "fallback_model": getattr(tier, "fallback_model", None),
+            }
+
+        chains: dict[str, list[dict[str, str | None]]] = {}
+        try:
+            for level in ("fast", "deep", "code"):
+                try:
+                    chains[level] = [_pair(e) for e in self._build_fallback_chain(level)]
+                except Exception:  # noqa: BLE001 — a diagnostic never breaks the app
+                    chains[level] = []
+        finally:
+            self._router_lead_key = saved_lead
+        brain_cfg = self._config.brain
+        available = set(self._registry.available())
+        active = self._active_name
+        codex_tools = self._brain_can_call_tools("codex", None) if "codex" in available else None
+        on_chain = any(e["provider"] == "codex" for c in chains.values() for e in c)
+        if "codex" not in available:
+            codex_reason = "codex is not available (not installed or not signed in)"
+        elif on_chain:
+            codex_reason = "codex is on the chain"
+        elif codex_tools is False:
+            codex_reason = (
+                "codex cannot emit tool calls over the subscription login, and it is not "
+                "in the generic cross-provider order; it answers only when it is the active "
+                "brain or is named in [brain] fallbacks"
+            )
+        else:
+            codex_reason = "codex is not in the generic cross-provider order"
+        return {
+            "active": active,
+            "active_can_call_tools": self._active_can_call_tools(),
+            "primary": getattr(brain_cfg, "primary", None),
+            "deep_brain": getattr(brain_cfg, "deep_brain", None),
+            "router": _tier(getattr(brain_cfg, "router", None)),
+            "worker": _tier(getattr(brain_cfg, "worker", None)),
+            "configured_fallbacks": [
+                {"provider": n, "model": m} for n, m in self._configured_fallbacks
+            ],
+            "available": sorted(available),
+            "dead_providers": sorted(self._dead_providers),
+            "chains": chains,
+            "codex": {"available": "codex" in available, "on_chain": on_chain, "reason": codex_reason},
+        }
+
     def _keep_off_voice_key(
         self,
         chain: list[tuple[str, str | None]],

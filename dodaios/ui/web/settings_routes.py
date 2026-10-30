@@ -554,6 +554,15 @@ def _personal_context_allowed_now(request: Request) -> bool:
     return bool(getattr(getattr(cfg, "brain", None), "personal_context_to_cloud", True))
 
 
+@router.get("/engines")
+def get_engines(request: Request) -> dict[str, object]:
+    """Resolved engines per level, names only (no keys, no prompts)."""
+    brain = getattr(request.app.state, "brain", None)
+    if brain is None or not hasattr(brain, "engine_trace"):
+        raise HTTPException(status_code=503, detail="Brain manager not available")
+    return brain.engine_trace()
+
+
 @router.get("/personal-context")
 def get_personal_context(request: Request) -> dict[str, object]:
     return {"allowed": _personal_context_allowed_now(request)}
