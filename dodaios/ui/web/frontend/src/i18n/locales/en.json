@@ -3203,7 +3203,7 @@
     "languages_group_title": "Languages",
     "privacy_group_title": "Privacy",
     "personal_context_title": "Send my profile and memory to cloud models",
-    "personal_context_description": "On: your profile, memory, people and contacts are included in what is sent to the model provider. Off: they stay on this machine and the assistant knows less about you. Your messages and what you ask it to read are still sent. Applies from the next message.",
+    "personal_context_description": "On: your profile, memory, people and contacts are included in what is sent to the model provider. Off: this data is not added to requests and the assistant knows less about you. Still sent: your messages, the history of this chat, what you ask it to read and the results of tools; what was already sent cannot be taken back. Applies from the next message.",
     "personal_context_error": "Could not save the setting. Try again.",
     "sections": {
       "voice": "Voice"

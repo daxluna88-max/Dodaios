@@ -3203,7 +3203,7 @@
     "languages_group_title": "Lingue",
     "privacy_group_title": "Privacy",
     "personal_context_title": "Invia il mio profilo e la memoria ai modelli cloud",
-    "personal_context_description": "Attivo: profilo, memoria, persone e contatti sono inclusi in ciò che viene inviato al fornitore del modello. Disattivo: restano su questo computer e l'assistente sa meno di te. I tuoi messaggi e ciò che gli chiedi di leggere vengono comunque inviati. Vale dal messaggio successivo.",
+    "personal_context_description": "Attivo: profilo, memoria, persone e contatti sono inclusi in ciò che viene inviato al fornitore del modello. Disattivo: questi dati non vengono aggiunti alle richieste e l'assistente sa meno di te. Vengono comunque inviati i tuoi messaggi, la cronologia di questa chat, ciò che gli chiedi di leggere e i risultati degli strumenti; ciò che è già stato inviato non si può richiamare. Vale dal messaggio successivo.",
     "personal_context_error": "Impossibile salvare l'impostazione. Riprova.",
     "sections": {
       "voice": "Voce"

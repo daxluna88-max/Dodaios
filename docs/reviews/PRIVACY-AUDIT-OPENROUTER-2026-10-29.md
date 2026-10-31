@@ -58,3 +58,22 @@ Device evidence (Dax, iPhone, `docs/COLLAUDO-REGISTRO-2026-10-30.md`): with the 
 Acceptance: the offline test passes in both directions and the list in 4 is complete. Nothing is closed without it; a device run does not replace it.
 
 No secret in this file.
+
+## Addendum 2026-10-31 — IP-9 offline (Claude; GPT review requested)
+
+Test: `tests/unit/brain/test_personal_context_request_capture.py`. A fake provider records the exact `BrainRequest` of a real `BrainManager.generate()` turn (real dispatcher, an executor present so tools are offered; the test fails if no tool reaches the provider, so the tool assertions cannot be vacuous). Sentinels: profile, learned notebook, contacts, per-turn wiki text, external turn memory (ADR-0045).
+
+- Switch OFF: no sentinel anywhere in the serialized request; none of `whoami`, `wiki-list`, `wiki-page-read`, `wiki-recall`, `contact-lookup` in the tool list; `search_web` still offered.
+- Switch ON: all five sentinels and the five tools present.
+- Result: 2 tests pass; with the 8 existing gate tests, 10 pass. Ran offline, no network, no cost.
+
+Paths that still carry personal text with the switch OFF:
+1. The chat history of the current chat (what the person typed, earlier replies, tool results already in that history). NOT gated.
+2. The result of any other tool (file read, `RunCommand`, web search). NOT gated, by design.
+3. The realtime voice path builds its prompt with `_learned_block()` in `dodaios/realtime/session.py` without reading the switch. NOT FIXED. The pilot does not use realtime (paid, excluded by Dax).
+4. NOT EXAMINED: the learning/curator review loop (sends conversation excerpts to a model), worker and replay paths. The test covers `generate()` only.
+5. Data already sent to a provider cannot be recalled or deleted.
+
+Settings wording (`settings_view.personal_context_description`) said "they stay on this machine": too broad because of 1-2. Corrected in `it.json` and `en.json`; de/es/pt/zh still carry the old text (no native review, not touched). The bundle `dist` is NOT rebuilt, so the new wording is NOT live.
+
+P9 (consent at the first cloud send) stays an open decision of Dax. "Dimentica" scope: profile and notebook only; history, flight recorder, wiki and backups keep the text (the forget reply says so).
