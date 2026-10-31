@@ -46,3 +46,30 @@ Facts come from git (`git rev-list`, `git merge-tree`), not from CI. Checks mark
 ## Rollback
 
 Each step is a merge commit on its own branch: undo with `git revert -m 1 <merge>` on that branch, or drop the branch. Never rewrite `it-complete` history.
+
+## Update 2026-10-31 (Claude; read-only measurements, nothing merged)
+
+Measured with `git rev-list --left-right --count` and `git merge-tree --write-tree` against `origin/claude/it-complete` (`0f1b6e48e` and later).
+
+| Branch | Behind it-complete | Ahead | Dry-run merge | Files changed on BOTH sides since the merge-base |
+|---|---|---|---|---|
+| `claude/engine-selection` (#6) | 168 | 18 | clean | not listed (subset of the stack) |
+| `claude/p4-product-ports` (stack) | 168 | 72 | clean | 12: `brain/manager.py`, `core/config.py`, `core/config_writer.py`, `App.tsx`, `SetupWizard.tsx`, five locale JSON files, `SettingsView.tsx`, `settingsSearch.ts` |
+| `claude/p2-final-answer-ui` (#12) | 168 | 36 | clean | 9: `core/config.py`, `core/config_writer.py`, five locale JSON files, `SettingsView.tsx`, `settingsSearch.ts` |
+| `claude/mobile-panel` (#4) | 180 | 3 | clean | 1: `ui/web/surface_security.py` |
+
+"Clean" is textual only. Nothing was built or tested after a merge. The overlap list is where a clean merge can still be logically wrong, so review those files by hand at each step.
+
+### Privacy finding that gates integration (standing priority, see the privacy audit)
+
+The privacy switch `[brain] personal_context_to_cloud` and the withdrawn personal-read tools exist ONLY on `it-complete` (`it-privacy-25`). `git grep` finds neither the switch nor `_personal_context_allowed` anywhere on `claude/p4-product-ports`. The stack adds multi-engine fan-out (`ui/web/consumer_fanout_routes.py`, brain manager changes): several providers receive one question. NOT examined: what context a fan-out reviewer or the synthesizer receives, and whether it reads the switch.
+
+Required before the stack moves `it-complete`, in addition to the gate above:
+1. Re-run `tests/unit/brain/test_personal_context_request_capture.py` on the merged branch (expected to keep passing: the single-engine path).
+2. Add the same request-capture test for EVERY fan-out call (each reviewer and the synthesizer): with the switch off no personal sentinel; with it on, only what the design intends. The stack's own privacy tests (locality, `local_only`) do not replace this.
+3. Dax's explicit authorization for any path that sends personal context to more than one provider. Not given.
+4. Keep `JARVIS_OPENROUTER_DATA_COLLECTION=deny` working for fan-out calls (the rule lives in `plugins/brain/openrouter.py`; check no new provider client bypasses it).
+
+### Recommended first step (not executed)
+
+Create a throw-away branch `claude/integration-1` from `it-complete`, merge only step 1 (#6 -> #8 -> #9 -> #10), run the gate plus items 1-2 above, record the result, and stop. Moving `it-complete` still needs Dax's "unisci". Costs: none. The VPS is untouched until a patch or a branch move happens.
