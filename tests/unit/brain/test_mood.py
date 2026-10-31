@@ -181,11 +181,14 @@ def test_reading_and_acting_after_expiry_does_not_fade_faster():
 
 def test_a_faded_state_read_twice_is_the_same():
     r = reducer()
-    r.apply(m.OwnerMood("calm", 3, ttl_s=10), now=0.0)
-    now = 10.0 + m.DECAY_S + 1
-    assert r.state(now) == r.state(now)
-    r.apply(m.Activity("gaming"), now=now)
-    assert r.state(now).intensity == 1
+    r.apply(m.OwnerMood("calm", 3, ttl_s=60), now=0.0)
+    now = 60.0 + m.DECAY_S + 1  # one full drop after the owner mood expired
+    faded = r.state(now)
+    assert faded == r.state(now)
+    assert faded.intensity == 1
+    # Applying any real event persists the fade; it must not change the level the person sees.
+    r.apply(m.Activity(next(iter(m.ACTIVITY_MOODS))), now=now)
+    assert r.state(now) == faded
 
 
 def test_a_newly_pinned_mood_replaces_an_active_session_mood():
