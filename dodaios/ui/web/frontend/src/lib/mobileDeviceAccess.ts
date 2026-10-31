@@ -40,19 +40,13 @@ export function browserDeviceAdapter(doc: Document = document): JarvisDeviceAdap
         const done = (files: File[] | null) => {
           if (settled) return;
           settled = true;
-          window.removeEventListener("focus", onFocus);
           picker.remove();
           resolve(files?.length ? { files, source: input } : null);
         };
-        // Browsers can dismiss their picker without firing change.
-        const onFocus = () => window.setTimeout(() => {
-          if (!settled && !picker.files?.length) done(null);
-        }, 500);
         picker.addEventListener("change", () => done(Array.from(picker.files ?? [])), { once: true });
         picker.addEventListener("cancel", () => done(null), { once: true });
         doc.body.appendChild(picker);
-        window.addEventListener("focus", onFocus);
-        picker.click();
+        try { picker.click(); } catch { done(null); }
       });
     },
     async location() {
