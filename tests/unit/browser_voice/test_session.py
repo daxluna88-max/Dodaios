@@ -614,3 +614,16 @@ def test_one_long_chunk_is_sliced_and_paced(monkeypatch):
     asyncio.run(sess._speak("Una frase."))
     assert len(frames) == 12 and set(frames) == {mod._SLICE_BYTES}  # twelve 1 s frames, not one burst
     assert sleeps and max(sleeps) > 0  # past the lead, the server waited
+
+
+def test_end_of_turn_silence_defaults_to_1400_ms_and_is_clamped(monkeypatch):
+    from dodaios.browser_voice.session import _end_of_turn_silence_ms
+
+    monkeypatch.delenv("JARVIS_BROWSER_VOICE_SILENCE_MS", raising=False)
+    assert _end_of_turn_silence_ms() == 1400
+    monkeypatch.setenv("JARVIS_BROWSER_VOICE_SILENCE_MS", "2000")
+    assert _end_of_turn_silence_ms() == 2000
+    monkeypatch.setenv("JARVIS_BROWSER_VOICE_SILENCE_MS", "50")
+    assert _end_of_turn_silence_ms() == 300
+    monkeypatch.setenv("JARVIS_BROWSER_VOICE_SILENCE_MS", "abc")
+    assert _end_of_turn_silence_ms() == 1400
