@@ -1,0 +1,119 @@
+diff --git a/dodaios/browser_voice/session.py b/dodaios/browser_voice/session.py
+index 4d981a335..abb326da9 100644
+--- a/dodaios/browser_voice/session.py
++++ b/dodaios/browser_voice/session.py
+@@ -77,6 +77,7 @@ _TTS_MIN_CHARS = 80  # first piece: short, so the voice starts early
+ _TTS_NEXT_MIN_CHARS = 240  # later pieces: longer, so the intonation resets less often
+ _TTS_MAX_CHARS = 450
+ _MAX_LEAD_S = 6.0
++_PLAYBACK_TAIL_S = 1.0  # margin for device latency and room reverb after the last sample
+ _SLICE_BYTES = TTS_SAMPLE_RATE * 2  # 1 s of 16-bit mono PCM, always sample-aligned
+ 
+ 
+@@ -284,6 +285,9 @@ class BrowserVoiceSession:
+         # instead of restarting its gain ramp at every frame boundary.
+         self._out_limiter: Any | None = None
+         self._speaking = False
++        # When the audio already sent should finish playing in the browser (monotonic seconds). The server
++        # stops "speaking" up to _MAX_LEAD_S before the phone does; the microphone still hears that tail.
++        self._playback_until = 0.0
+         self._processing = False
+         self._tts_task: asyncio.Task[None] | None = None
+         self._reply_state: _ReplyState | None = None
+@@ -329,13 +333,17 @@ class BrowserVoiceSession:
+                 self._run_turn(utterance), name=f"bv-turn-{self.session_id}"
+             )
+             self._turn_task.add_done_callback(self._on_turn_done)
+-        elif utterance is not None and self._speaking and (
++        elif utterance is not None and self._playing() and (
+             self._barge_task is None or self._barge_task.done()
+         ):
+             self._barge_task = asyncio.create_task(
+                 self._maybe_barge_in(utterance), name=f"bv-barge-{self.session_id}"
+             )
+ 
++    def _playing(self) -> bool:
++        """Jarvis is audible: still sending audio, or the browser is still playing what was sent."""
++        return self._speaking or time.monotonic() < self._playback_until
++
+     async def handle_control(self, msg: dict[str, Any]) -> None:
+         """Process a JSON control frame from the browser."""
+         kind = str(msg.get("type", ""))
+@@ -423,11 +431,12 @@ class BrowserVoiceSession:
+                 return
+             confidence = self._last_stt_confidence
+             log.warning(
+-                "browser_voice[%s] heard %.1f s, confidence %s, speaking=%s: %r",
++                "browser_voice[%s] heard %.1f s, confidence %s, speaking=%s playing=%s: %r",
+                 self.session_id,
+                 len(utterance_pcm16) / 2 / STT_SAMPLE_RATE,
+                 f"{confidence:.2f}" if isinstance(confidence, (int, float)) else "n/a",
+                 self._speaking,
++                self._playing(),
+                 text,
+             )
+             if _is_silence_hallucination(text):
+@@ -438,6 +447,19 @@ class BrowserVoiceSession:
+                 )
+                 await self._send_json({"type": "vad_silence"})
+                 return
++            if self._playing():
++                # The server may be done sending while the phone still plays the tail; the microphone
++                # hears it. Words that are Jarvis's own, or a bare invented phrase, are not a new turn.
++                previous = self._reply_state
++                heard_back = " ".join(previous.spoken) if previous is not None else ""
++                if _is_echo(text, heard_back) or _is_phantom(text):
++                    log.warning(
++                        "browser_voice[%s] ignored during playback (echo/phantom): %r", self.session_id, text
++                    )
++                    await self._send_json({"type": "vad_silence"})
++                    return
++                # A real new turn while the old tail still plays: flush it so the two never overlap.
++                await self._barge_in()
+             log.info("browser_voice[%s] user: %s", self.session_id, text)
+             await self._send_json({"type": "transcript", "text": text, "is_final": True})
+             user_text = text
+@@ -470,8 +492,9 @@ class BrowserVoiceSession:
+             full_reply = "".join(state.chunks)
+             spoken = " ".join(state.spoken)
+             log.warning(
+-                "browser_voice[%s] turn summary: %d pieces, %d chars spoken, %.1f s of audio sent, reply %d chars, cut=%s",
++                "browser_voice[%s] turn summary %s: %d pieces, %d chars spoken, %.1f s of audio sent, reply %d chars, cut=%s",
+                 self.session_id,
++                (turn_id or "")[:8],
+                 len(state.spoken),
+                 len(spoken),
+                 self._audio_seconds_total,
+@@ -696,6 +719,7 @@ class BrowserVoiceSession:
+                         self._out_limiter.reset()
+                         sent = 0
+                         clock_start, audio_seconds = None, 0.0
++                        self._playback_until = 0.0
+                     continue
+                 assert isinstance(piece, str)
+                 spoken_pieces.append(piece)
+@@ -754,6 +778,7 @@ class BrowserVoiceSession:
+                         if lead > _MAX_LEAD_S:
+                             await asyncio.sleep(lead - _MAX_LEAD_S)
+                         audio_seconds += len(part) / 2 / TTS_SAMPLE_RATE
++                        self._playback_until = clock_start + audio_seconds + _PLAYBACK_TAIL_S
+                         self._audio_seconds_total += len(part) / 2 / TTS_SAMPLE_RATE
+                         await self._send_binary(part)
+                         sent += 1
+@@ -816,7 +841,7 @@ class BrowserVoiceSession:
+             return
+         state = self._reply_state
+         spoken = " ".join(state.spoken) if state is not None else ""
+-        if not text or not self._speaking or self._ended:
++        if not text or not self._playing() or self._ended:
+             return
+         if _is_echo(text, spoken) or _is_phantom(text):
+             log.warning("browser_voice[%s] barge-in ignored (echo/phantom): %r", self.session_id, text)
+@@ -850,6 +875,7 @@ class BrowserVoiceSession:
+             # that follows, or it would open quiet and audibly swell.
+             self._out_limiter.reset()
+         self._speaking = False
++        self._playback_until = 0.0
+         try:
+             await self._send_json({"type": "tts_cancel"})
+         except Exception:  # noqa: BLE001, S110 — best-effort on a closing socket
