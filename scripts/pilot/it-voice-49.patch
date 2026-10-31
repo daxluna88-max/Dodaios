@@ -1,0 +1,31 @@
+diff --git a/dodaios/browser_voice/session.py b/dodaios/browser_voice/session.py
+index d15f0637a..4d981a335 100644
+--- a/dodaios/browser_voice/session.py
++++ b/dodaios/browser_voice/session.py
+@@ -99,6 +99,15 @@ def _browser_engine() -> bool:
+     return os.environ.get("JARVIS_BROWSER_VOICE_ENGINE", "").strip().lower() == "browser"
+ 
+ 
++def _end_of_turn_silence_ms() -> int:
++    """Trailing quiet that closes a turn. 700 ms (the telephony default) split one spoken question into
++    three turns when the speaker paused to think; ``JARVIS_BROWSER_VOICE_SILENCE_MS`` overrides 1400."""
++    try:
++        return max(300, min(5000, int(os.environ.get("JARVIS_BROWSER_VOICE_SILENCE_MS", "1400"))))
++    except ValueError:
++        return 1400
++
++
+ _WORD = re.compile(r"\w+", re.UNICODE)
+ 
+ 
+@@ -255,7 +264,9 @@ class BrowserVoiceSession:
+         self._bus = bus
+ 
+         self._in_resampler = Resampler(self.browser_sample_rate, STT_SAMPLE_RATE)
+-        self._endpointer = EnergyEndpointer(sample_rate=STT_SAMPLE_RATE)
++        self._endpointer = EnergyEndpointer(
++            sample_rate=STT_SAMPLE_RATE, silence_ms=_end_of_turn_silence_ms()
++        )
+ 
+         self._started_at = time.time()
+         self._turns = 0
