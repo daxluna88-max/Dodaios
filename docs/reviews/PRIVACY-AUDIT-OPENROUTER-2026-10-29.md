@@ -77,3 +77,8 @@ Paths that still carry personal text with the switch OFF:
 Settings wording (`settings_view.personal_context_description`) said "they stay on this machine": too broad because of 1-2. Corrected in `it.json` and `en.json`; de/es/pt/zh still carry the old text (no native review, not touched). The bundle `dist` is NOT rebuilt, so the new wording is NOT live.
 
 P9 (consent at the first cloud send) stays an open decision of Dax. "Dimentica" scope: profile and notebook only; history, flight recorder, wiki and backups keep the text (the forget reply says so).
+
+### Decisions of 2026-10-31
+
+- **"Dimentica" scope: decided by Claude on Dax's delegation ("decidi tu cosa è meglio"), not reviewed by GPT yet.** A forget request removes the item from the profile and the learned notebook and the reply must name what remains (chat history, flight recorder, wiki, backups, and anything already sent to a provider). It does NOT silently delete wiki pages, chat history or backups: archive is not deletion, there is no per-note approval, and a wrong forget would destroy useful data. A wider erase must be a separate, explicit command or screen with its own confirmation (NOT built).
+- **P9 consent at the first cloud send: still open.** Dax does not remember the options. Plain-language summary given to Dax: A) one notice and a setting, B) ask the provider not to keep the data, C) send only the memory a question needs, D) local-only mode. Claude's recommendation: A now (cheap, honest), C and D later with the PMI product.
