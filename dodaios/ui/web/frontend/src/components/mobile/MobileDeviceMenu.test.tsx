@@ -35,9 +35,10 @@ describe("MobileDeviceMenu", () => {
     const adapter = fake(false);
     render(<MobileDeviceMenu adapter={adapter} onMedia={vi.fn()} onLocation={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "Accessori telefono" }));
-    fireEvent.click(screen.getByRole("button", { name: "Microfono" }));
+    fireEvent.click(screen.getByRole("button", { name: "Posizione" }));
     expect(screen.getByRole("alert").textContent).toContain("non disponibile");
-    expect(adapter.microphone).not.toHaveBeenCalled();
+    expect(adapter.location).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Microfono" })).toBeNull();
   });
   it("delivers chosen files without automatically uploading", async () => {
     const adapter = fake();
