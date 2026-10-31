@@ -26,7 +26,7 @@ export function MobileDeviceMenu({
     { id: "video" as const, text: "Registra video", Icon: Video },
     { id: "files" as const, text: "File e galleria", Icon: FileUp },
     { id: "location" as const, text: "Posizione", Icon: MapPin },
-    { id: "microphone" as const, text: "Microfono", Icon: Mic },
+    ...(onMicrophone ? [{ id: "microphone" as const, text: "Microfono", Icon: Mic }] : []),
   ];
   async function activate(id: (typeof tasks)[number]["id"]) {
     if (busy) return;
