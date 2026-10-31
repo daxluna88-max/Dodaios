@@ -29,6 +29,20 @@ BASE_URL = "https://openrouter.ai/api/v1"
 
 log = logging.getLogger(__name__)
 
+
+def _data_policy() -> dict[str, Any] | None:
+    """OpenRouter provider routing for privacy (``JARVIS_OPENROUTER_DATA_COLLECTION=deny``).
+
+    ``deny`` asks the gateway to route only to upstream providers that do not store prompts or train
+    on them. Off by default (no behaviour change). When on, a model with no such provider fails
+    with an explicit routing error instead of silently sending the data to one that keeps it.
+    """
+    value = os.environ.get("JARVIS_OPENROUTER_DATA_COLLECTION", "").strip().lower()
+    if value == "deny":
+        return {"provider": {"data_collection": "deny"}}
+    return None
+
+
 #: Seconds to wait before each retry of a provider-side 429.
 _RATE_LIMIT_WAITS: tuple[float, ...] = (2.0, 5.0, 10.0)
 
@@ -141,6 +155,9 @@ class OpenRouterBrain:
             # the event loop (BUG-189; see claude_api.py for the measurement).
             client = await asyncio.to_thread(self._ensure_client)
         extra_body: dict[str, Any] | None = None
+        policy = _data_policy()
+        if policy is not None:
+            extra_body = dict(policy)
         if getattr(req, "reasoning_effort", None) == "none":
             # OpenRouter's unified ``reasoning`` parameter: ask the gateway to
             # disable internal reasoning for this call. Gatewayed
@@ -149,7 +166,7 @@ class OpenRouterBrain:
             # latency the caller opted out of with ``reasoning_effort="none"``.
             # The gateway normalizes the field per model; models without a
             # reasoning knob are unaffected.
-            extra_body = {"reasoning": {"enabled": False}}
+            extra_body = {**(extra_body or {}), "reasoning": {"enabled": False}}
         fallbacks = _fallback_models(self._model)
         if fallbacks:
             # OpenRouter's own model fallback: the gateway tries the next model
@@ -177,8 +194,10 @@ class OpenRouterBrain:
             # upstream just refused — under its other name (live 2026-07-26:
             # two identical 400s per delegated voice turn against
             # google/gemini-3.5-flash, whose endpoint requires reasoning).
+            # The privacy routing rule must survive this retry: dropping it here would send the
+            # prompt to a provider the person asked not to use.
             async for delta in stream_complete(
-                client, self._model, replace(req, reasoning_effort=None)
+                client, self._model, replace(req, reasoning_effort=None), extra_body=policy
             ):
                 yield delta
             return
