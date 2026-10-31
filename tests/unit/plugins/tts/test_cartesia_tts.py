@@ -396,3 +396,19 @@ async def test_transient_failure_is_retried_once(tts: CartesiaTTS) -> None:
 
         assert mock_client.post.await_count == 2
         assert b"".join(c.pcm for c in chunks) == fake_pcm
+
+
+@pytest.mark.asyncio
+async def test_truncated_audio_is_retried(tts: CartesiaTTS) -> None:
+    """A long piece that comes back far too short (200 OK) is requested again once."""
+    text = "Parola " * 40  # 280 chars, ~21 s of speech
+    cut = b"\x00\x01" * 24_000  # 1 s
+    full = b"\x00\x01" * (24_000 * 20)  # 20 s
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(side_effect=[_Resp(200, content=cut), _Resp(200, content=full)])
+    tts._client = mock_client
+
+    chunks = [c async for c in tts.synthesize(text, language_code="it-IT")]
+
+    assert mock_client.post.await_count == 2
+    assert b"".join(c.pcm for c in chunks) == full
