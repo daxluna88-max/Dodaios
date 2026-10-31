@@ -24,3 +24,7 @@ Start with the question text and few-shot examples, then calibration (`--calibra
 
 ## Needs Dax before any step
 Authorization to download a model (free, 2.6 GB) for a CPU speed test on the Claude sandbox; or only `lscpu` and `free -h` from the VPS. Nothing downloaded so far.
+
+## Decisions of Dax, 2026-10-31 (evening)
+- Sending the same question to several providers (multi-engine fan-out): **stays OFF** ("Sì spento").
+- Rizzo Flow: **later, when everything else works** ("Rizzo quando tutto funziona"). No download, no install until then.
