@@ -557,6 +557,16 @@ def test_repeated_invented_sentences_are_still_invented():
     assert not _is_silence_hallucination("Ciao")
 
 
+def test_hesitation_sounds_are_neither_a_turn_nor_an_interruption():
+    from dodaios.browser_voice.session import _is_phantom, _is_silence_hallucination
+
+    for sound in ("Mmm.", "Ehm...", "Hmm", "Uhm. Mmm."):
+        assert _is_silence_hallucination(sound)
+    assert _is_phantom("Mmm") and _is_phantom("ehm")
+    assert not _is_silence_hallucination("Mmm, e adesso dimmi l'ora")
+    assert not _is_silence_hallucination("Ok")
+
+
 async def test_the_chat_turn_is_closed_while_the_voice_is_still_speaking():
     sink = _Sink()
     ref: list = []
