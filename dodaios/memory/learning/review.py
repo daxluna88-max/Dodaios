@@ -415,6 +415,12 @@ class ModelReviewer:
 
         config = self._live_config()
         self.last_choice = None
+        if not bool(getattr(getattr(config, "brain", None), "personal_context_to_cloud", True)):
+            # The privacy switch is off: the prompt carries the person's words and
+            # the notebooks, and the seat may be a cloud model. Nothing is sent;
+            # the loop treats this like an unanswered review.
+            log.info("learning review: skipped, personal data to the cloud is switched off")
+            return None
         try:
             choices = await asyncio.to_thread(seat_choices, config)
         except SeatUnavailable as exc:
