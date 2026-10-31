@@ -566,3 +566,41 @@ async def test_the_chat_turn_is_closed_while_the_voice_is_still_speaking():
     await _drive_one_utterance(session)
     completed = [speaking for name, speaking in bus.events if name == "VoiceTurnCompleted"]
     assert completed == [True]  # filed in the chat during speech, once
+
+
+def test_one_long_chunk_is_sliced_and_paced(monkeypatch):
+    import asyncio
+
+    from dodaios.browser_voice import session as mod
+
+    class OneBigChunk:
+        sample_rate = mod.TTS_SAMPLE_RATE
+        pcm = b"\x01\x00" * (mod.TTS_SAMPLE_RATE * 12)  # 12 s in a single chunk, like a cloud piece
+
+    class FakeTts:
+        async def synthesize(self, text, language_code=None):
+            yield OneBigChunk()
+
+    sleeps: list[float] = []
+    frames: list[int] = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(mod.asyncio, "sleep", fake_sleep)
+    sess = mod.BrowserVoiceSession.__new__(mod.BrowserVoiceSession)
+    sess._tts, sess._config, sess._out_limiter = FakeTts(), None, None
+    sess.language_code, sess.session_id = "it-IT", "t"
+
+    async def noop(*_a, **_k):
+        return None
+
+    async def record(data):
+        frames.append(len(data))
+
+    sess._send_json = noop
+    sess._send_binary = record
+    sess._speaking = False
+    asyncio.run(sess._speak("Una frase."))
+    assert len(frames) == 12 and set(frames) == {mod._SLICE_BYTES}  # twelve 1 s frames, not one burst
+    assert sleeps and max(sleeps) > 0  # past the lead, the server waited
