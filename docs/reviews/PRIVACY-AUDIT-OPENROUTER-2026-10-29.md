@@ -82,3 +82,11 @@ P9 (consent at the first cloud send) stays an open decision of Dax. "Dimentica" 
 
 - **"Dimentica" scope: decided by Claude on Dax's delegation ("decidi tu cosa è meglio"), not reviewed by GPT yet.** A forget request removes the item from the profile and the learned notebook and the reply must name what remains (chat history, flight recorder, wiki, backups, and anything already sent to a provider). It does NOT silently delete wiki pages, chat history or backups: archive is not deletion, there is no per-note approval, and a wrong forget would destroy useful data. A wider erase must be a separate, explicit command or screen with its own confirmation (NOT built).
 - **P9 consent at the first cloud send: still open.** Dax does not remember the options. Plain-language summary given to Dax: A) one notice and a setting, B) ask the provider not to keep the data, C) send only the memory a question needs, D) local-only mode. Claude's recommendation: A now (cheap, honest), C and D later with the PMI product.
+
+### Decision of 2026-10-31 (evening): keep the switch ON, add provider-side protection (option B)
+
+Dax: the privacy switch is ON because memory does not work without it, and he wants the data preserved as much as possible. Claude's change (`it-privacy-51`, `JARVIS_OPENROUTER_DATA_COLLECTION=deny`, set on the pilot by `update.sh`): every OpenRouter call carries `provider.data_collection = "deny"`, so the gateway routes only to upstream providers that do not store prompts or train on them. The rule is kept on the retry after a `reasoning` error (unit test).
+
+NOT verified: (a) live, that DeepSeek V4.1 Flash and the two Qwen fallbacks have an upstream provider that satisfies the rule (if none does, the call fails with an OpenRouter routing error: it does NOT fall back to a provider that keeps data, by design); (b) that the gateway honours the field as documented (taken from OpenRouter's provider-routing documentation, not tested here); (c) that this protects against anything beyond what each provider promises. It reduces, it does not remove: the data still leaves this machine. Rollback: a new `switch_env` line with `allow`, or unset the variable.
+
+Next steps, not built: C (send only the memory a question needs, instead of the whole profile), D (local-only mode for the PMI product), and a visible "protection" line in Settings.

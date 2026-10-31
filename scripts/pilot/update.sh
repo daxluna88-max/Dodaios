@@ -57,6 +57,7 @@ ensure_env JARVIS__BRAIN__PROVIDERS__OPENROUTER__MODEL deepseek/deepseek-v4.1-fl
 # local microphone/wake-word stack, which a VPS does not have.
 # OpenRouter tries these when the main model errors or is rate limited (429 seen repeatedly on qwen3.8-flash).
 ensure_env JARVIS_OPENROUTER_FALLBACK_MODELS qwen/qwen3.7-flash,qwen/qwen3.6-flash
+ensure_env JARVIS_OPENROUTER_DATA_COLLECTION deny
 # Tailscale Serve (tailnet-only HTTPS) proxies with this Host header; without it Jarvis answers "Untrusted Host header".
 ensure_env JARVIS_TRUSTED_HOSTS srv2104916.tail11f095.ts.net
 # Speech recognition language: with "auto" Whisper hears silence/noise as English ("Thank you. Two months ago,") and the
