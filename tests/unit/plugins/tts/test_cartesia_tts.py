@@ -381,3 +381,18 @@ def test_italian_uses_the_configured_voice_and_not_the_english_default():
     assert with_it._resolve_voice("Hello there", None, "en-US") == DEFAULT_VOICE_ID_EN
     without_it = CartesiaTTS(voice_id=DEFAULT_VOICE_ID_EN, language="it-IT")
     assert without_it._resolve_voice("Ciao", None, "it-IT") == DEFAULT_VOICE_ID_EN
+
+
+@pytest.mark.asyncio
+async def test_transient_failure_is_retried_once(tts: CartesiaTTS) -> None:
+    """A 503 or empty body on the first attempt must not silently drop the piece."""
+    fake_pcm = b"\x00\x01" * 12_000
+    for first in (_Resp(503, text="busy"), _Resp(200, content=b"")):
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(side_effect=[first, _Resp(200, content=fake_pcm)])
+        tts._client = mock_client
+
+        chunks = [c async for c in tts.synthesize("Una frase.", language_code="it-IT")]
+
+        assert mock_client.post.await_count == 2
+        assert b"".join(c.pcm for c in chunks) == fake_pcm

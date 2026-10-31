@@ -334,29 +334,43 @@ class CartesiaTTS:
             payload["generation_config"] = {"speed": self._speed}
 
         assert self._client is not None
-        try:
-            resp = await self._client.post(CARTESIA_TTS_ENDPOINT, json=payload)
-        except Exception as exc:  # noqa: BLE001
-            log.warning(
-                "Cartesia HTTP error (%s) -- soft-fail.", exc.__class__.__name__
-            )
-            return b""
+        # One retry on a transient failure (transport error, 5xx/408, empty body): a piece that
+        # silently returns no audio is skipped mid-reply, which the listener hears as a jump.
+        for attempt in (1, 2):
+            retry = attempt == 1
+            try:
+                resp = await self._client.post(CARTESIA_TTS_ENDPOINT, json=payload)
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "Cartesia HTTP error (%s) -- attempt %d/2, %d chars.",
+                    exc.__class__.__name__, attempt, len(text),
+                )
+                if retry:
+                    continue
+                return b""
 
-        if resp.status_code in (401, 403, 429):
-            raise _CartesiaFatalError(f"HTTP {resp.status_code}")
-        if resp.status_code >= 400:
-            body = resp.text[:200] if resp.text else "<empty>"
-            log.warning(
-                "Cartesia HTTP %d -- voice=%s text=%r body=%s",
-                resp.status_code, voice_id, text[:80], body,
-            )
-            return b""
+            if resp.status_code in (401, 403, 429):
+                raise _CartesiaFatalError(f"HTTP {resp.status_code}")
+            if resp.status_code >= 400:
+                body = resp.text[:200] if resp.text else "<empty>"
+                log.warning(
+                    "Cartesia HTTP %d -- voice=%s text=%r body=%s attempt %d/2",
+                    resp.status_code, voice_id, text[:80], body, attempt,
+                )
+                if retry and (resp.status_code >= 500 or resp.status_code == 408):
+                    continue
+                return b""
 
-        data = resp.content
-        if not data:
-            log.warning("Cartesia 200 OK but empty body -- voice=%s", voice_id)
-            return b""
-        return data
+            data = resp.content
+            if not data:
+                log.warning(
+                    "Cartesia 200 OK but empty body -- voice=%s attempt %d/2", voice_id, attempt
+                )
+                if retry:
+                    continue
+                return b""
+            return data
+        return b""
 
     async def _fallback(
         self, text: str, language_code: str | None
