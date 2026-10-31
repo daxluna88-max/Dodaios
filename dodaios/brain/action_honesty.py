@@ -441,7 +441,14 @@ def replace_unbacked_action_claim(
 # after the wiki curator had refused the note, and once with no tool call at all.
 _MEMORY_TOOLS: frozenset[str] = frozenset({"wiki-ingest", "update_profile"})
 
-_MEMORY_REQUEST_IT_RE = re.compile(r"\b(?:ricorda(?:ti)?|memorizza|salva|segna|annota|tieni\s+a\s+mente)\b")
+# Live 2026-10-31: "Memoria come terminale uso iPhone" (a voice transcript of "memorizza") was answered "Notato: ..."
+# with no tool call, and the request pattern missed it. Also the clitic forms ("ricordalo") and "prendi nota".
+_MEMORY_REQUEST_IT_RE = re.compile(
+    r"\b(?:ricorda(?:ti)?|memorizza|salva|segna|annota|tieni\s+a\s+mente)\b|"
+    r"\b(?:ricordal|memorizzal|salval|segnal|annotal)[oaie]\b|"
+    r"\bprendi\s+nota\b|\btieni\s+presente\b|\bmetti(?:l[oaie])?\s+in\s+memoria\b|"
+    r"(?:^|[.!?]\s+)memoria\b"
+)
 _MEMORY_REQUEST_EN_RE = re.compile(r"\b(?:remember|save|note\s+that|keep\s+in\s+mind|make\s+a\s+note)\b")
 
 _MEMORY_CLAIM_RE = re.compile(
@@ -464,8 +471,9 @@ _MEMORY_DENIAL_RE = re.compile(
 )
 
 _MEMORY_NOT_SAVED_PHRASES: dict[str, str] = {
-    "it": "Non ho salvato nulla: in quella frase non c'era niente di abbastanza rilevante da ricordare.",
-    "en": "I did not save anything: there was nothing in that worth remembering.",
+    # True whether the curator refused the note or no save was attempted at all: no reason is claimed.
+    "it": "Non ho salvato nulla. Se vuoi che lo ricordi, ripetilo con «Ricorda che…».",
+    "en": "I did not save anything. If you want me to remember it, say it again starting with \u201cRemember that\u2026\u201d.",
 }
 
 

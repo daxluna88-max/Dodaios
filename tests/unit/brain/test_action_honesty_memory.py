@@ -60,3 +60,29 @@ def test_the_wider_claims_do_not_touch_a_real_save_or_a_plain_question():
     ask = "Ricorda che il mio colore di prova è verde acqua"
     assert memory_claim_language(ask, "Noted. Salvato.", [("update_profile", True, "updated")]) is None
     assert memory_claim_language("Qual è il mio colore di prova?", "Non lo so: lo ricorderò se me lo dici.", []) is None
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "Memoria come terminale uso iPhone",  # live 2026-10-31, voice transcript of "memorizza"
+        "Ricordalo: uso un iPhone",
+        "Memorizzalo per favore",
+        "Prendi nota che uso un iPhone",
+        "Tieni presente che uso un iPhone",
+        "Metti in memoria che uso un iPhone",
+        "Va bene. Memoria che uso un iPhone",
+    ],
+)
+def test_more_ways_to_order_a_save_are_recognised(request_text):
+    reply = "Notato: usi l'iPhone come terminale per parlare con me."
+    assert memory_claim_language(request_text, reply, []) == "it"
+
+
+def test_a_question_about_memory_is_not_an_order_to_save():
+    assert memory_claim_language("Quanta memoria libera hai?", "Notato, ho molta memoria libera.", []) is None
+
+
+def test_the_honest_phrase_claims_no_reason():
+    assert "rilevante" not in memory_not_saved_phrase("it")
+    assert "worth" not in memory_not_saved_phrase("en")
