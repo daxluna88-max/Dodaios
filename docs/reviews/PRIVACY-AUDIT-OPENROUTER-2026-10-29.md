@@ -94,3 +94,9 @@ Next steps, not built: C (send only the memory a question needs, instead of the 
 ### STANDING PRIORITY (Dax, 2026-10-31, "mantieni sempre presente questo perché è importante")
 
 Preserving and protecting the owner's personal data as much as possible is a permanent design priority of Jarvis, equal to correctness. The privacy switch is ON in the pilot because memory needs it; therefore every change that adds a path from personal data to a provider (prompts, tools, logs, background loops, new providers) must say so, be gated or minimised, and be covered by an offline request-capture test like `test_personal_context_request_capture.py`. Any new provider or any change that sends more data needs Dax's explicit authorization. Open work in this direction: option C (send only the memory a question needs), option D (local-only mode), the ungated realtime and learning-loop paths, a visible protection line in Settings.
+
+### P9 decision (Dax, 2026-10-31): option A "for now"
+
+Option A = one notice plus a setting. The setting is the existing switch `[brain] personal_context_to_cloud` (Settings -> General -> Privacy). The notice: the corrected wording of that switch (it, en; commit `74349c89e`) states what is sent and what is not, and a first-use notice must tell the person once that profile and memory go to the model provider while the switch is on. Provider-side protection (`it-privacy-51`) is already live.
+
+NOT built: the one-time first-send notice and a visible "protection" line; both are frontend work that needs the UI rebuilt on the VPS (`scripts/pilot/rebuild-ui.sh`, manual, dry run by default, real run NOT tested). "For now" means C (minimal memory per question) and D (local-only) stay on the list for later.
