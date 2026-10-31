@@ -7430,7 +7430,8 @@
       "plan_mode": "im Planmodus ist nur Lesen erlaubt",
       "cancelled": "es wurde abgebrochen",
       "timeout": "niemand hat es rechtzeitig freigegeben",
-      "no_approver": "es brauchte eine Freigabe und niemand war da, um sie zu geben"
+      "no_approver": "es brauchte eine Freigabe und niemand war da, um sie zu geben",
+      "declined": "du hast sie abgelehnt"
     },
     "family": {
       "wiki": "im Wiki gesucht",

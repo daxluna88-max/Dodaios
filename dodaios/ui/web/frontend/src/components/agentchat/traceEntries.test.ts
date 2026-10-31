@@ -142,6 +142,13 @@ describe("trace timeline", () => {
     ]);
   });
 
+  it("says in plain words that the person declined a call, not the protocol string", () => {
+    const calls = activity([
+      tool("p", { output: "Blocked: declined by the person", isError: true }),
+    ], { status: "done" }).calls;
+    expect(calls.map((c) => [c.status, c.reason])).toEqual([["blocked", "you declined it"]]);
+  });
+
   it("keeps a running call in its stretch and hands approvals, questions and replies to the live rows", () => {
     const line = buildTimeline([
       tool("done"),

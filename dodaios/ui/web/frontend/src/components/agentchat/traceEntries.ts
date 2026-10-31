@@ -195,6 +195,7 @@ function refusalReason(reason: string, t: Translate): string | null {
   if (/^blacklist\b/i.test(text) || /tool-declared-block/i.test(text)) return tr(t, "reason.rule");
   if (/^plan mode/i.test(text)) return tr(t, "reason.plan_mode");
   if (/^cancelled\b/i.test(text)) return tr(t, "reason.cancelled");
+  if (/declined by the person/i.test(text)) return tr(t, "reason.declined");
   if (/^timeout$/i.test(text) || /approval timed out/i.test(text)) return tr(t, "reason.timeout");
   if (/approval[_ ]unavailable|no approval channel/i.test(text)) return tr(t, "reason.no_approver");
   return null;

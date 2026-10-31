@@ -7430,7 +7430,8 @@
       "plan_mode": "la modalità pianificazione consente solo la lettura",
       "cancelled": "è stata annullata",
       "timeout": "nessuno l'ha approvata in tempo",
-      "no_approver": "richiedeva un'approvazione e non c'era nessuno a darla"
+      "no_approver": "richiedeva un'approvazione e non c'era nessuno a darla",
+      "declined": "l'hai rifiutata tu"
     },
     "family": {
       "wiki": "ha cercato nella wiki",

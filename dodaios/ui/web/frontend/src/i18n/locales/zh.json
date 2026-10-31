@@ -7430,7 +7430,8 @@
       "plan_mode": "计划模式只允许读取",
       "cancelled": "它被取消了",
       "timeout": "没有人及时批准",
-      "no_approver": "它需要审批，但当时没人能批准"
+      "no_approver": "它需要审批，但当时没人能批准",
+      "declined": "你拒绝了它"
     },
     "family": {
       "wiki": "搜索了知识库",

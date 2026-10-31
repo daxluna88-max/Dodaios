@@ -7430,7 +7430,8 @@
       "plan_mode": "el modo plan solo permite leer",
       "cancelled": "se canceló",
       "timeout": "nadie lo aprobó a tiempo",
-      "no_approver": "necesitaba una aprobación y no había nadie para darla"
+      "no_approver": "necesitaba una aprobación y no había nadie para darla",
+      "declined": "la rechazaste"
     },
     "family": {
       "wiki": "buscó en la wiki",
