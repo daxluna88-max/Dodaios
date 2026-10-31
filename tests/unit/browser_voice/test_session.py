@@ -627,3 +627,40 @@ def test_end_of_turn_silence_defaults_to_1400_ms_and_is_clamped(monkeypatch):
     assert _end_of_turn_silence_ms() == 300
     monkeypatch.setenv("JARVIS_BROWSER_VOICE_SILENCE_MS", "abc")
     assert _end_of_turn_silence_ms() == 1400
+
+
+async def test_the_tail_still_playing_in_the_browser_is_not_taken_as_a_new_turn():
+    import time
+
+    from dodaios.browser_voice.session import _ReplyState
+
+    previous = _ReplyState()
+    previous.spoken.append("Il microfono resta in attesa della parola di risveglio")
+
+    # Server finished sending (speaking is False) but the phone plays 5 more seconds: the echo is dropped.
+    sink = _Sink()
+    brain = FakeBrain("risposta")
+    session = _make_session(sink, stt=FakeSTT(["il microfono resta in attesa"]), brain=brain)
+    session._reply_state = previous
+    session._playback_until = time.monotonic() + 5
+    await _drive_one_utterance(session)
+    assert brain.prompts == []
+    assert sink.json_of("vad_silence")
+
+    # Same words once playback has ended are a normal turn.
+    sink = _Sink()
+    brain = FakeBrain("risposta")
+    session = _make_session(sink, stt=FakeSTT(["il microfono resta in attesa"]), brain=brain)
+    session._reply_state = previous
+    await _drive_one_utterance(session)
+    assert brain.prompts == ["il microfono resta in attesa"]
+
+    # A genuinely new request during the tail is answered, and the old audio is flushed first.
+    sink = _Sink()
+    brain = FakeBrain("risposta")
+    session = _make_session(sink, stt=FakeSTT(["che ora e adesso"]), brain=brain)
+    session._reply_state = previous
+    session._playback_until = time.monotonic() + 5
+    await _drive_one_utterance(session)
+    assert brain.prompts == ["che ora e adesso"]
+    assert sink.json_of("tts_cancel")
