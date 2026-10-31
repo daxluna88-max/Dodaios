@@ -36,6 +36,7 @@ import { ComposerTypeahead } from "@/components/agentchat/ComposerTypeahead";
 import { ChatAttachmentStrip } from "@/components/agentchat/ChatAttachmentStrip";
 import { DictationButton } from "@/components/agentchat/DictationButton";
 import { ComposerAddMenu } from "@/components/agentchat/ComposerAddMenu";
+import { MobileDeviceMenu } from "@/components/mobile/MobileDeviceMenu";
 import { ComposerChipField, type ComposerChipFieldHandle } from "@/components/agentchat/ComposerChipField";
 import {
   COMPOSER_CONTROL_CLASS,
@@ -735,6 +736,13 @@ export function AgentComposer({ autoFocus = false }: { autoFocus?: boolean }) {
               )
             }
             disabled={!connected || busy}
+          />
+          <MobileDeviceMenu
+            onMedia={(result) => files.attachFiles(result.files)}
+            onLocation={(fix) => {
+              const locationText = `Posizione condivisa: ${fix.latitude.toFixed(5)}, ${fix.longitude.toFixed(5)} (precisione circa ${Math.round(fix.accuracyMeters)} m)`;
+              setValue((previous) => [previous.trim(), locationText].filter(Boolean).join("\n"));
+            }}
           />
           {/* Who answers, how hard it thinks, what it may do — three labelled
               picks in one line, split by hairlines. Each opens its own menu:
