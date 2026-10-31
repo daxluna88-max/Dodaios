@@ -1,8 +1,15 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "@/App";
 import { useEventStore } from "@/store/events";
+
+/** The shell now hosts the control strip, which reads through react-query: mount it the way the app does. */
+function renderApp() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+}
 
 vi.mock("@/hooks/useWebSocket", () => ({ useWebSocket: () => undefined }));
 vi.mock("@/hooks/useBrainStatus", () => ({ useBrainStatus: () => undefined }));
@@ -80,7 +87,7 @@ afterEach(() => {
 
 describe("App shell around detached coding views", () => {
   it("keeps the main sidebar while Settings floats over the app", () => {
-    render(<App />);
+    renderApp();
     expect(screen.getByTestId("sidebar")).toBeTruthy();
 
     act(() => useEventStore.setState({ activeSection: "profile" }));
@@ -89,7 +96,7 @@ describe("App shell around detached coding views", () => {
   });
 
   it("paints the sections on the flat theme ground, with no wallpaper layer", () => {
-    render(<App />);
+    renderApp();
 
     // Wallpapers were removed (2026-09-30): the app has one ground, the theme
     // colour, and nothing is layered behind the sections.
@@ -103,7 +110,7 @@ describe("App shell around detached coding views", () => {
   it.each(["agents", "docs", "memory"] as const)("gives the %s section the whole window", (section) => {
     useEventStore.setState({ activeSection: section });
 
-    render(<App />);
+    renderApp();
 
     expect(screen.queryByTestId("sidebar")).toBeNull();
     expect(screen.queryByTestId("sidebar-resizer")).toBeNull();
@@ -116,7 +123,7 @@ describe("App shell around detached coding views", () => {
       detachedViews: ["agentic-ide"],
     });
 
-    render(<App />);
+    renderApp();
 
     expect(screen.getByTestId("sidebar")).toBeTruthy();
     expect(screen.getByTestId("sidebar-resizer")).toBeTruthy();
@@ -128,7 +135,7 @@ describe("App shell around detached coding views", () => {
       detachedViews: [],
     });
 
-    render(<App />);
+    renderApp();
 
     expect(screen.getByTestId("sidebar")).toBeTruthy();
     expect(screen.getByTestId("sidebar-resizer")).toBeTruthy();
@@ -144,7 +151,7 @@ describe("App shell around detached coding views", () => {
       detachedViews: ["agentic-ide"],
     });
 
-    render(<App />);
+    renderApp();
 
     expect(screen.queryByTestId("sidebar")).toBeNull();
     // The caption stays: it is that window's title bar.

@@ -35,6 +35,13 @@ function draftOf(profile: PersonalityProfile): Draft {
   return { mode, preset, tone, formality, warmth, humor, concision };
 }
 
+/** Mood reasons the server sends (`dodaios/brain/mood.py`); each has an `assistant_view.personality_reason_*` text. */
+const KNOWN_REASONS: ReadonlySet<string> = new Set([
+  "default", "owner_request", "owner_hold", "profile_lock", "fading",
+  "activity_coding", "activity_writing", "activity_sensitive", "activity_casual",
+  "dialogue_task_failed", "dialogue_task_done",
+]);
+
 export function PersonalitySection() {
   const t = useT();
   const pushToast = useEventStore((s) => s.pushToast);
@@ -57,11 +64,9 @@ export function PersonalitySection() {
   const dirty = JSON.stringify(draft) !== JSON.stringify(draftOf(data.profile));
   const busy = save.isPending || reset.isPending;
   const mood = data.mood;
-  const reasonText = (code: string) => {
-    const key = `assistant_view.personality_reason_${code}`;
-    const text = t(key);
-    return text === key ? code : text;
-  };
+  // Only the reasons the server can send are translated; anything else is shown as the code it is.
+  const reasonText = (code: string) =>
+    KNOWN_REASONS.has(code) ? t(`assistant_view.personality_reason_${code}`) : code;
   const doMood = (body: Parameters<typeof moodAction.mutate>[0]) =>
     moodAction.mutate(body, { onError: (e) => pushToast("error", e.message) });
 

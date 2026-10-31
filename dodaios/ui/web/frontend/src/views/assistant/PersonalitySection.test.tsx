@@ -105,7 +105,8 @@ describe("PersonalitySection", () => {
     await waitFor(() => expect(calls.some((c) => c.url.endsWith("/mood"))).toBe(true));
     expect(calls.find((c) => c.url.endsWith("/mood"))?.body).toEqual({ action: "set", mood: "serious" });
     expect(calls.filter((c) => c.method === "PUT")).toHaveLength(0);
-    expect(await screen.findByText(/personality_mood_serious/)).toBeTruthy();
+    // The mood appears on its button and, once applied, as the current mood: at least once.
+    expect((await screen.findAllByText(/personality_mood_serious/)).length).toBeGreaterThan(0);
   });
 
   it("mood buttons are disabled while the assistant is starting", async () => {

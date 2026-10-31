@@ -51,7 +51,7 @@
       "one_first": "Configura primeiro um motor. Comparar vários motores vem depois, nas Definições.",
       "kinds_note": "Um motor pode funcionar neste computador (local), com uma chave de API que pagas por utilização, ou com um início de sessão oficial da tua subscrição. Uma subscrição não é crédito de API, e nenhum deles é verificado até o usares.",
       "work_title": "O teu motor",
-      "work_lede": "O Jarvis Trabalho só usa motores que funcionam neste computador.",
+      "work_lede": "A edição Work só usa motores que funcionam neste computador.",
       "work_local_only": "Nada disto é enviado para a nuvem e nada recorre a um motor na nuvem.",
       "work_need": "Se não houver um motor local pronto, ainda podes explorar a interface. O chat não pode responder até haver um instalado; nada é descarregado por ti."
     },
@@ -153,7 +153,7 @@
     },
     "summary": {
       "pill": "Resumo",
-      "title": "O teu Jarvis",
+      "title": "O teu assistente",
       "lede": "Isto é o que está definido agora.",
       "row_interaction": "Interação",
       "row_personality": "Personalidade",

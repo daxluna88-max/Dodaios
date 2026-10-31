@@ -51,7 +51,7 @@
       "one_first": "Richte zuerst eine Engine ein. Mehrere Engines zu vergleichen kommt später in den Einstellungen.",
       "kinds_note": "Eine Engine kann auf diesem Computer laufen (lokal), über einen API-Schlüssel, den du nach Nutzung bezahlst, oder über eine offizielle Anmeldung mit deinem Abo. Ein Abo ist kein API-Guthaben, und nichts davon wird geprüft, bevor du es benutzt.",
       "work_title": "Deine Engine",
-      "work_lede": "Jarvis Arbeit nutzt nur Engines, die auf diesem Computer laufen.",
+      "work_lede": "Die Work-Edition nutzt nur Engines, die auf diesem Computer laufen.",
       "work_local_only": "Nichts davon wird an die Cloud gesendet, und nichts weicht auf eine Cloud-Engine aus.",
       "work_need": "Wenn keine lokale Engine bereit ist, kannst du die Oberfläche trotzdem erkunden. Der Chat kann erst antworten, wenn eine installiert ist; es wird nichts für dich heruntergeladen."
     },
@@ -153,7 +153,7 @@
     },
     "summary": {
       "pill": "Übersicht",
-      "title": "Dein Jarvis",
+      "title": "Dein Assistent",
       "lede": "Das ist gerade eingestellt.",
       "row_interaction": "Interaktion",
       "row_personality": "Persönlichkeit",

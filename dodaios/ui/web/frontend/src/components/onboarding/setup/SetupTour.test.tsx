@@ -334,6 +334,12 @@ it("never writes the onboarding state in a replay", async () => {
 it("sends nothing to the first-run endpoints in a replay, so an installed app's settings stay as they are", async () => {
   firstRun = firstRunState();
   render(<SetupTour onb={fakeOnb({ completed: true })} preview onFinished={vi.fn()} />);
+  // A replay starts at the first step ("name"); walk to the interaction step the way a person does.
+  fireEvent.change(await screen.findByTestId("setup-name-input"), { target: { value: "Nova" } });
+  await act(async () => {
+    fireEvent.click(screen.getByTestId("onboarding-primary"));
+  });
+  await waitFor(() => expect(step()).toBe("voice"));
   fireEvent.click(await screen.findByTestId("setup-interaction-voice"));
   expect(calls.filter((c) => c.url.startsWith("/api/onboarding/first-run") && c.method !== "GET")).toHaveLength(0);
 });

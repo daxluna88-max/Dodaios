@@ -51,7 +51,7 @@
       "one_first": "Set up one engine first. Comparing several engines comes later, in Settings.",
       "kinds_note": "An engine can run on this computer (local), through an API key you pay for by use, or through an official sign-in with your subscription. A subscription is not API credit, and none of them is checked until you use it.",
       "work_title": "Your engine",
-      "work_lede": "Jarvis Work only uses engines that run on this computer.",
+      "work_lede": "The Work edition only uses engines that run on this computer.",
       "work_local_only": "Nothing here is sent to the cloud, and nothing falls back to a cloud engine.",
       "work_need": "If no local engine is ready you can still explore the interface. The chat cannot answer until one is installed; nothing is downloaded for you."
     },
@@ -153,7 +153,7 @@
     },
     "summary": {
       "pill": "Summary",
-      "title": "Your Jarvis",
+      "title": "Your assistant",
       "lede": "This is what is set right now.",
       "row_interaction": "Interaction",
       "row_personality": "Personality",
