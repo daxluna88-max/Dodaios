@@ -33,3 +33,14 @@ No real provider, no real device, no GitHub Actions, no macOS, no voice. `dist` 
 
 1. Step 1 (#6 -> #8 -> #9 -> #10) and the rest of the stack are mergeable with no new Python failure beyond sandbox dependencies.
 2. Before moving `it-complete`: Dax decides on multi-provider sending; `vitest` on the merged frontend; rebuild `dist` with `scripts/pilot/rebuild-ui.sh` (dry run first); keep multi-engine OFF by default on the pilot.
+
+## Update: full frontend gate on the study branch (commit `554aab98a`)
+
+- `npx vitest run` on the study branch (it-complete `faab8f044` + the stack): **7728 passed, 0 failed, 0 test files failed to load**. The same command on `it-complete`: 7670 passed, 0 failed, 0 failed files. `npx tsc --noEmit`: no output (no type errors). Backend gate: see the section above (not rerun after these frontend-only commits).
+- First merged run had 15 failures. 12 already failed on the stack branch alone (tests or code never run before); 3 appeared only after the merge (Italian dictionary parity). Fixes, all in this branch:
+  - 101 Italian strings added for keys the stack introduced (control strip, personality, first-run guide, network, ask-several-engines, local voice); placeholders checked mechanically. These are my own translations: not reviewed by a native speaker other than Dax.
+  - Two guide strings per language named "Jarvis"; a stack test requires the assistant to be named only by the `{name}` token. Replaced with "the Work edition" / "your assistant" in en, de, es, pt, zh, it.
+  - `PersonalitySection` now translates only the 11 mood reasons the server can send (checked against `dodaios/brain/mood.py`) and shows any other code as is.
+  - Four tests corrected: `ControlStrip` (counted indicators before the reading loaded), `SetupTour` replay (now walks the steps and still asserts no non-GET call to the first-run endpoints), `PersonalitySection` (a text that appears twice), `App.detached` (the shell now hosts the control strip, which needs a react-query provider).
+- A measuring mistake of mine, kept here so it is not repeated: a first count ignored three test files that failed to load because my worktree linked `node_modules` through a symlink (Vite denies files outside the root). Count failed FILES as well as failed tests.
+- Still NOT proven: a real browser, the iPhone, `dist` built from this branch, GitHub Actions, macOS. The 78 "missing tests" seen earlier were the three unloaded files plus renamed tests in `SetupTour`/`setupSteps`; with the files loading the study branch has 58 more tests than `it-complete`.
