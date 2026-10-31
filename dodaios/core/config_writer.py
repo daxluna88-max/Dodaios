@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -26,6 +27,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import tomlkit
 from tomlkit import TOMLDocument
@@ -1538,9 +1540,15 @@ def set_voice_engine_settings(
     *,
     tts: str | None = None,
     llm_model: str | None = None,
+    answer_source: str | None = None,
+    answer_provider: str | None = None,
+    answer_provider_model: str | None = None,
     path: Path = DEFAULT_CONFIG_FILE,
 ) -> None:
     """Persist the Local voice card's choices to ``[voice_engine]``.
+
+    ``answer_source`` is ``ollama`` (default) or ``brain`` (the app answers with
+    ``answer_provider``; ADR-0051). A ``brain`` source needs a provider name in the same write.
 
     ``tts`` must be one of ``config.VOICE_ENGINE_VOICES``; ``llm_model`` is an
     Ollama tag, and an empty string means "automatic". Both land in ONE atomic
@@ -1558,6 +1566,23 @@ def set_voice_engine_settings(
         if any(ch.isspace() for ch in model) or len(model) > 200:
             raise ValueError(f"not an Ollama model tag: {llm_model!r}")
         values["llm_model"] = model
+    if answer_source is not None:
+        source = answer_source.strip().lower()
+        if source not in ("ollama", "brain"):
+            raise ValueError(f"unknown answer source {answer_source!r}: use 'ollama' or 'brain'")
+        values["answer_source"] = source
+    if answer_provider is not None:
+        provider = answer_provider.strip().lower()
+        if provider and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", provider):
+            raise ValueError(f"not a provider name: {answer_provider!r}")
+        values["answer_provider"] = provider
+    if answer_provider_model is not None:
+        pmodel = answer_provider_model.strip()
+        if any(ch.isspace() for ch in pmodel) or len(pmodel) > 200:
+            raise ValueError(f"not a model name: {answer_provider_model!r}")
+        values["answer_provider_model"] = pmodel
+    if values.get("answer_source") == "brain" and not values.get("answer_provider"):
+        raise ValueError("choose a provider for the app to answer with")
     if not values:
         return
     first_key, *rest = values
@@ -1568,6 +1593,159 @@ def set_voice_engine_settings(
         values[first_key],
         extra={key: values[key] for key in rest},
     )
+
+
+def set_network_policy(policy: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
+    """Persist ``[network] policy`` (``off`` | ``local-only``; ADR-0053), applied at next start."""
+    value = policy.strip().lower()
+    if value not in ("off", "local-only"):
+        raise ValueError(f"unknown network policy {policy!r}; expected 'off' or 'local-only'")
+    _patch_table(path, "network", "policy", value)
+
+
+def set_multi_engine(
+    settings: dict[str, Any], *, path: Path = DEFAULT_CONFIG_FILE
+) -> dict[str, Any]:
+    """Persist ``[brain.multi_engine]`` (ADR-0055): "ask several engines" from the chat.
+
+    The whole block is validated by ``MultiEngineConfig`` first (a bad value raises
+    ``ValueError`` and nothing is written) and then replaces the block in one atomic write, so a
+    list of engines never lands half-edited. TOML-only, read per request by the chat turn: no
+    restart. Returns the validated block as stored.
+    """
+    from .config import MultiEngineConfig  # noqa: PLC0415
+
+    stored = MultiEngineConfig.model_validate(settings).model_dump(exclude_none=True)
+    path = _ensure_writable_config_path(path)
+    with _WRITE_LOCK:
+        raw = path.read_text(encoding="utf-8")
+        had_bom = raw.startswith(_BOM)
+        if had_bom:
+            raw = raw[len(_BOM) :]
+        doc: TOMLDocument = tomlkit.parse(raw)
+        brain = doc.get("brain")
+        if brain is None:
+            brain = tomlkit.table()
+            doc["brain"] = brain
+        block = tomlkit.table()
+        for key, value in stored.items():
+            if key == "engines":
+                engines = tomlkit.aot()
+                for engine in value:
+                    row = tomlkit.table()
+                    row.update(engine)
+                    engines.append(row)
+                block["engines"] = engines
+            elif key == "synthesizer":
+                synthesizer = tomlkit.table()
+                synthesizer.update(value)
+                block["synthesizer"] = synthesizer
+            else:
+                block[key] = value
+        brain["multi_engine"] = block
+        out = tomlkit.dumps(doc)
+        if had_bom:
+            out = _BOM + out
+        _atomic_write(path, out)
+    return stored
+
+
+def set_personality(
+    settings: dict[str, Any], *, path: Path = DEFAULT_CONFIG_FILE
+) -> dict[str, Any]:
+    """Persist ``[brain.personality]`` (issue 17): the owner's stable style for this product.
+
+    The block is validated first (a bad value raises ``ValueError``; nothing is written) and then
+    replaces the old block in one atomic write, stamped with the current schema version so a
+    migrated profile is saved explicitly. Unset dimensions are omitted: they follow the preset.
+    Returns the block as stored.
+    """
+    from .config import PersonalityConfig  # noqa: PLC0415
+
+    stored = PersonalityConfig.model_validate(
+        {**settings, "schema_version": 1}
+    ).model_dump(exclude_none=True)
+    path = _ensure_writable_config_path(path)
+    with _WRITE_LOCK:
+        raw = path.read_text(encoding="utf-8")
+        had_bom = raw.startswith(_BOM)
+        if had_bom:
+            raw = raw[len(_BOM) :]
+        doc: TOMLDocument = tomlkit.parse(raw)
+        brain = doc.get("brain")
+        if brain is None:
+            brain = tomlkit.table()
+            doc["brain"] = brain
+        block = tomlkit.table()
+        for key, value in stored.items():
+            block[key] = value
+        brain["personality"] = block
+        out = tomlkit.dumps(doc)
+        if had_bom:
+            out = _BOM + out
+        _atomic_write(path, out)
+    return stored
+
+
+def reset_personality(*, path: Path = DEFAULT_CONFIG_FILE) -> None:
+    """Remove ``[brain.personality]``: every value returns to the product's defaults."""
+    path = _ensure_writable_config_path(path)
+    with _WRITE_LOCK:
+        raw = path.read_text(encoding="utf-8")
+        had_bom = raw.startswith(_BOM)
+        if had_bom:
+            raw = raw[len(_BOM) :]
+        doc: TOMLDocument = tomlkit.parse(raw)
+        brain = doc.get("brain")
+        if brain is None or "personality" not in brain:
+            return
+        del brain["personality"]
+        out = tomlkit.dumps(doc)
+        if had_bom:
+            out = _BOM + out
+        _atomic_write(path, out)
+
+
+def _patch_nested(path: Path, tables: tuple[str, ...], key: str, value: Any) -> None:
+    """Set ``[a.b.c] key = value`` (tables nested to any depth), creating what is missing.
+
+    Comments and formatting survive (tomlkit); one atomic write under the writer lock.
+    """
+    path = _ensure_writable_config_path(path)
+    with _WRITE_LOCK:
+        raw = path.read_text(encoding="utf-8")
+        had_bom = raw.startswith(_BOM)
+        if had_bom:
+            raw = raw[len(_BOM) :]
+        doc: TOMLDocument = tomlkit.parse(raw)
+        node: Any = doc
+        for name in tables:
+            child = node.get(name)
+            if child is None:
+                child = tomlkit.table()
+                node[name] = child
+            node = child
+        node[key] = value
+        out = tomlkit.dumps(doc)
+        if had_bom:
+            out = _BOM + out
+        _atomic_write(path, out)
+
+
+def set_safety_approval_mode(mode: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
+    """Persist ``[safety] approval_mode`` (``ask`` | ``bypass``).
+
+    Only the first-run setup uses this, and only to write ``ask``: asking is the stricter
+    direction, and ``[safety]`` is never reachable through self-modification or the Control API.
+    """
+    if mode not in ("ask", "bypass"):
+        raise ValueError(f"unknown approval mode {mode!r}; expected 'ask' or 'bypass'")
+    _patch_nested(path, ("safety",), "approval_mode", mode)
+
+
+def set_learning_enabled(enabled: bool, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
+    """Persist ``[memory.learning] enabled``: the self-learning loop's master switch."""
+    _patch_nested(path, ("memory", "learning"), "enabled", bool(enabled))
 
 
 def set_silence_window_ms(ms: int, *, path: Path = DEFAULT_CONFIG_FILE) -> None:

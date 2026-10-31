@@ -476,8 +476,14 @@ def _load_provider_class(name: str) -> type | None:
     every installed distribution — the call at the bottom of a captured 16.5 s
     loop stall.
     """
+    from dodaios.brain.engine_policy import EnginePolicyError, check_service
     from dodaios.core.entry_points import entry_points_for
 
+    try:
+        check_service(ENTRY_POINT_GROUP, name)  # product policy (ADR-0049): Work refuses cloud STT
+    except EnginePolicyError as exc:
+        logger.warning("STT provider {!r} refused by the product policy: {}", name, exc)
+        return None
     selected = entry_points_for(ENTRY_POINT_GROUP)
     for ep in selected:
         if ep.name == name:

@@ -524,8 +524,10 @@ class WebServer:
         from .commands_routes import router as commands_router
         from .computer_use_routes import router as computer_use_router
         from .computers_routes import router as computers_router
+        from .consumer_fanout_routes import router as consumer_fanout_router
         from .contacts_routes import router as contacts_router
         from .control_routes import router as control_router
+        from .control_strip_routes import router as control_strip_router
         from .costs_routes import router as costs_router
         from .custom_api_routes import router as custom_api_router
         from .deck_routes import router as deck_router
@@ -534,6 +536,7 @@ class WebServer:
         from .dictation_routes import router as dictation_router
         from .dictionary_routes import router as dictionary_router
         from .docs_routes import router as docs_router
+        from .dodaiosx_routes import router as jarvisx_router
         from .downloads_routes import router as downloads_router
         from .drop_routes import router as drop_router
         from .federation_proxy_routes import router as federation_proxy_router
@@ -543,7 +546,6 @@ class WebServer:
         from .grok_build_routes import router as grok_build_router
         from .ide_browser_routes import router as ide_browser_router
         from .ide_skills_routes import router as ide_skills_router
-        from .dodaiosx_routes import router as jarvisx_router
         from .live_routes import router as live_router
         from .local_models_assistant_routes import (
             router as local_models_assistant_router,
@@ -564,9 +566,11 @@ class WebServer:
         from .missions_ws_routes import (
             router as missions_ws_router,
         )
+        from .network_policy_routes import router as network_policy_router
         from .onboarding_routes import router as onboarding_router
         from .outputs_routes import router as outputs_router
         from .permissions_routes import router as permissions_router
+        from .personality_routes import router as personality_router
         from .pets_routes import router as pets_router
         from .preview_routes import router as preview_router
         from .profile_routes import router as profile_router
@@ -633,6 +637,10 @@ class WebServer:
         app.include_router(provider_router)
         # Local voice card (setup, status, self-test) — ADR-0037.
         app.include_router(local_voice_router)
+        app.include_router(consumer_fanout_router)
+        app.include_router(network_policy_router)
+        app.include_router(personality_router)
+        app.include_router(control_strip_router)
         app.include_router(live_router)
         from dodaios.agent_chat.tasks import run_subscription_task
         from dodaios.core.task_agent import register_runner

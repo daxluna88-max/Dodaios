@@ -30,6 +30,9 @@ const BUSY_POLL_MS = 2500;
 const IDLE_POLL_MS = 20_000;
 /** The automatic model choice; never a real Ollama tag (tags contain ":"). */
 const AUTO_MODEL = "__auto__";
+/** The answer-source select values: this machine's Ollama, or `brain:<provider>`. */
+const ANSWER_OLLAMA = "ollama";
+const ANSWER_BRAIN_PREFIX = "brain:";
 
 export function LocalVoicePanel({ onChanged }: { onChanged: () => void }) {
   const t = useT();
@@ -83,7 +86,7 @@ export function LocalVoicePanel({ onChanged }: { onChanged: () => void }) {
     }
   };
 
-  const save = async (change: { voice?: string; llm_model?: string }) => {
+  const save = async (change: Parameters<typeof saveLocalVoiceSettings>[0]) => {
     setSaving(true);
     await act(() => saveLocalVoiceSettings(change));
     setSaving(false);
@@ -109,6 +112,27 @@ export function LocalVoicePanel({ onChanged }: { onChanged: () => void }) {
         label: t(`apikeys_view.local_voice_voice_${voice}`),
       })),
     [status?.voices, t],
+  );
+
+  const answerOptions = useMemo<BrandedSelectOption[]>(
+    () => [
+      {
+        value: ANSWER_OLLAMA,
+        label: t("apikeys_view.local_voice_answer_ollama"),
+      },
+      ...(status?.answer_providers ?? [])
+        .filter((p) => p.id !== "ollama")
+        .map((p) => ({
+          value: `${ANSWER_BRAIN_PREFIX}${p.id}`,
+          label: p.id,
+          hint: t(
+            p.local
+              ? "apikeys_view.local_voice_answer_local"
+              : "apikeys_view.local_voice_answer_remote",
+          ),
+        })),
+    ],
+    [status?.answer_providers, t],
   );
 
   if (!status) {
@@ -189,17 +213,45 @@ export function LocalVoicePanel({ onChanged }: { onChanged: () => void }) {
             ? t("apikeys_view.local_voice_latency_selftest")
             : `${figure} s · ${t(`apikeys_view.local_voice_basis_${status.expected_latency.basis}`)}`}
         </dd>
-        <dt className="text-muted-foreground">{t("apikeys_view.local_voice_llm_label")}</dt>
+        <dt className="text-muted-foreground">{t("apikeys_view.local_voice_answer_label")}</dt>
         <dd className="min-w-0">
           <BrandedSelect
-            value={status.llm_source === "config" ? status.llm_model : AUTO_MODEL}
-            options={modelOptions}
-            onValueChange={(value) => void save({ llm_model: value === AUTO_MODEL ? "" : value })}
-            ariaLabel={t("apikeys_view.local_voice_llm_label")}
+            value={
+              status.answer_source === "brain"
+                ? `${ANSWER_BRAIN_PREFIX}${status.answer_provider}`
+                : ANSWER_OLLAMA
+            }
+            options={answerOptions}
+            onValueChange={(value) =>
+              void save(
+                value === ANSWER_OLLAMA
+                  ? { answer_source: "ollama" }
+                  : {
+                      answer_source: "brain",
+                      answer_provider: value.slice(ANSWER_BRAIN_PREFIX.length),
+                    },
+              )
+            }
+            ariaLabel={t("apikeys_view.local_voice_answer_label")}
             disabled={saving || status.setup.running}
-            testId="local-voice-llm"
+            testId="local-voice-answer"
           />
         </dd>
+        {status.answer_source !== "brain" && (
+          <>
+            <dt className="text-muted-foreground">{t("apikeys_view.local_voice_llm_label")}</dt>
+            <dd className="min-w-0">
+              <BrandedSelect
+                value={status.llm_source === "config" ? status.llm_model : AUTO_MODEL}
+                options={modelOptions}
+                onValueChange={(value) => void save({ llm_model: value === AUTO_MODEL ? "" : value })}
+                ariaLabel={t("apikeys_view.local_voice_llm_label")}
+                disabled={saving || status.setup.running}
+                testId="local-voice-llm"
+              />
+            </dd>
+          </>
+        )}
         <dt className="text-muted-foreground">{t("apikeys_view.local_voice_voice_label")}</dt>
         <dd className="min-w-0">
           <BrandedSelect
@@ -213,7 +265,15 @@ export function LocalVoicePanel({ onChanged }: { onChanged: () => void }) {
         </dd>
       </dl>
 
-      {status.llm_error ? (
+      {status.answer_source === "brain" && status.answer_providers.some(
+        (p) => p.id === status.answer_provider && !p.local,
+      ) && (
+        <p className="text-muted-foreground" data-testid="local-voice-answer-remote-note">
+          {t("apikeys_view.local_voice_answer_remote_note")}
+        </p>
+      )}
+
+      {status.answer_source !== "brain" && status.llm_error ? (
         <p className="text-muted-foreground">{status.llm_error}</p>
       ) : (
         status.llm_installed === false && (

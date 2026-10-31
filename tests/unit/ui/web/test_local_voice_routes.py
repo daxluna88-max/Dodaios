@@ -72,7 +72,7 @@ def test_selftest_refuses_before_setup(client: TestClient) -> None:
 
 def test_settings_are_written_and_applied(client: TestClient, tmp_path: Path) -> None:
     config_file = tmp_path / "jarvis.toml"
-    config_file.write_text("[brain]\nprimary = \"ollama\"\n", encoding="utf-8")
+    config_file.write_text('[brain]\nprimary = "ollama"\n', encoding="utf-8")
     original = config_writer.set_voice_engine_settings
 
     def write_here(**kwargs):
@@ -80,8 +80,10 @@ def test_settings_are_written_and_applied(client: TestClient, tmp_path: Path) ->
 
     pytest.MonkeyPatch().setattr(config_writer, "set_voice_engine_settings", write_here)
     try:
-        resp = client.put("/api/providers/local-voice/settings",
-                          json={"voice": "piper", "llm_model": "granite4.2:8b"})
+        resp = client.put(
+            "/api/providers/local-voice/settings",
+            json={"voice": "piper", "llm_model": "granite4.2:8b"},
+        )
     finally:
         config_writer.set_voice_engine_settings = original
     assert resp.status_code == 200
@@ -117,3 +119,99 @@ def test_the_provider_list_carries_the_voice_engine_probe(
     assert providers["local-voice"]["voice_engine"] == {"installed": False, "ready": False}
     assert providers["local-voice"]["billing"] == "local"
     assert providers["gemini-live"]["voice_engine"] is None
+
+
+def _writes_to(tmp_path: Path):
+    config_file = tmp_path / "jarvis.toml"
+    config_file.write_text('[brain]\nprimary = "ollama"\n', encoding="utf-8")
+    original = config_writer.set_voice_engine_settings
+
+    def write_here(**kwargs):
+        return original(path=config_file, **kwargs)
+
+    return config_file, write_here
+
+
+def test_the_answer_source_is_written_applied_and_reported(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_file, write_here = _writes_to(tmp_path)
+    monkeypatch.setattr(config_writer, "set_voice_engine_settings", write_here)
+    resp = client.put(
+        "/api/providers/local-voice/settings",
+        json={
+            "answer_source": "brain",
+            "answer_provider": "OLLAMA",
+            "answer_provider_model": "qwen3:8b",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert (body["answer_source"], body["answer_provider"]) == ("brain", "ollama")
+    assert body["answer_provider_model"] == "qwen3:8b"
+    text = config_file.read_text(encoding="utf-8")
+    assert 'answer_source = "brain"' in text and 'answer_provider = "ollama"' in text
+    assert body["product"] is None
+    assert isinstance(body["answer_providers"], list)
+    back = client.put("/api/providers/local-voice/settings", json={"answer_source": "ollama"})
+    assert back.json()["answer_source"] == "ollama"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"answer_source": "cloud"},
+        {"answer_source": "brain"},  # no provider
+        {"answer_source": "brain", "answer_provider": "not a provider!"},
+        {"answer_provider_model": "has space"},
+    ],
+)
+def test_invalid_answer_settings_are_rejected_and_nothing_is_written(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload: dict
+) -> None:
+    config_file, write_here = _writes_to(tmp_path)
+    monkeypatch.setattr(config_writer, "set_voice_engine_settings", write_here)
+    resp = client.put("/api/providers/local-voice/settings", json=payload)
+    assert resp.status_code == 400
+    assert "voice_engine" not in config_file.read_text(encoding="utf-8")
+
+
+def test_the_work_product_cannot_pick_a_remote_provider_to_answer_voice(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_file, write_here = _writes_to(tmp_path)
+    monkeypatch.setattr(config_writer, "set_voice_engine_settings", write_here)
+    monkeypatch.setenv("JARVIS_PRODUCT", "work")
+    resp = client.put(
+        "/api/providers/local-voice/settings",
+        json={"answer_source": "brain", "answer_provider": "claude-api"},
+    )
+    assert resp.status_code == 400 and "remote" in resp.json()["detail"]
+    assert "voice_engine" not in config_file.read_text(encoding="utf-8")
+    ok = client.put(
+        "/api/providers/local-voice/settings",
+        json={"answer_source": "brain", "answer_provider": "ollama"},
+    )
+    assert ok.status_code == 200 and ok.json()["product"] == "work"
+    offered = {c["id"] for c in ok.json()["answer_providers"]}
+    assert offered <= {"ollama", "local-openai"}
+
+
+def test_work_status_offers_only_local_answer_providers(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dodaios.brain.provider_registry import BrainProviderRegistry
+
+    monkeypatch.setattr(
+        BrainProviderRegistry, "available", lambda self: ["claude-api", "ollama", "openai"]
+    )
+    monkeypatch.setenv("JARVIS_PRODUCT", "work")
+    body = client.get("/api/providers/local-voice/status").json()
+    assert [c["id"] for c in body["answer_providers"]] == ["ollama"]
+    assert all(c["local"] for c in body["answer_providers"])
+    monkeypatch.setenv("JARVIS_PRODUCT", "consumer")
+    body = client.get("/api/providers/local-voice/status").json()
+    assert body["product"] == "consumer"
+    assert any(
+        not c["local"] for c in body["answer_providers"]
+    )  # Consumer sees cloud providers too

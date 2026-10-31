@@ -16,6 +16,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
+from dodaios.setup import first_run as fr
 from dodaios.setup import state as st
 from dodaios.setup.onboarding_fastpath import state_payload as _shared_state_payload
 from dodaios.setup.onboarding_meta import CURRENT_TERMS_VERSION, read_terms_text
@@ -169,6 +170,82 @@ def post_tour_complete() -> dict:
     """
     st.mark_tour_complete(_path())
     return {"ok": True}
+
+
+# -- guided first run of Consumer / Work (issue 18) ------------------------------------------------
+
+
+def _require_ui_click(request: Request) -> None:
+    """Like the completion route: a Bearer client or a request without Origin is not a click."""
+    headers = request.headers
+    if headers.get("authorization", "").strip() or not headers.get("origin", "").strip():
+        raise HTTPException(status_code=403, detail="the first run is applied from the app's UI")
+
+
+def _first_run_payload() -> dict:
+    """Saved choices, what is applied, and the summary read from the REAL configuration."""
+    from dodaios.brain import engine_policy
+    from dodaios.core import config as cfg_mod
+
+    product = engine_policy.current_product()
+    key = fr.product_key(product)
+    choices = fr.load_choices(_path())
+    try:
+        summary = fr.summary(product, choices, cfg_mod.load_config())
+    except Exception:  # noqa: BLE001 - the screen still opens; the summary says it is unavailable
+        log.warning("first run: the summary could not be built", exc_info=True)
+        summary = None
+    return {
+        "product": key,
+        "choices": choices.model_dump(),
+        "applied": fr.is_applied(product, choices, _path()),
+        "presets": list(fr.PRESET_SETTINGS[key]),
+        "default_preset": fr.DEFAULT_PRESET[key],
+        "summary": summary,
+    }
+
+
+@router.get("/first-run")
+def get_first_run(response: Response) -> dict:
+    response.headers["cache-control"] = "no-store, max-age=0"
+    return _first_run_payload()
+
+
+@router.put("/first-run")
+def put_first_run(body: fr.FirstRunChoices) -> dict:
+    """Save the choices made so far (progress only: nothing is written to the configuration)."""
+    fr.save_choices(body, _path())
+    return _first_run_payload()
+
+
+@router.post("/first-run/apply")
+def post_first_run_apply(request: Request) -> dict:
+    """Write the saved choices to the configuration; ok only when every write succeeded."""
+    from dodaios.brain import engine_policy
+
+    _require_ui_click(request)
+    if st.is_onboarding_complete(_path()):
+        # An installed app's approval mode and memory switch change in Settings,
+        # never by replaying the guide.
+        raise HTTPException(status_code=409, detail="onboarding is already complete; use Settings")
+    try:
+        fr.apply(engine_policy.current_product(), fr.load_choices(_path()), state_path=_path())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except fr.FirstRunError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "first_run_not_applied", "step": exc.step, "written": exc.done},
+        ) from exc
+    return _first_run_payload()
+
+
+@router.post("/first-run/reset")
+def post_first_run_reset(request: Request) -> dict:
+    """Forget the saved choices (explicit). The configuration already written is not reverted."""
+    _require_ui_click(request)
+    fr.reset_choices(_path())
+    return _first_run_payload()
 
 
 __all__ = ["router"]

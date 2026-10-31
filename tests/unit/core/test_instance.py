@@ -196,3 +196,40 @@ def test_seed_runs_only_once_and_never_for_default(tmp_path: Path) -> None:
     # Second start: the directory exists → nothing is re-seeded.
     assert ensure_instance_data_dir(tmp_path, inst.InstanceIdentity("dev")) == []
     assert not (tmp_path / "data-dev" / "setup_state.json").exists()
+
+
+# ---- ports of the two products (ADR-0054) -------------------------------------------------
+
+
+def _ports(monkeypatch, product: str | None, instance: str | None = None) -> int:
+    for name, value in (("JARVIS_PRODUCT_ACTIVE", product), ("JARVIS_INSTANCE", instance)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    return inst.current_instance().port(47821)
+
+
+def test_products_and_default_app_bind_distinct_ports(monkeypatch) -> None:
+    ports = {
+        None: _ports(monkeypatch, None),
+        "work": _ports(monkeypatch, "work"),
+        "consumer": _ports(monkeypatch, "consumer"),
+    }
+    assert ports == {None: 47821, "work": 48821, "consumer": 49821}
+
+
+def test_product_and_dev_offsets_never_collide(monkeypatch) -> None:
+    combos = {
+        (product, instance): _ports(monkeypatch, product, instance)
+        for product in (None, "work", "consumer")
+        for instance in (None, "dev")
+    }
+    assert len(set(combos.values())) == len(combos)
+    assert all(1 <= port <= 65535 for port in combos.values())
+
+
+def test_unknown_or_blank_product_adds_no_offset(monkeypatch) -> None:
+    assert _ports(monkeypatch, "") == 47821
+    assert _ports(monkeypatch, "other") == 47821
+    assert inst.product_port_offset({"JARVIS_PRODUCT_ACTIVE": " Work "}) == 1000

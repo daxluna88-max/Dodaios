@@ -80,11 +80,23 @@ if len(sys.argv) >= 2 and sys.argv[1] == "update":
 
     raise SystemExit(_update_main(sys.argv[2:]))
 
-from dodaios import __version__
-from dodaios.cli.command_name import main_command
-from dodaios.core import config as cfg
-from dodaios.core import registry
-from dodaios.hardware import detection
+# ``--product work|consumer`` (ADR-0054) has to be decided before ``dodaios.core.config`` is
+# imported below: that module binds the credential service and the data paths on import. The
+# flag is consumed here, so the argument parsers further down never see it.
+from dodaios.core import product_profile as _product_profile
+
+try:
+    _PRODUCT_PATHS, _rest_argv, _PRODUCT_LOCK = _product_profile.activate_from_argv(sys.argv[1:])
+except _product_profile.ProductError as _product_error:
+    print(f"error: {_product_error}", file=sys.stderr)
+    raise SystemExit(2) from None
+sys.argv[1:] = _rest_argv
+
+from dodaios import __version__  # noqa: E402 - after the product selection above
+from dodaios.cli.command_name import main_command  # noqa: E402 - after the product selection above
+from dodaios.core import config as cfg  # noqa: E402 - after the product selection above
+from dodaios.core import registry  # noqa: E402 - after the product selection above
+from dodaios.hardware import detection  # noqa: E402 - after the product selection above
 
 if TYPE_CHECKING:
     from dodaios.ui.tray import TrayCommand
@@ -97,6 +109,11 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Dodaios — turn your computer into an AI agent.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument(
+        "--product", metavar="NAME",
+        help="Run as the independent 'work' (local models only) or 'consumer' product, each with "
+             "its own data directory, config, credentials and launch lock.",
+    )
     parser.add_argument("--wizard", action="store_true", help="Restart the setup wizard.")
     parser.add_argument("--check", action="store_true", help="Only show the hardware analysis.")
     parser.add_argument(
@@ -591,6 +608,16 @@ def main(argv: list[str] | None = None) -> int:
     from dodaios.core.path_augment import ensure_cli_paths
 
     ensure_cli_paths()
+
+    # Strict offline profile (ADR-0053): installed before anything can open a connection.
+    from dodaios.core.config import DEFAULT_CONFIG_FILE
+    from dodaios.core.egress_guard import install_from_settings
+
+    try:
+        install_from_settings(DEFAULT_CONFIG_FILE)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
     raw = list(sys.argv[1:] if argv is None else argv)
     if raw[:1] == ["update"]:

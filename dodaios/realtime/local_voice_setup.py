@@ -629,6 +629,26 @@ async def _without_toolless(names: set[str]) -> set[str]:
     return {n for n in names if not any(same_model(n, t) for t in toolless)}
 
 
+def _product() -> str | None:
+    from dodaios.brain.engine_policy import current_product  # noqa: PLC0415
+
+    return current_product()
+
+
+def _answer_provider_choices() -> list[dict[str, Any]]:
+    """Providers the app could answer voice turns with. Under Work only local ones are offered."""
+    from dodaios.brain import engine_policy  # noqa: PLC0415
+    from dodaios.brain.provider_registry import BrainProviderRegistry  # noqa: PLC0415
+
+    choices = []
+    for name in BrainProviderRegistry().available():
+        local = name in engine_policy.LOCAL_PROVIDERS
+        if engine_policy.current_product() == "work" and not local:
+            continue
+        choices.append({"id": name, "local": local})
+    return choices
+
+
 async def card_status(
     cfg: Any,
     *,
@@ -706,6 +726,11 @@ async def card_status(
         "llm_choices": _visible_models(choices),
         "voice": settings.tts,
         "voices": list(VOICE_ENGINE_VOICES),
+        "answer_source": settings.answer_source,
+        "answer_provider": settings.answer_provider,
+        "answer_provider_model": settings.answer_provider_model,
+        "answer_providers": await asyncio.to_thread(_answer_provider_choices),
+        "product": _product(),
         "machine_class": machine,
         "expected_latency": expected_latency(machine),
         "platform": platform,

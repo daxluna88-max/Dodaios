@@ -11,6 +11,9 @@ import { RealtimeVoiceGroup } from "@/views/settings/RealtimeVoiceGroup";
 import { VolumeGroup } from "@/views/settings/VolumeGroup";
 import { AudioDevicesGroup } from "@/views/settings/AudioDevicesGroup";
 import { SystemPromptGroup } from "@/views/settings/SystemPromptGroup";
+import { ConsumerFanoutGroup } from "@/views/settings/ConsumerFanoutGroup";
+import { MultiEngineChatGroup } from "@/views/settings/MultiEngineChatGroup";
+import { NetworkPolicyGroup } from "@/views/settings/NetworkPolicyGroup";
 import { SelfBuildGroup } from "@/views/settings/SelfBuildGroup";
 import { SettingsGroupBoundary } from "@/views/settings/SettingsGroupBoundary";
 import { settingsInputCls } from "@/views/settings/SettingsBlock";
@@ -142,6 +145,9 @@ const SECTIONS: readonly { id: string; render: () => React.ReactNode }[] = [
   { id: "self-build", render: () => <SelfBuildGroup /> },
   { id: "music", render: () => <MusicGroup /> },
   { id: "overlay-taskbar", render: () => <OverlayTaskbarGroup /> },
+  { id: "network-policy", render: () => <NetworkPolicyGroup /> },
+  { id: "consumer-fanout", render: () => <ConsumerFanoutGroup /> },
+  { id: "multi-engine-chat", render: () => <MultiEngineChatGroup /> },
 ];
 
 /** "Autopilot toasts" — the one row of the former "More" group. */

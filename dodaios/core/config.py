@@ -935,6 +935,76 @@ class BrainProviderConfig(BaseModel):
         self.tool_model = value
 
 
+class MultiEngineEngineConfig(BaseModel):
+    """One engine that may take part in a multi-engine chat answer (ADR-0055)."""
+
+    provider: str = Field(max_length=60)
+    model: str | None = Field(default=None, max_length=200)
+    #: Estimated cost of one answer in the unit of ``MultiEngineConfig.budget``; None = unknown.
+    est_cost: float | None = None
+    timeout_s: float = Field(default=60.0, gt=0, le=300)
+    #: The work needs API access: refused on an app-subscription connection.
+    needs_api: bool = False
+
+
+class MultiEngineConfig(BaseModel):
+    """``[brain.multi_engine]``: "ask several engines" from the chat. Off by default.
+
+    Nothing runs unless ``enabled`` is true AND the person asks for it in the message
+    (``dodaios.brain.multi_engine_chat``). Consumer only; the Work product refuses it.
+    """
+
+    enabled: bool = False
+    engines: list[MultiEngineEngineConfig] = Field(default_factory=list, max_length=6)
+    #: Writes the ONE final answer. Unset: the first engine that answered does.
+    synthesizer: MultiEngineEngineConfig | None = None
+    #: Ceiling for the whole question (all engines plus the synthesis), in the unit of est_cost.
+    budget: float = Field(default=0.0, ge=0)
+    allow_unknown_cost: bool = False
+    max_concurrent: int = Field(default=3, ge=1, le=6)
+
+
+Tone = Literal["neutral", "friendly", "calm", "energetic", "serious"]
+Mood = Literal["neutral", "cheerful", "calm", "focused", "serious"]
+PersonalityMode = Literal["manual", "adaptive", "mixed"]
+PersonalityPreset = Literal["professional", "friendly", "concise"]
+_ALL_MOODS: tuple[str, ...] = ("neutral", "cheerful", "calm", "focused", "serious")
+
+
+class PersonalityConfig(BaseModel):
+    """``[brain.personality]``: the owner's chosen style for THIS product (issue 17).
+
+    Only enumerated values and small bounded integers: nothing the owner types as free text ever
+    becomes an instruction, so the profile cannot override policy and carries no personal data to a
+    remote engine. Initiative is NOT here: ``[brain] proactivity`` already is that setting.
+    An unset (None) dimension takes the preset's value; ``preset`` unset takes the product default
+    (professional for Work, friendly for Consumer). ``dodaios.brain.personality`` resolves it.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    schema_version: int = Field(default=1, ge=0, le=1_000, strict=True)
+    mode: PersonalityMode = "mixed"
+    preset: PersonalityPreset | None = None
+    tone: Tone | None = None
+    # 0..4 scales (0 = least, 4 = most; concision: 4 = shortest).
+    formality: int | None = Field(default=None, ge=0, le=4, strict=True)
+    warmth: int | None = Field(default=None, ge=0, le=4, strict=True)
+    humor: int | None = Field(default=None, ge=0, le=4, strict=True)
+    concision: int | None = Field(default=None, ge=0, le=4, strict=True)
+    #: How far the adaptive part may move a dimension from the base (0 = not at all).
+    expressive_range: int = Field(default=1, ge=0, le=2, strict=True)
+    #: Moods the adaptive part may use. ``neutral`` is always allowed (the way back).
+    moods_allowed: list[Mood] = Field(default_factory=lambda: list(_ALL_MOODS), max_length=5)
+    #: A mood the owner pinned until they change it; None = no pin.
+    locked_mood: Mood | None = None
+
+    @field_validator("moods_allowed", mode="after")
+    @classmethod
+    def _neutral_always_and_unique(cls, value: list[str]) -> list[str]:
+        return ["neutral", *dict.fromkeys(m for m in value if m != "neutral")]
+
+
 class BrainPolicyConfig(BaseModel):
     use_routing_model_for_intent: bool = True
     prompt_cache_heartbeat_seconds: int = 240
@@ -1632,6 +1702,8 @@ class BrainConfig(BaseModel):
     local_fallback_model: str = "claude-haiku-4-5-20251001"
     providers: dict[str, BrainProviderConfig] = Field(default_factory=dict)
     policy: BrainPolicyConfig = Field(default_factory=BrainPolicyConfig)
+    multi_engine: MultiEngineConfig = Field(default_factory=MultiEngineConfig)
+    personality: PersonalityConfig = Field(default_factory=PersonalityConfig)
     # Per-response output ceiling (tokens) for every spoken/chat reply. This is
     # a SAFETY CEILING, not a target: the model still stops on its own
     # (``finish_reason == "stop"``), so a short question keeps its short answer.
@@ -4714,6 +4786,12 @@ class VoiceEngineConfig(BaseModel):
     #: Ollama tag the engine answers with. Empty = automatic: the model setup
     #: picked (installed models first), else the machine-class default.
     llm_model: str = ""
+    #: Who answers the engine's model calls: ``ollama`` (a local server, the default) or
+    #: ``brain`` (the app, through ``answer_provider`` / ``answer_provider_model``; Work allows only
+    #: local providers).
+    answer_source: str = "ollama"
+    answer_provider: str = ""
+    answer_provider_model: str = ""
     #: Languages the engine loads a voice for; the first is the fallback voice.
     languages: list[str] = Field(default_factory=lambda: ["de", "en"])
 
@@ -4723,10 +4801,15 @@ class VoiceEngineConfig(BaseModel):
         text = str(value or "").strip().lower()
         return text if text in VOICE_ENGINE_VOICES else "pocket"
 
-    @field_validator("llm_model", mode="before")
+    @field_validator("llm_model", "answer_provider", "answer_provider_model", mode="before")
     @classmethod
     def _strip_model(cls, value: object) -> str:
         return str(value or "").strip()
+
+    @field_validator("answer_source", mode="before")
+    @classmethod
+    def _known_answer_source(cls, value: object) -> str:
+        return "brain" if str(value or "").strip().lower() == "brain" else "ollama"
 
     @field_validator("languages", mode="before")
     @classmethod
@@ -4734,6 +4817,25 @@ class VoiceEngineConfig(BaseModel):
         items = value if isinstance(value, list | tuple) else []
         cleaned = [str(x).strip().lower() for x in items if str(x).strip()]
         return cleaned or ["de", "en"]
+
+
+class NetworkConfig(BaseModel):
+    """``[network]`` — the opt-in strict offline profile (ADR-0053).
+
+    ``policy = "local-only"`` refuses every connection and DNS lookup that is not this machine (or a host
+    listed in ``JARVIS_LOCAL_ALLOWED_HOSTS``). It is read at process start, so a change needs a restart;
+    ``JARVIS_NETWORK_POLICY`` overrides it. Written only through ``config_writer.set_network_policy``.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    policy: str = "off"
+
+    @field_validator("policy", mode="before")
+    @classmethod
+    def _known_policy(cls, value: object) -> str:
+        text = str(value or "").strip().lower()
+        return text if text in ("off", "local-only") else "off"
 
 
 class SelfBuildConfig(BaseModel):
@@ -4787,6 +4889,7 @@ class JarvisConfig(BaseModel):
     live: LiveConfig = Field(default_factory=LiveConfig)
     # [voice_engine] — the Jarvis-owned local voice engine (ADR-0037).
     voice_engine: VoiceEngineConfig = Field(default_factory=VoiceEngineConfig)
+    network: NetworkConfig = Field(default_factory=NetworkConfig)
     # Google key routing (AI Studio vs Vertex express) — see GoogleAuthConfig.
     google: GoogleAuthConfig = Field(default_factory=GoogleAuthConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
@@ -5407,7 +5510,7 @@ def _apply_instance_overrides(data: dict[str, Any]) -> dict[str, Any]:
     instance passes through untouched.
     """
     identity = current_instance()
-    if identity.is_default:
+    if identity.port_offset == 0:
         return data
     for section, field, default in _INSTANCE_PORT_FIELDS:
         table = data.get(section)
@@ -5418,6 +5521,10 @@ def _apply_instance_overrides(data: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(base, int) or isinstance(base, bool):
             base = default
         table[field] = identity.port(base)
+    if identity.is_default:
+        # A product launch (``--product``) shifts ports only; its data directory is already its
+        # own (``paths.user_data_dir``), and ``DATA_DIR`` here is the checkout's.
+        return data
     memory = data.get("memory")
     if not isinstance(memory, dict):
         memory = {}
