@@ -1,0 +1,27 @@
+diff --git a/dodaios/browser_voice/session.py b/dodaios/browser_voice/session.py
+index f35aea9ac..d15f0637a 100644
+--- a/dodaios/browser_voice/session.py
++++ b/dodaios/browser_voice/session.py
+@@ -123,6 +123,22 @@ _PHANTOM_PHRASES = frozenset(
+         "thanks for watching",
+         "you",
+         "bye",
++        # Hesitation sounds ("mmm", "ehm"): thinking aloud is not a turn and must not interrupt Jarvis.
++        "mm",
++        "mmm",
++        "mmmm",
++        "hm",
++        "hmm",
++        "mh",
++        "mhm",
++        "ehm",
++        "em",
++        "emm",
++        "uhm",
++        "uh",
++        "um",
++        "eeh",
++        "ehh",
+     }
+ )
+ 
