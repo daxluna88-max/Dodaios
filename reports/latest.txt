@@ -1,4 +1,4 @@
-sha=2e5d58af76a393ed1cd56d243864617bb30dbefb started=2026-10-31T20:32:01Z
+sha=7ff01de566f113c47a4919afd816f68faaa75680 started=2026-10-31T20:56:01Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -68,10 +68,10 @@ sha=2e5d58af76a393ed1cd56d243864617bb30dbefb started=2026-10-31T20:32:01Z
 = env JARVIS__TTS__CARTESIA__CHUNK_BY_SENTENCE (already switched: voice-cartesia-6)
 Nothing to apply; server not restarted (use --restart to force).
 update_exit=0
-PASS     CHK-TIME: real_rome_time=21:32 status=done secs=2 tool_errors=0 reply='Sono le ventuno e trentadue, Davide.'
-PASS     CHK-STOP: first=cancelled second=done second_len=47 resumed=False leaked_internal_text=False reply='Sono le ventuno e trentadue, sabato 31 ottobre.'
+PASS     CHK-TIME: real_rome_time=21:56 status=done secs=1 tool_errors=0 reply='Sono le nove e cinquantasei di sera, Davide.'
+PASS     CHK-STOP: first=cancelled second=done second_len=61 resumed=False leaked_internal_text=False reply='Sono le nove e cinquantasei di sera, sabato trentuno ottobre.'
 SKIPPED  CHK-WIKI-HONEST: live memory check is off: it writes to the real profile
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
 SUMMARY: 3 PASS, 0 FAIL, 0 BLOCKED, 1 SKIPPED
 check_exit=0
-finished=2026-10-31T20:32:24Z
+finished=2026-10-31T20:56:23Z
