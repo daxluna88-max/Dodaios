@@ -1,4 +1,4 @@
-sha=7b9083b396247f84b15470f680e3332697ba51ff started=2026-10-31T07:26:01Z
+sha=100268e40a5fe50d83ec654b5fb56c1262c695e2 started=2026-10-31T07:33:02Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -45,7 +45,8 @@ sha=7b9083b396247f84b15470f680e3332697ba51ff started=2026-10-31T07:26:01Z
 = it-voice-44.patch (already applied)
 = it-voice-45.patch (already applied)
 = it-cartesia-46.patch (already applied)
-+ it-cartesia-47.patch applied
+= it-cartesia-47.patch (already applied)
++ it-voice-48.patch applied
 = env JARVIS__BRAIN__WORKER__PROVIDER (already set)
 = env JARVIS__BRAIN__WORKER__MODEL (already set)
 = env JARVIS__BRAIN__PROVIDERS__OPENROUTER__MODEL (already set)
@@ -62,10 +63,10 @@ sha=7b9083b396247f84b15470f680e3332697ba51ff started=2026-10-31T07:26:01Z
 = env JARVIS__TTS__CARTESIA__CHUNK_BY_SENTENCE (already switched: voice-cartesia-6)
 RESTARTED: jarvis running
 update_exit=0
-PASS     CHK-TIME: real_rome_time=08:26 status=done secs=0 tool_errors=0 reply='Sono le otto e ventisei del mattino, ora italiana.'
-PASS     CHK-STOP: first=cancelled second=done second_len=38 resumed=False leaked_internal_text=False reply='Sono le 08:26, sabato 31 ottobre 2026.'
+PASS     CHK-TIME: real_rome_time=08:33 status=done secs=1 tool_errors=0 reply='Sono le otto e trentatré di mattina, Davide.'
+PASS     CHK-STOP: first=cancelled second=done second_len=51 resumed=False leaked_internal_text=False reply='Sono le otto e trentatré del mattino, ora italiana.'
 SKIPPED  CHK-WIKI-HONEST: live memory check is off: it writes to the real profile
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
 SUMMARY: 3 PASS, 0 FAIL, 0 BLOCKED, 1 SKIPPED
 check_exit=0
-finished=2026-10-31T07:26:29Z
+finished=2026-10-31T07:33:30Z
