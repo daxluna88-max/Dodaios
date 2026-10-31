@@ -1,4 +1,4 @@
-sha=19e2f9baca6ae58ba402c9b40a1c96469c1370fe started=2026-10-31T08:41:01Z
+sha=922f228a8677f92c01ee012b11163ae5dc9a48b3 started=2026-10-31T09:46:02Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -50,6 +50,7 @@ sha=19e2f9baca6ae58ba402c9b40a1c96469c1370fe started=2026-10-31T08:41:01Z
 = it-voice-49.patch (already applied)
 = it-voice-50.patch (already applied)
 = it-privacy-51.patch (already applied)
++ it-honesty-52.patch applied
 = env JARVIS__BRAIN__WORKER__PROVIDER (already set)
 = env JARVIS__BRAIN__WORKER__MODEL (already set)
 = env JARVIS__BRAIN__PROVIDERS__OPENROUTER__MODEL (already set)
@@ -65,12 +66,12 @@ sha=19e2f9baca6ae58ba402c9b40a1c96469c1370fe started=2026-10-31T08:41:01Z
 = env JARVIS_BROWSER_VOICE_ENGINE (already switched: voice-cartesia-5)
 = env JARVIS__BRAIN__REPLY_LANGUAGE (already switched: voice-lang-it-1)
 = env JARVIS__TTS__CARTESIA__CHUNK_BY_SENTENCE (already switched: voice-cartesia-6)
-Nothing to apply; server not restarted (use --restart to force).
+RESTARTED: jarvis running
 update_exit=0
-PASS     CHK-TIME: real_rome_time=09:41 status=done secs=0 tool_errors=0 reply='Sono le nove e quarantuno, ora italiana.'
-PASS     CHK-STOP: first=cancelled second=done second_len=42 resumed=False leaked_internal_text=False reply='Sono le nove e quarantuno, sabato mattina.'
+PASS     CHK-TIME: real_rome_time=10:46 status=done secs=1 tool_errors=0 reply='Sono le dieci e quarantasei di mattina, Davide.'
+PASS     CHK-STOP: first=cancelled second=done second_len=44 resumed=False leaked_internal_text=False reply='Sono le dieci e quarantasei, sabato mattina.'
 SKIPPED  CHK-WIKI-HONEST: live memory check is off: it writes to the real profile
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
 SUMMARY: 3 PASS, 0 FAIL, 0 BLOCKED, 1 SKIPPED
 check_exit=0
-finished=2026-10-31T08:41:25Z
+finished=2026-10-31T09:46:33Z
