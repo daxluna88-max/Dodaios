@@ -664,3 +664,13 @@ async def test_the_tail_still_playing_in_the_browser_is_not_taken_as_a_new_turn(
     await _drive_one_utterance(session)
     assert brain.prompts == ["che ora e adesso"]
     assert sink.json_of("tts_cancel")
+
+
+def test_sound_annotations_are_not_speech() -> None:
+    from dodaios.browser_voice.session import _is_phantom, _is_silence_hallucination
+
+    for heard in ("*sospiro*", "[musica]", "(rumore)", "Grazie. *sospiro*", "*sospiro* Grazie."):
+        assert _is_silence_hallucination(heard), heard
+    assert _is_phantom("*sospiro*")
+    assert not _is_silence_hallucination("Grazie, *sospiro* ma adesso raccontami una storia.")
+    assert not _is_silence_hallucination("Dimmi l'ora (per favore)")
