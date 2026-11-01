@@ -674,3 +674,12 @@ def test_sound_annotations_are_not_speech() -> None:
     assert _is_phantom("*sospiro*")
     assert not _is_silence_hallucination("Grazie, *sospiro* ma adesso raccontami una storia.")
     assert not _is_silence_hallucination("Dimmi l'ora (per favore)")
+
+
+def test_italian_video_outro_is_a_hallucination() -> None:
+    from dodaios.browser_voice.session import _is_phantom, _is_silence_hallucination
+
+    assert _is_silence_hallucination("Grazie. Grazie per la visione! Grazie.")
+    assert _is_silence_hallucination("Grazie per l'attenzione.")
+    assert _is_phantom("Grazie per la visione!")
+    assert not _is_silence_hallucination("Grazie per la visione che hai condiviso, ora spiegami il piano.")

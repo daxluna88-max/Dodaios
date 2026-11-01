@@ -131,6 +131,15 @@ _PHANTOM_PHRASES = frozenset(
         "thank you",
         "thanks",
         "thanks for watching",
+        # The same video-outro inventions in Italian ("l'attenzione" is split at the apostrophe by _WORD).
+        "grazie per la visione",
+        "grazie a tutti per la visione",
+        "grazie per aver guardato il video",
+        "grazie per l attenzione",
+        "alla prossima",
+        "ci vediamo al prossimo video",
+        "iscriviti al canale",
+        "buona visione",
         "you",
         "bye",
         # Hesitation sounds ("mmm", "ehm"): thinking aloud is not a turn and must not interrupt Jarvis.
