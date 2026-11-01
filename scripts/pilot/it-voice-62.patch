@@ -1,0 +1,56 @@
+diff --git a/dodaios/browser_voice/session.py b/dodaios/browser_voice/session.py
+index 42495aebf..a2e2cc326 100644
+--- a/dodaios/browser_voice/session.py
++++ b/dodaios/browser_voice/session.py
+@@ -170,9 +170,40 @@ def _without_annotations(heard: str) -> str:
+     return _ANNOTATION.sub(" ", heard)
+ 
+ 
++# Sounds a room makes that Whisper writes down as words: a dog, laughter, a tut, a sigh.
++_INTERJECTIONS = frozenset(
++    {
++        "ah", "oh", "uh", "ahah", "ahaha", "haha", "hahaha", "hihi", "bau", "woof", "pff", "tsk",
++        "ssh", "psst", "brr", "ops", "oops",
++    }
++)
++
++# One word that does mean "stop talking". Any other single word heard WHILE Jarvis speaks is more
++# likely the room than the person, so it does not interrupt.
++_STOP_WORDS = frozenset(
++    {
++        "stop", "basta", "aspetta", "aspetti", "ferma", "fermati", "fermo", "no", "pausa",
++        "silenzio", "zitto", "ascolta", "scusa", "wait", "hold",
++    }
++)
++
++
++def _is_interjection(heard: str) -> bool:
++    words = [w.lower() for w in _WORD.findall(_without_annotations(heard))]
++    return bool(words) and all(w in _INTERJECTIONS for w in words)
++
++
++def _is_weak_barge_in(heard: str) -> bool:
++    """A lone word that is not a stop word: not enough to cut Jarvis off."""
++    words = [w.lower() for w in _WORD.findall(_without_annotations(heard))]
++    return len(words) == 1 and words[0] not in _STOP_WORDS
++
++
+ def _is_phantom(heard: str) -> bool:
+     if heard.strip() and not _without_annotations(heard).strip():
+         return True  # only a sound annotation, e.g. "*sospiro*"
++    if _is_interjection(heard):
++        return True
+     return " ".join(w.lower() for w in _WORD.findall(_without_annotations(heard))) in _PHANTOM_PHRASES
+ 
+ 
+@@ -864,8 +895,8 @@ class BrowserVoiceSession:
+         spoken = " ".join(state.spoken) if state is not None else ""
+         if not text or not self._playing() or self._ended:
+             return
+-        if _is_echo(text, spoken) or _is_phantom(text):
+-            log.warning("browser_voice[%s] barge-in ignored (echo/phantom): %r", self.session_id, text)
++        if _is_echo(text, spoken) or _is_phantom(text) or _is_weak_barge_in(text):
++            log.warning("browser_voice[%s] barge-in ignored (echo/noise): %r", self.session_id, text)
+             return
+         log.info("browser_voice[%s] barge-in: %s", self.session_id, text)
+         turn = self._turn_task
