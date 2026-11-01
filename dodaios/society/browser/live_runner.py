@@ -881,6 +881,13 @@ class Worker:
             failure = "Browser task did not complete successfully"
             if agent_errors:
                 failure += ": " + " | ".join(e[:160] for e in agent_errors[-3:])
+            else:
+                # No error was raised: the agent finished and declared failure. Its own closing
+                # words (bounded) say why, with the step count.
+                closing = " ".join(str(history.final_result() or "").split())[:240]
+                failure += f" ({history.number_of_steps()} steps)"
+                if closing:
+                    failure += ": " + closing
             return {
                 "ok": successful,
                 "final_result": history.final_result(),
