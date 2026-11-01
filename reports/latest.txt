@@ -1,4 +1,4 @@
-sha=b2afaf9ebbe86d0a618117ebfa71c06c456dd4f7 started=2026-11-01T13:17:02Z
+sha=9e2e0931cf1fd3861e23743866444d2528784e04 started=2026-11-01T13:22:01Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -56,7 +56,8 @@ sha=b2afaf9ebbe86d0a618117ebfa71c06c456dd4f7 started=2026-11-01T13:17:02Z
 = it-voice-55.patch (already applied)
 = it-voice-56.patch (already applied)
 = it-skills-57.patch (already applied)
-+ it-browser-58.patch applied
+= it-browser-58.patch (already applied)
++ it-browser-59.patch applied
 = env JARVIS__BRAIN__WORKER__PROVIDER (already set)
 = env JARVIS__BRAIN__WORKER__MODEL (already set)
 = env JARVIS__BRAIN__PROVIDERS__OPENROUTER__MODEL (already set)
@@ -74,10 +75,10 @@ sha=b2afaf9ebbe86d0a618117ebfa71c06c456dd4f7 started=2026-11-01T13:17:02Z
 = env JARVIS__TTS__CARTESIA__CHUNK_BY_SENTENCE (already switched: voice-cartesia-6)
 RESTARTED: jarvis running
 update_exit=0
-PASS     CHK-TIME: real_rome_time=14:17 status=done secs=1 tool_errors=0 reply='Sono le 14:17, domenica 1 novembre 2026.'
-FAIL     check_stop_does_not_resume: api error: Dodaios at http://127.0.0.1:47821 is unreachable.
+PASS     CHK-TIME: real_rome_time=14:22 status=done secs=2 tool_errors=0 reply='Sono le quattordici e ventidue, ora italiana.'
+PASS     CHK-STOP: first=cancelled second=done second_len=45 resumed=False leaked_internal_text=False reply='Sono le quattordici e ventidue, ora italiana.'
 SKIPPED  CHK-WIKI-HONEST: live memory check is off: it writes to the real profile
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
-SUMMARY: 2 PASS, 1 FAIL, 0 BLOCKED, 1 SKIPPED
-check_exit=1
-finished=2026-11-01T13:17:33Z
+SUMMARY: 3 PASS, 0 FAIL, 0 BLOCKED, 1 SKIPPED
+check_exit=0
+finished=2026-11-01T13:22:34Z
