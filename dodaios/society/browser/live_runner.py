@@ -872,14 +872,20 @@ class Worker:
                 max_steps=args.get("max_steps", 25), on_step_start=before_step, on_step_end=step
             )
             successful = history.is_successful() is True
+            agent_errors = [str(e) for e in history.errors() if e]
+            # The last few agent errors say WHY a task failed (parse error, rejected output,
+            # blocked page). Bounded, and never the page text.
+            failure = "Browser task did not complete successfully"
+            if agent_errors:
+                failure += ": " + " | ".join(e[:160] for e in agent_errors[-3:])
             return {
                 "ok": successful,
                 "final_result": history.final_result(),
                 "urls": history.urls(),
-                "errors": [e for e in history.errors() if e],
+                "errors": agent_errors,
                 "steps": history.number_of_steps(),
                 "seconds": time.monotonic() - started,
-                "error": None if successful else "Browser task did not complete successfully",
+                "error": None if successful else failure,
                 # One SDK owns downloads; a second Playwright save would duplicate files.
                 "artifacts": sorted(set(self.browser.downloaded_files) - previous_downloads),
             }
