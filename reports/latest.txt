@@ -1,4 +1,4 @@
-sha=b2cc641be9c37dc4e0c502f23ac2bc71a5b875fb started=2026-10-31T20:59:02Z
+sha=ad3c26a3e17a8d93e3602031b01a72bce369523d started=2026-11-01T08:29:01Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -51,8 +51,8 @@ sha=b2cc641be9c37dc4e0c502f23ac2bc71a5b875fb started=2026-10-31T20:59:02Z
 = it-voice-50.patch (already applied)
 = it-privacy-51.patch (already applied)
 = it-honesty-52.patch (already applied)
-+ it-privacy-53.patch applied
-+ it-skills-54.patch applied
+= it-privacy-53.patch (already applied)
+= it-skills-54.patch (already applied)
 = env JARVIS__BRAIN__WORKER__PROVIDER (already set)
 = env JARVIS__BRAIN__WORKER__MODEL (already set)
 = env JARVIS__BRAIN__PROVIDERS__OPENROUTER__MODEL (already set)
@@ -68,12 +68,12 @@ sha=b2cc641be9c37dc4e0c502f23ac2bc71a5b875fb started=2026-10-31T20:59:02Z
 = env JARVIS_BROWSER_VOICE_ENGINE (already switched: voice-cartesia-5)
 = env JARVIS__BRAIN__REPLY_LANGUAGE (already switched: voice-lang-it-1)
 = env JARVIS__TTS__CARTESIA__CHUNK_BY_SENTENCE (already switched: voice-cartesia-6)
-RESTARTED: jarvis running
+Nothing to apply; server not restarted (use --restart to force).
 update_exit=0
-PASS     CHK-TIME: real_rome_time=21:59 status=done secs=2 tool_errors=0 reply='Sono le ventidue meno uno, Davide: manca un minuto alle dieci di sera.'
-PASS     CHK-STOP: first=cancelled second=done second_len=46 resumed=False leaked_internal_text=False reply='Sono le ventuno e cinquantanove, ora italiana.'
+PASS     CHK-TIME: real_rome_time=09:29 status=done secs=0 tool_errors=0 reply='Sono le nove e ventinove, domenica mattina, primo novembre.'
+PASS     CHK-STOP: first=cancelled second=done second_len=61 resumed=False leaked_internal_text=False reply='Sono le nove e ventinove di mattina, domenica primo novembre.'
 SKIPPED  CHK-WIKI-HONEST: live memory check is off: it writes to the real profile
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
 SUMMARY: 3 PASS, 0 FAIL, 0 BLOCKED, 1 SKIPPED
 check_exit=0
-finished=2026-10-31T20:59:35Z
+finished=2026-11-01T08:29:22Z
