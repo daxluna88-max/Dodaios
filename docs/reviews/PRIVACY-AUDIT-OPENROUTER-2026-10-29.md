@@ -100,3 +100,13 @@ Preserving and protecting the owner's personal data as much as possible is a per
 Option A = one notice plus a setting. The setting is the existing switch `[brain] personal_context_to_cloud` (Settings -> General -> Privacy). The notice: the corrected wording of that switch (it, en; commit `74349c89e`) states what is sent and what is not, and a first-use notice must tell the person once that profile and memory go to the model provider while the switch is on. Provider-side protection (`it-privacy-51`) is already live.
 
 NOT built: the one-time first-send notice and a visible "protection" line; both are frontend work that needs the UI rebuilt on the VPS (`scripts/pilot/rebuild-ui.sh`, manual, dry run by default, real run NOT tested). "For now" means C (minimal memory per question) and D (local-only) stay on the list for later.
+
+## Addendum 2026-11-01 — realtime and GPT-Live paths (Claude; uncommitted working-tree change)
+
+- `dodaios/realtime/session.py`: `_session_instructions(personal_context=...)` leaves out the learned notebooks (`_learned_block`) and the dated plans when `[brain] personal_context_to_cloud` is off; the three call sites read the switch from the session config. Test: `test_the_realtime_instructions_drop_the_learned_block_when_the_privacy_switch_is_off`.
+- `dodaios/live/session.py` (GPT-Live): the notebooks (`_memory()`) and the dated plans (`upcoming_block`) are left out under the same condition. No dedicated test yet.
+- The learning review was already gated (`it-privacy-53`).
+- NOT examined / NOT gated: the Society agents' own review (`dodaios/society/review.py` sends `current_user_profile` to a model; separate notebooks of the agents, a different consent question), the heavy-worker mission path (`spawn_worker`: sends the utterance plus recent chat history as hints, which are not gated by design), and replay. The user's standing instructions file (`<Name>.md`) is still sent by both voice paths.
+- Not run: request-capture tests with a real realtime provider; only the prompt builder is covered.
+
+- Decision (Dax, 2026-11-01): the voice gate follows the switch only, like the classic brain; it does not look at the provider. With the switch off, a local realtime/GPT-Live model also loses the notebooks and dated plans. Filtering by cloud-only provider is not built.

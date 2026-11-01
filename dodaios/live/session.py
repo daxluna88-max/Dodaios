@@ -43,10 +43,20 @@ def _identity(config: Any) -> str:
     except Exception:  # noqa: BLE001 — never block a call on the identity block
         log.warning("live voice: identity block unavailable", exc_info=True)
         return ""
-    return identity + _instructions(config) + _memory() + _initiative(config)
+    # Privacy switch off: the learned notebooks and the dated plans stay out of
+    # the call (same rule as the typed brain, ``_personal_context_allowed``).
+    personal = bool(
+        getattr(getattr(config, "brain", None), "personal_context_to_cloud", True)
+    )
+    return (
+        identity
+        + _instructions(config)
+        + (_memory() if personal else "")
+        + _initiative(config, plans=personal)
+    )
 
 
-def _initiative(config: Any) -> str:
+def _initiative(config: Any, *, plans: bool = True) -> str:
     """The initiative rule and the dated plans it may draw on; ``""`` on a fault.
 
     A call is short-lived, so the dated plans are read once at its start like
@@ -56,7 +66,7 @@ def _initiative(config: Any) -> str:
         from dodaios.brain import proactivity
 
         level = proactivity.current_level(config)
-        blocks = [proactivity.directive(level), proactivity.upcoming_block(level)]
+        blocks = [proactivity.directive(level), proactivity.upcoming_block(level) if plans else ""]
     except Exception:  # noqa: BLE001 — never block a call on the initiative rule
         log.warning("live voice: initiative rule unavailable", exc_info=True)
         return ""
