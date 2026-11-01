@@ -683,3 +683,15 @@ def test_italian_video_outro_is_a_hallucination() -> None:
     assert _is_silence_hallucination("Grazie per l'attenzione.")
     assert _is_phantom("Grazie per la visione!")
     assert not _is_silence_hallucination("Grazie per la visione che hai condiviso, ora spiegami il piano.")
+
+
+def test_room_noise_does_not_interrupt_jarvis() -> None:
+    from dodaios.browser_voice.session import _is_phantom, _is_weak_barge_in
+
+    for noise in ("Bau bau", "Ahah", "Pff", "Haha. Ahah", "Ah"):
+        assert _is_phantom(noise), noise
+    assert _is_weak_barge_in("cane")  # one ordinary word is not an interruption
+    assert not _is_weak_barge_in("Stop")
+    assert not _is_weak_barge_in("aspetta un attimo")
+    assert not _is_weak_barge_in("No, non intendevo questo")
+    assert not _is_phantom("Ah, adesso ho capito cosa intendi")
