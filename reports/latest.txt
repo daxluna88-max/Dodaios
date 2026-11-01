@@ -1,4 +1,4 @@
-sha=0a3bec66a5a82804e9b7e670fee9c71e1cfd45db started=2026-11-01T10:36:01Z
+sha=4b26494c47e2548688620a7af2226aeb9d27be6a started=2026-11-01T10:48:01Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -53,7 +53,8 @@ sha=0a3bec66a5a82804e9b7e670fee9c71e1cfd45db started=2026-11-01T10:36:01Z
 = it-honesty-52.patch (already applied)
 = it-privacy-53.patch (already applied)
 = it-skills-54.patch (already applied)
-+ it-voice-55.patch applied
+= it-voice-55.patch (already applied)
++ it-voice-56.patch applied
 = env JARVIS__BRAIN__WORKER__PROVIDER (already set)
 = env JARVIS__BRAIN__WORKER__MODEL (already set)
 = env JARVIS__BRAIN__PROVIDERS__OPENROUTER__MODEL (already set)
@@ -71,10 +72,10 @@ sha=0a3bec66a5a82804e9b7e670fee9c71e1cfd45db started=2026-11-01T10:36:01Z
 = env JARVIS__TTS__CARTESIA__CHUNK_BY_SENTENCE (already switched: voice-cartesia-6)
 RESTARTED: jarvis running
 update_exit=0
-PASS     CHK-TIME: real_rome_time=11:36 status=done secs=2 tool_errors=0 reply="Sono le undici e trentasei di mattina, ora italiana.\n\nLa tua domanda però non c'entra con i consigli sulle skill, quindi"
-PASS     CHK-STOP: first=cancelled second=done second_len=215 resumed=False leaked_internal_text=False reply="Sono le undici e trentasei di mattina, domenica primo novembre.\n\nIl blocco skill che è arrivato insieme alla tua domanda non c'entra: chiedere l'ora non è una richiesta di consigli sulle skill, quindi l'ho ignorato."
+PASS     CHK-TIME: real_rome_time=11:48 status=done secs=1 tool_errors=0 reply="Sono le 11:48, domenica 1 novembre.\n\nNon serve nessuna skill per questo, quindi la richiesta di consiglio skill non c'en"
+FAIL     CHK-STOP: first=cancelled second=done second_len=270 resumed=True leaked_internal_text=False reply="Sono le 11:48 di domenica 1 novembre 2026, ora di Roma.\n\nLa richiesta non c'entra con la skill suggerita: mi hai solo chiesto l'ora, e per quello non serve nessuno strumento particolare. Se vuoi, posso riprendere il racconto sul pane rosso che avevi lasciato in sospeso."
 SKIPPED  CHK-WIKI-HONEST: live memory check is off: it writes to the real profile
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
-SUMMARY: 3 PASS, 0 FAIL, 0 BLOCKED, 1 SKIPPED
-check_exit=0
-finished=2026-11-01T10:36:34Z
+SUMMARY: 2 PASS, 1 FAIL, 0 BLOCKED, 1 SKIPPED
+check_exit=1
+finished=2026-11-01T10:48:34Z
