@@ -1,4 +1,4 @@
-sha=3a80d6f341d64baa92f4335ba304869fbcd3c9ec started=2026-11-01T13:31:01Z
+sha=b86e70f19434c9bf2b17ad6d439e2031ff3d3303 started=2026-11-01T19:04:01Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -59,7 +59,8 @@ sha=3a80d6f341d64baa92f4335ba304869fbcd3c9ec started=2026-11-01T13:31:01Z
 = it-browser-58.patch (already applied)
 = it-browser-59.patch (already applied)
 = it-browser-60.patch (already applied)
-+ it-browser-61.patch applied
+= it-browser-61.patch (already applied)
++ it-voice-62.patch applied
 = env JARVIS__BRAIN__WORKER__PROVIDER (already set)
 = env JARVIS__BRAIN__WORKER__MODEL (already set)
 = env JARVIS__BRAIN__PROVIDERS__OPENROUTER__MODEL (already set)
@@ -77,10 +78,10 @@ sha=3a80d6f341d64baa92f4335ba304869fbcd3c9ec started=2026-11-01T13:31:01Z
 = env JARVIS__TTS__CARTESIA__CHUNK_BY_SENTENCE (already switched: voice-cartesia-6)
 RESTARTED: jarvis running
 update_exit=0
-FAIL     check_time: api error: Dodaios at http://127.0.0.1:47821 is unreachable.
-FAIL     check_stop_does_not_resume: api error: Dodaios at http://127.0.0.1:47821 is unreachable.
+PASS     CHK-TIME: real_rome_time=20:04 status=done secs=1 tool_errors=0 reply='Sono le venti e quattro, domenica primo novembre.\n\nSe ti serve un promemoria per stasera, la skill `promemoria` è lì pro'
+PASS     CHK-STOP: first=cancelled second=done second_len=49 resumed=False leaked_internal_text=False reply='Sono le venti e quattro, domenica primo novembre.'
 SKIPPED  CHK-WIKI-HONEST: live memory check is off: it writes to the real profile
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
-SUMMARY: 1 PASS, 2 FAIL, 0 BLOCKED, 1 SKIPPED
-check_exit=1
-finished=2026-11-01T13:31:28Z
+SUMMARY: 3 PASS, 0 FAIL, 0 BLOCKED, 1 SKIPPED
+check_exit=0
+finished=2026-11-01T19:04:35Z
