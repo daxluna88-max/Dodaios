@@ -1,4 +1,4 @@
-sha=1fb4bb19fa072e8d9e898a09fc1161c640e37f5d started=2026-11-01T11:27:01Z
+sha=b2afaf9ebbe86d0a618117ebfa71c06c456dd4f7 started=2026-11-01T13:17:02Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -55,7 +55,8 @@ sha=1fb4bb19fa072e8d9e898a09fc1161c640e37f5d started=2026-11-01T11:27:01Z
 = it-skills-54.patch (already applied)
 = it-voice-55.patch (already applied)
 = it-voice-56.patch (already applied)
-+ it-skills-57.patch applied
+= it-skills-57.patch (already applied)
++ it-browser-58.patch applied
 = env JARVIS__BRAIN__WORKER__PROVIDER (already set)
 = env JARVIS__BRAIN__WORKER__MODEL (already set)
 = env JARVIS__BRAIN__PROVIDERS__OPENROUTER__MODEL (already set)
@@ -73,10 +74,10 @@ sha=1fb4bb19fa072e8d9e898a09fc1161c640e37f5d started=2026-11-01T11:27:01Z
 = env JARVIS__TTS__CARTESIA__CHUNK_BY_SENTENCE (already switched: voice-cartesia-6)
 RESTARTED: jarvis running
 update_exit=0
-PASS     CHK-TIME: real_rome_time=12:27 status=done secs=1 tool_errors=0 reply="Sono le 12:27, Davide.\n\nNessuna skill da consigliare per una domanda così, ovviamente. Se vuoi sapere com'è messa la cac"
-PASS     CHK-STOP: first=cancelled second=done second_len=28 resumed=False leaked_internal_text=False reply='Sono le 12:27, ora italiana.'
+PASS     CHK-TIME: real_rome_time=14:17 status=done secs=1 tool_errors=0 reply='Sono le 14:17, domenica 1 novembre 2026.'
+FAIL     check_stop_does_not_resume: api error: Dodaios at http://127.0.0.1:47821 is unreachable.
 SKIPPED  CHK-WIKI-HONEST: live memory check is off: it writes to the real profile
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
-SUMMARY: 3 PASS, 0 FAIL, 0 BLOCKED, 1 SKIPPED
-check_exit=0
-finished=2026-11-01T11:27:36Z
+SUMMARY: 2 PASS, 1 FAIL, 0 BLOCKED, 1 SKIPPED
+check_exit=1
+finished=2026-11-01T13:17:33Z
