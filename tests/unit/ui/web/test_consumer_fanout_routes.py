@@ -190,3 +190,31 @@ def test_status_under_work_says_fanout_is_not_available_and_lists_nothing(client
     monkeypatch.setenv("JARVIS_PRODUCT", "work")
     data = client.get("/api/consumer/status").json()
     assert data == {"available": False, "reason": "work_local_only", "providers": []}
+
+
+def test_fanout_can_return_one_final_answer(client):
+    body = {
+        "task": "Say hi",
+        "branches": [{"provider": "claude-api", "est_cost": 0.01},
+                     {"provider": "codex", "est_cost": 0.01}],
+        "budget": 1.0,
+        "synthesizer": {"provider": "claude-api", "est_cost": 0.01},
+    }
+    out = client.post("/api/consumer/fanout", json=body).json()
+    assert out["final"]["status"] == "ok" and out["final"]["text"] == "answer"
+    assert sorted(out["final"]["sources"]) == ["b1", "b2"]
+    # branches + synthesis: the aggregate budget saw all three reservations
+    assert out["report"]["budget_reserved"] == pytest.approx(0.03)
+
+
+def test_fanout_without_synthesizer_has_no_final(client):
+    body = {"task": "Say hi", "branches": [{"provider": "claude-api", "est_cost": 0.01}],
+            "budget": 1.0}
+    assert client.post("/api/consumer/fanout", json=body).json()["final"] is None
+
+
+def test_unavailable_synthesizer_is_reported_not_substituted(client):
+    body = {"task": "Say hi", "branches": [{"provider": "claude-api", "est_cost": 0.01}],
+            "budget": 1.0, "synthesizer": {"provider": "not-installed"}}
+    out = client.post("/api/consumer/fanout", json=body).json()
+    assert out["final"]["status"] == "refused" and out["final"]["text"] == ""
