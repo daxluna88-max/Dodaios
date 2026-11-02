@@ -57,13 +57,35 @@ LEGACY_CONFIG_FILE_NAMES = ("jarvis.toml",)
 # The credential-store service every key is filed under (Windows Credential
 # Manager, macOS Keychain, Secret Service, the 0600 file fallback). Spelled as
 # a literal of its own, like the commands: it does not follow the display name.
-KEYRING_SERVICE_NAME = "dodaios"
+#
+# A product launch (``dodaios.core.product_profile``) pins ``JARVIS_KEYRING_SERVICE`` to
+# ``dodaios-work`` / ``dodaios-consumer`` BEFORE this module is imported: that product then has a
+# vault of its own and NO fallback to the shared service below (a Consumer key must never be
+# readable from Work). Any other value is ignored.
+_PRODUCT_SERVICES = ("dodaios-work", "dodaios-consumer")
+_scoped = (os.environ.get("JARVIS_KEYRING_SERVICE") or "").strip()
+PRODUCT_SCOPED_SERVICE = _scoped if _scoped in _PRODUCT_SERVICES else None
+KEYRING_SERVICE_NAME = PRODUCT_SCOPED_SERVICE or "dodaios"
 # Services earlier versions filed keys under. ``dodaios.core.config`` reads
 # them as a fallback and deletes from them too, and a background job copies
 # their entries once (``dodaios.core.identity_credentials``). Nothing deletes
 # a legacy entry except an explicit delete of that key: it is the way back for
 # a downgrade.
-LEGACY_KEYRING_SERVICE_NAMES = (PERSISTENT_SLUG,)
+LEGACY_KEYRING_SERVICE_NAMES = () if PRODUCT_SCOPED_SERVICE else (PERSISTENT_SLUG,)
+
+
+def pin_product_service(service: str) -> None:
+    """Switch this process to a product's own credential service (and drop the shared fallback).
+
+    For the launcher: ``--product`` is read after this module is imported but before
+    ``dodaios.core.config`` binds the service, which is the last moment it can still change.
+    Raises ``ValueError`` for any service but the two product ones.
+    """
+    global PRODUCT_SCOPED_SERVICE, KEYRING_SERVICE_NAME, LEGACY_KEYRING_SERVICE_NAMES
+    if service not in _PRODUCT_SERVICES:
+        raise ValueError(f"{service!r} is not a product credential service")
+    PRODUCT_SCOPED_SERVICE = KEYRING_SERVICE_NAME = service
+    LEGACY_KEYRING_SERVICE_NAMES = ()
 CONTROL_KEY_PREFIX = "jctl_"
 SESSION_COOKIE_NAME = "jarvis_session"
 # The file the one-line installer writes into the checkout it manages. Its
@@ -328,6 +350,7 @@ __all__ = [
     "FALLBACK_USER_DATA_DIR_NAME",
     "FISH_CONF_FILE_NAME",
     "KEYRING_SERVICE_NAME",
+    "pin_product_service",
     "LAUNCHER_ENTRY_NAME",
     "LEGACY_KEYRING_SERVICE_NAMES",
     "LEGACY_LINUX_APP_NAMES",
