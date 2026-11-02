@@ -99,7 +99,9 @@ def _status_rows() -> list[dict[str, Any]]:
     rows = []
     for name in sorted(registry.available()):
         kind = connection_kind(name)
-        rows.append({"id": name, "kind": kind, "local": kind == "local",
+        # "local" is where the call goes (loopback), not how it is billed (``kind``).
+        rows.append({"id": name, "kind": kind,
+                     "local": engine_policy.destination_of(name).local,
                      "authenticated": _authenticated(name, kind, registry)})
     return rows
 

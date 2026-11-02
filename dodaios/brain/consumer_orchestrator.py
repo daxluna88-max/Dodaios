@@ -276,7 +276,10 @@ class Orchestrator:
             refusal = self._refusal(b)
             if refusal:
                 return BranchResult(b.branch_id, b.provider, "refused", reason=refusal)
-            local = b.kind == "local"
+            # Locality is the REAL destination, never the provider name or the caller's ``kind``
+            # (``kind`` only says how the engine is billed). Anything unproven is remote.
+            dest = engine_policy.destination_of(b.provider, b.brain)
+            local = b.kind == "local" and dest.local
             prompt, record = self.gate.prepare(
                 items, turn_id=turn_id, branch_id=b.branch_id, destination=b.provider, local=local
             )
@@ -300,6 +303,11 @@ class Orchestrator:
                 )
 
             async with sem:
+                # Bind the approved destination to the call: if the endpoint moved since the
+                # prompt was prepared, do not send it (it was cleared for a different host).
+                again = engine_policy.destination_of(b.provider, b.brain)
+                if (again.local, again.host) != (dest.local, dest.host):
+                    return done("refused", reason="the engine endpoint changed before the call")
                 started = timing["start"] = time.perf_counter()
                 try:
                     async with asyncio.timeout(b.timeout_s):
