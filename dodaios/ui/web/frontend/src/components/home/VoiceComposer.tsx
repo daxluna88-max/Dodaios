@@ -7,6 +7,7 @@ import { useVoiceReadiness } from "@/hooks/useVoiceReadiness";
 import { useVoiceEngineDisplay } from "@/hooks/useVoiceEngineDisplay";
 import { usePromptMode } from "@/hooks/usePromptMode";
 import { fill, useT } from "@/i18n";
+import { MicControls } from "@/components/voice/MicControls";
 import { cn } from "@/lib/utils";
 
 /**
@@ -135,7 +136,8 @@ export function VoiceComposer({ hint, onExit }: { hint: string; onExit?: () => v
           </button>
         )}
       </div>
-      <div className="flex justify-end px-3">
+      <div className="flex flex-wrap items-center justify-between gap-1.5 px-3">
+        <MicControls live={live} />
         <button
           type="button"
           onClick={() => setActiveSection("apikeys")}

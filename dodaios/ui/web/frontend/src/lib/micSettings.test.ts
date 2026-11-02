@@ -19,3 +19,24 @@ describe("micSettings", () => {
     expect(micGateAfterUserTurn("push", false)).toBe(false);
   });
 });
+
+import { closeMicGateAfterUserTurn, getMicState, resetMicGate, setMicGateOpen, setMicModeSetting } from "./micSettings";
+
+describe("micSettings store", () => {
+  it("auto closes after the user's turn and reopens at the next call", () => {
+    setMicModeSetting("auto");
+    expect(getMicState().open).toBe(true);
+    closeMicGateAfterUserTurn();
+    expect(getMicState().open).toBe(false);
+    resetMicGate();
+    expect(getMicState().open).toBe(true);
+  });
+  it("push starts closed and ignores the end of the user's turn", () => {
+    setMicModeSetting("push");
+    expect(getMicState().open).toBe(false);
+    setMicGateOpen(true);
+    closeMicGateAfterUserTurn();
+    expect(getMicState().open).toBe(true);
+    setMicModeSetting("auto");
+  });
+});

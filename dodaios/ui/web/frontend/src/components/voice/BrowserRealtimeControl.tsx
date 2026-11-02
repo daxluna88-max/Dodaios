@@ -22,8 +22,7 @@ import {
 import { useEventStore, type VoiceState } from "@/store/events";
 import { setReloadHold } from "@/lib/reloadHold";
 import {
-  loadMicDeviceId, loadMicMode, micGateAfterUserTurn, micGateOpenAtStart,
-  saveMicDeviceId, saveMicMode, type MicMode,
+  closeMicGateAfterUserTurn, refreshMicDevices, resetMicGate, useMicSettings,
 } from "@/lib/micSettings";
 import { registerRealtimeAudioPreparation } from "@/lib/realtimeAudioPreparation";
 import { cn } from "@/lib/utils";
@@ -145,13 +144,8 @@ export function BrowserRealtimeControl({ controlOnly = false }: { controlOnly?: 
   // repaint a five-segment meter.
   const levelRef = useRef(0);
   const clientRef = useRef<RealtimeAudioClient | null>(null);
-  // Microphone choice and gate (auto / push-to-talk / always on), per viewer.
-  const [micMode, setMicMode] = useState<MicMode>(loadMicMode);
-  const [micDeviceId, setMicDeviceId] = useState(loadMicDeviceId);
-  const [micDevices, setMicDevices] = useState<{ id: string; label: string }[]>([]);
-  const [micOpen, setMicOpen] = useState(() => micGateOpenAtStart(loadMicMode()));
-  const micModeRef = useRef(micMode);
-  micModeRef.current = micMode;
+  // Microphone choice and gate live in lib/micSettings; the controls are in the voice composer.
+  const { deviceId: micDeviceId, open: micOpen } = useMicSettings();
   const events = useEventStore((store) => store.events);
   const solo = useEventStore((store) => store.solo);
   const activeSection = useEventStore((store) => store.activeSection);
@@ -215,29 +209,11 @@ export function BrowserRealtimeControl({ controlOnly = false }: { controlOnly?: 
   useEffect(() => {
     clientRef.current?.setMicOpen?.(micOpen);
   }, [micOpen, state]);
-  // Device labels are only exposed after the microphone permission is granted.
+  // A new call starts with the gate where the mode wants it; labels appear once permission is granted.
   useEffect(() => {
-    if (state !== "connected" || typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) return;
-    let cancelled = false;
-    void navigator.mediaDevices.enumerateDevices().then((all) => {
-      if (cancelled) return;
-      setMicDevices(
-        all.filter((d) => d.kind === "audioinput" && d.deviceId)
-          .map((d, i) => ({ id: d.deviceId, label: d.label || `${i + 1}` })),
-      );
-    }, () => undefined);
-    return () => { cancelled = true; };
+    if (state === "connecting") resetMicGate();
+    if (state === "connected") void refreshMicDevices();
   }, [state]);
-  const changeMicMode = (mode: MicMode) => {
-    setMicMode(mode);
-    saveMicMode(mode);
-    setMicOpen(micGateOpenAtStart(mode));
-  };
-  const changeMicDevice = (deviceId: string) => {
-    setMicDeviceId(deviceId);
-    saveMicDeviceId(deviceId);
-    // getUserMedia has no live switch: the new device applies at the next call.
-  };
 
   const stop = useCallback(async () => {
     connectionGenerationRef.current += 1;
@@ -324,7 +300,7 @@ export function BrowserRealtimeControl({ controlOnly = false }: { controlOnly?: 
           if (!isCurrent()) return;
           // Auto mode: the person's turn is over, close the gate until they tap.
           if (role === "user" && isFinal) {
-            setMicOpen((open) => micGateAfterUserTurn(micModeRef.current, open));
+            closeMicGateAfterUserTurn();
           }
           // Live adapters project all speaker snapshots onto the shared bus.
           // Keeping a second local caption would overwrite the conversation.
@@ -700,46 +676,6 @@ export function BrowserRealtimeControl({ controlOnly = false }: { controlOnly?: 
         />
         <span>{connecting ? t("sidebar.realtime_connecting") : label}</span>
       </Button>
-      {connected && micMode !== "always" && (
-        <Button
-          variant={micOpen ? "secondary" : "outline"}
-          size="sm"
-          className="mt-2 w-full touch-manipulation select-none"
-          aria-pressed={micOpen}
-          onClick={micMode === "auto" ? () => setMicOpen((open) => !open) : undefined}
-          onPointerDown={micMode === "push" ? () => setMicOpen(true) : undefined}
-          onPointerUp={micMode === "push" ? () => setMicOpen(false) : undefined}
-          onPointerLeave={micMode === "push" ? () => setMicOpen(false) : undefined}
-          onPointerCancel={micMode === "push" ? () => setMicOpen(false) : undefined}
-        >
-          {micMode === "push"
-            ? t(micOpen ? "sidebar.mic_push_active" : "sidebar.mic_push_hold")
-            : t(micOpen ? "sidebar.mic_auto_listening" : "sidebar.mic_auto_tap")}
-        </Button>
-      )}
-      <div className="mt-2 flex flex-col gap-1 text-micro text-muted-foreground">
-        <select
-          aria-label={t("sidebar.mic_mode_label")}
-          value={micMode}
-          onChange={(e) => changeMicMode(e.target.value as MicMode)}
-          className="w-full rounded border border-border bg-background px-1 py-0.5"
-        >
-          <option value="auto">{t("sidebar.mic_mode_auto")}</option>
-          <option value="push">{t("sidebar.mic_mode_push")}</option>
-          <option value="always">{t("sidebar.mic_mode_always")}</option>
-        </select>
-        {micDevices.length > 0 && (
-          <select
-            aria-label={t("sidebar.mic_device_label")}
-            value={micDevices.some((d) => d.id === micDeviceId) ? micDeviceId : ""}
-            onChange={(e) => changeMicDevice(e.target.value)}
-            className="w-full rounded border border-border bg-background px-1 py-0.5"
-          >
-            <option value="">{t("sidebar.mic_device_default")}</option>
-            {micDevices.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
-          </select>
-        )}
-      </div>
       {(connected || connecting) && (
         <div className="mt-2">
           <VoiceWaveform levelRef={levelRef} phase={phase} />
