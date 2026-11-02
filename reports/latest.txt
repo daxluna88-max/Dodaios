@@ -1,4 +1,4 @@
-sha=b86e70f19434c9bf2b17ad6d439e2031ff3d3303 started=2026-11-01T19:04:01Z
+sha=e64a38a8ee8373d59e9a3cb8dc151baec6ea3d47 started=2026-11-02T07:35:02Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -60,7 +60,7 @@ sha=b86e70f19434c9bf2b17ad6d439e2031ff3d3303 started=2026-11-01T19:04:01Z
 = it-browser-59.patch (already applied)
 = it-browser-60.patch (already applied)
 = it-browser-61.patch (already applied)
-+ it-voice-62.patch applied
+= it-voice-62.patch (already applied)
 = env JARVIS__BRAIN__WORKER__PROVIDER (already set)
 = env JARVIS__BRAIN__WORKER__MODEL (already set)
 = env JARVIS__BRAIN__PROVIDERS__OPENROUTER__MODEL (already set)
@@ -76,12 +76,13 @@ sha=b86e70f19434c9bf2b17ad6d439e2031ff3d3303 started=2026-11-01T19:04:01Z
 = env JARVIS_BROWSER_VOICE_ENGINE (already switched: voice-cartesia-5)
 = env JARVIS__BRAIN__REPLY_LANGUAGE (already switched: voice-lang-it-1)
 = env JARVIS__TTS__CARTESIA__CHUNK_BY_SENTENCE (already switched: voice-cartesia-6)
++ env JARVIS_BROWSER_VOICE_SILENCE_MS switched (voice-silence-1)
 RESTARTED: jarvis running
 update_exit=0
-PASS     CHK-TIME: real_rome_time=20:04 status=done secs=1 tool_errors=0 reply='Sono le venti e quattro, domenica primo novembre.\n\nSe ti serve un promemoria per stasera, la skill `promemoria` è lì pro'
-PASS     CHK-STOP: first=cancelled second=done second_len=49 resumed=False leaked_internal_text=False reply='Sono le venti e quattro, domenica primo novembre.'
+PASS     CHK-TIME: real_rome_time=08:35 status=done secs=2 tool_errors=0 reply='Sono le otto e trentacinque di mattina, ora italiana.'
+PASS     CHK-STOP: first=cancelled second=done second_len=75 resumed=False leaked_internal_text=False reply='Sono le otto e trentacinque del mattino, ora italiana, lunedì due novembre.'
 SKIPPED  CHK-WIKI-HONEST: live memory check is off: it writes to the real profile
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
 SUMMARY: 3 PASS, 0 FAIL, 0 BLOCKED, 1 SKIPPED
 check_exit=0
-finished=2026-11-01T19:04:35Z
+finished=2026-11-02T07:35:39Z
