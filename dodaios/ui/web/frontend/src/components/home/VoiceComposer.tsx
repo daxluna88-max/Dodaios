@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { Keyboard, Loader2, Mic, Sparkles } from "lucide-react";
+import { Keyboard, Loader2, Mic, PhoneOff, Sparkles } from "lucide-react";
 
 import { useEventStore } from "@/store/events";
 import { useVoiceCall } from "@/components/agentic/useVoiceCall";
@@ -57,6 +57,15 @@ export function VoiceComposer({ hint, onExit }: { hint: string; onExit?: () => v
 
   return (
     <div className="flex flex-col gap-1.5" data-testid="voice-composer" data-active={active || undefined}>
+      {live && (
+        <p
+          className="px-3 text-center text-reading text-muted-foreground"
+          data-testid="voice-hint"
+          aria-live="polite"
+        >
+          {hint}
+        </p>
+      )}
       <div
         data-tour="voice-bar"
         className="flex items-center gap-1 rounded-[22px] border border-border bg-card px-2.5 py-2.5 shadow-rim">
@@ -72,13 +81,17 @@ export function VoiceComposer({ hint, onExit }: { hint: string; onExit?: () => v
             <Keyboard className="h-4 w-4" aria-hidden />
           </button>
         )}
-        <span
-          className="min-w-0 flex-1 truncate px-1.5 text-reading text-muted-foreground"
-          data-testid="voice-hint"
-          aria-live="polite"
-        >
-          {hint}
-        </span>
+        {live ? (
+          <span className="flex-1" />
+        ) : (
+          <span
+            className="min-w-0 flex-1 truncate px-1.5 text-reading text-muted-foreground"
+            data-testid="voice-hint"
+            aria-live="polite"
+          >
+            {hint}
+          </span>
+        )}
         {promptMode.enabled !== null && (
           <button
             type="button"
@@ -109,13 +122,13 @@ export function VoiceComposer({ hint, onExit }: { hint: string; onExit?: () => v
             type="button"
             onClick={onCall}
             disabled={busy || connecting}
-            aria-label={t("home.bar_stop")}
-            title={t("home.bar_stop")}
+            aria-label={t("home.call_end")}
+            title={t("home.call_end_hint")}
             data-testid="voice-call-stop"
-            className="ml-0.5 inline-flex h-8 shrink-0 items-center gap-2 rounded-full bg-accent-soft px-3 text-sm font-medium text-accent transition-colors hover:bg-accent/20 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="ml-0.5 inline-flex h-8 shrink-0 items-center gap-2 rounded-full bg-destructive/10 px-3 text-sm font-medium text-destructive transition-colors hover:bg-destructive/20 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <BreathingDots />
-            {t("assistant_chat.voice_stop")}
+            <PhoneOff className="h-4 w-4" aria-hidden />
+            {t("home.call_end")}
           </button>
         ) : (
           <button
@@ -136,8 +149,8 @@ export function VoiceComposer({ hint, onExit }: { hint: string; onExit?: () => v
           </button>
         )}
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-1.5 px-3">
-        <MicControls live={live} />
+      <MicControls live={live} />
+      <div className="flex justify-end px-3">
         <button
           type="button"
           onClick={() => setActiveSection("apikeys")}
@@ -150,20 +163,5 @@ export function VoiceComposer({ hint, onExit }: { hint: string; onExit?: () => v
         </button>
       </div>
     </div>
-  );
-}
-
-/** Three dots breathing one after another — a call is open. */
-function BreathingDots() {
-  return (
-    <span className="inline-flex items-center gap-[3px]" aria-hidden>
-      {[0, 200, 400].map((delay) => (
-        <span
-          key={delay}
-          className="h-1.5 w-1.5 rounded-full bg-current animate-pulse motion-reduce:animate-none"
-          style={{ animationDelay: `${delay}ms` }}
-        />
-      ))}
-    </span>
   );
 }

@@ -885,10 +885,11 @@
     "mic_mode_always": "Always on",
     "mic_device_label": "Microphone",
     "mic_device_default": "System default",
-    "mic_auto_listening": "Listening… (tap to pause)",
+    "mic_auto_listening": "Listening… tap to pause",
     "mic_auto_tap": "Tap to speak",
     "mic_push_hold": "Hold to talk",
-    "mic_push_active": "Speak now…"
+    "mic_push_active": "Speak… release to send",
+    "mic_always_on": "Microphone always on"
   },
   "provider_billing": {
     "api": "API，按用量计费",
@@ -957,7 +958,9 @@
     "prompt_mode_failed": "无法切换提示词模式。",
     "theme_to_light": "切换到浅色模式",
     "theme_to_dark": "切换到深色模式",
-    "back_to_assistant": "返回 {name}"
+    "back_to_assistant": "返回 {name}",
+    "call_end": "结束通话",
+    "call_end_hint": "结束通话。对话会保留在历史记录中。"
   },
   "assistant_chat": {
     "voice_enter": "语音模式",

@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { Mic, MicOff } from "lucide-react";
 
 import { useT } from "@/i18n";
 import {
@@ -25,7 +26,7 @@ export function MicControls({ live }: { live: boolean }) {
   const gate = live && mode !== "always";
   const push = mode === "push";
   return (
-    <div className="flex flex-wrap items-center gap-1.5" data-testid="mic-controls">
+    <div className="flex flex-col gap-2" data-testid="mic-controls">
       {gate && (
         <button
           type="button"
@@ -39,18 +40,33 @@ export function MicControls({ live }: { live: boolean }) {
           } : undefined}
           onPointerUp={push ? () => setMicGateOpen(false) : undefined}
           onPointerCancel={push ? () => setMicGateOpen(false) : undefined}
-          style={push ? { touchAction: "none", WebkitTouchCallout: "none", WebkitUserSelect: "none" } : undefined}
           onContextMenu={push ? (e) => e.preventDefault() : undefined}
+          style={push ? { touchAction: "none", WebkitTouchCallout: "none", WebkitUserSelect: "none" } : undefined}
           className={cn(
-            "h-7 touch-manipulation select-none rounded-full px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            open ? "bg-accent-soft text-accent" : "border border-border text-foreground hover:bg-secondary",
+            "flex h-14 w-full touch-manipulation select-none items-center justify-center gap-2.5 rounded-2xl text-base font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            open ? "bg-accent-soft text-accent" : "bg-foreground text-background hover:bg-foreground/85",
           )}
         >
+          {open ? (
+            <Mic className="h-5 w-5 animate-pulse motion-reduce:animate-none" aria-hidden />
+          ) : (
+            <MicOff className="h-5 w-5" aria-hidden />
+          )}
           {push
             ? t(open ? "sidebar.mic_push_active" : "sidebar.mic_push_hold")
             : t(open ? "sidebar.mic_auto_listening" : "sidebar.mic_auto_tap")}
         </button>
       )}
+      {live && mode === "always" && (
+        <div
+          data-testid="mic-always"
+          className="flex h-10 w-full items-center justify-center gap-2 rounded-2xl bg-accent-soft text-sm font-medium text-accent"
+        >
+          <Mic className="h-4 w-4" aria-hidden />
+          {t("sidebar.mic_always_on")}
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-1.5">
       <select
         aria-label={t("sidebar.mic_mode_label")}
         data-testid="mic-mode"
@@ -74,6 +90,7 @@ export function MicControls({ live }: { live: boolean }) {
           {devices.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
         </select>
       )}
+      </div>
     </div>
   );
 }

@@ -885,10 +885,11 @@
     "mic_mode_always": "Always on",
     "mic_device_label": "Microphone",
     "mic_device_default": "System default",
-    "mic_auto_listening": "Listening… (tap to pause)",
+    "mic_auto_listening": "Listening… tap to pause",
     "mic_auto_tap": "Tap to speak",
     "mic_push_hold": "Hold to talk",
-    "mic_push_active": "Speak now…"
+    "mic_push_active": "Speak… release to send",
+    "mic_always_on": "Microphone always on"
   },
   "provider_billing": {
     "api": "API, faturação por utilização",
@@ -957,7 +958,9 @@
     "prompt_mode_failed": "Não foi possível alternar o Modo Prompt.",
     "theme_to_light": "Mudar para modo claro",
     "theme_to_dark": "Mudar para modo escuro",
-    "back_to_assistant": "Voltar a {name}"
+    "back_to_assistant": "Voltar a {name}",
+    "call_end": "Encerrar chamada",
+    "call_end_hint": "Encerra a chamada. A conversa fica no histórico."
   },
   "assistant_chat": {
     "voice_enter": "Modo de voz",

@@ -885,10 +885,11 @@
     "mic_mode_always": "Sempre acceso",
     "mic_device_label": "Microfono",
     "mic_device_default": "Predefinito di sistema",
-    "mic_auto_listening": "Ti ascolto… (tocca per mettere in pausa)",
+    "mic_auto_listening": "Ti ascolto… tocca per mettere in pausa",
     "mic_auto_tap": "Tocca per parlare",
     "mic_push_hold": "Tieni premuto per parlare",
-    "mic_push_active": "Parla ora…"
+    "mic_push_active": "Parla… rilascia per inviare",
+    "mic_always_on": "Microfono sempre acceso"
   },
   "provider_billing": {
     "api": "API, fatturazione a consumo",
@@ -957,7 +958,9 @@
     "prompt_mode_failed": "Impossibile cambiare la modalità prompt.",
     "theme_to_light": "Passa al tema chiaro",
     "theme_to_dark": "Passa al tema scuro",
-    "back_to_assistant": "Torna a {name}"
+    "back_to_assistant": "Torna a {name}",
+    "call_end": "Termina chiamata",
+    "call_end_hint": "Chiude la chiamata. La conversazione resta nella cronologia."
   },
   "assistant_chat": {
     "voice_enter": "Modalità vocale",
