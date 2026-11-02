@@ -878,7 +878,17 @@
     "resize_hint": "Arrasta para redimensionar a barra lateral — duplo clique para repor",
     "ide_navigation": "Navegação do IDE",
     "workspace_options": "Opções do espaço de trabalho",
-    "open_conversation_failed": "Não foi possível abrir a conversa"
+    "open_conversation_failed": "Não foi possível abrir a conversa",
+    "mic_mode_label": "Microphone mode",
+    "mic_mode_auto": "Automatic (speak, then tap)",
+    "mic_mode_push": "Hold to talk",
+    "mic_mode_always": "Always on",
+    "mic_device_label": "Microphone",
+    "mic_device_default": "System default",
+    "mic_auto_listening": "Listening… (tap to pause)",
+    "mic_auto_tap": "Tap to speak",
+    "mic_push_hold": "Hold to talk",
+    "mic_push_active": "Speak now…"
   },
   "provider_billing": {
     "api": "API, faturação por utilização",

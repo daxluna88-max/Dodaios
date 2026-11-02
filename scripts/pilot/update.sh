@@ -78,6 +78,8 @@ switch_env voice-lang-it-1 JARVIS__BRAIN__REPLY_LANGUAGE it
 # One Cartesia request per piece instead of one per sentence: fewer joins, so a cloned voice drifts less (voice change
 # and uneven intonation heard on 2026-10-30). The session already sends sentence-group pieces.
 switch_env voice-cartesia-6 JARVIS__TTS__CARTESIA__CHUNK_BY_SENTENCE false
+# A turn ends after 2.2 s of silence (was 1.4 s): people pausing to think were cut off. Chosen by Dax on 2026-11-02.
+switch_env voice-silence-1 JARVIS_BROWSER_VOICE_SILENCE_MS 2200
 
 if [ "$applied" -gt 0 ] || [ "${1:-}" = "--restart" ]; then
   pkill -x jarvis || true

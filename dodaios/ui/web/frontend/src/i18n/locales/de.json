@@ -878,7 +878,17 @@
     "resize_hint": "Ziehen, um die Seitenleiste anzupassen — Doppelklick setzt sie zurück",
     "ide_navigation": "IDE-Navigation",
     "workspace_options": "Workspace-Optionen",
-    "open_conversation_failed": "Unterhaltung konnte nicht geöffnet werden"
+    "open_conversation_failed": "Unterhaltung konnte nicht geöffnet werden",
+    "mic_mode_label": "Microphone mode",
+    "mic_mode_auto": "Automatic (speak, then tap)",
+    "mic_mode_push": "Hold to talk",
+    "mic_mode_always": "Always on",
+    "mic_device_label": "Microphone",
+    "mic_device_default": "System default",
+    "mic_auto_listening": "Listening… (tap to pause)",
+    "mic_auto_tap": "Tap to speak",
+    "mic_push_hold": "Hold to talk",
+    "mic_push_active": "Speak now…"
   },
   "provider_billing": {
     "api": "API, nutzungsabhängige Abrechnung",

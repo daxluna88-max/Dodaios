@@ -878,7 +878,17 @@
     "resize_hint": "Trascina per ridimensionare la barra laterale; fai doppio clic per ripristinarla",
     "ide_navigation": "Navigazione IDE",
     "workspace_options": "Opzioni dell'area di lavoro",
-    "open_conversation_failed": "Impossibile aprire la conversazione"
+    "open_conversation_failed": "Impossibile aprire la conversazione",
+    "mic_mode_label": "Modalità microfono",
+    "mic_mode_auto": "Automatica (parla, poi tocca)",
+    "mic_mode_push": "Tieni premuto per parlare",
+    "mic_mode_always": "Sempre acceso",
+    "mic_device_label": "Microfono",
+    "mic_device_default": "Predefinito di sistema",
+    "mic_auto_listening": "Ti ascolto… (tocca per mettere in pausa)",
+    "mic_auto_tap": "Tocca per parlare",
+    "mic_push_hold": "Tieni premuto per parlare",
+    "mic_push_active": "Parla ora…"
   },
   "provider_billing": {
     "api": "API, fatturazione a consumo",
