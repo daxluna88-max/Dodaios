@@ -39,6 +39,11 @@ processes. An unknown product name is an error, not a default.
   Jarvis-di-dax issue 16, NOT RUN), other fixed ports not listed above (voice worker, avatar
   server), OS identity (window title, icon, Windows AppUserModelID,
   autostart entries), installers, signing, upgrades of a real installed build, macOS/Windows.
+- Tool homes: under Work, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`, `GEMINI_HOME` and
+  `JARVIS_VOICE_ENGINE_HOME` point into `<work data dir>/tools/` (forced, even if the shell set
+  them), so Work never reads CLI histories or voice-engine setup of the Consumer side. Consumer
+  is unchanged. Cost: CLIs and voice models are set up again under Work. Not covered: Kimi
+  (its home is derived from `Path.home()`), `~/.ollama` (shared on purpose), autostart.
 - `JARVIS_PRODUCT` set by hand without `--product` still selects the policy but shares the
   vault and directory; use the flag.
 - Nothing migrates existing shared data or keys into a product; that is a separate, explicit

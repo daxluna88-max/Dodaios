@@ -1,0 +1,27 @@
+{
+ "verse": {
+  "stage": {"title":"Dodaios Verse","loading":"Caricamento del ponte","unavailable":"La nave richiede WebGL, che questa finestra non riesce ad avviare al momento.","deck_missing":"Questo ponte non è ancora stato costruito.","help":"In terza persona: WASD o i tasti freccia muovono il comandante, Maiusc accelera, E attiva la postazione a portata di mano. V passa alla vista dall'alto e viceversa. Trascina per guardarti intorno, scorri per ingrandire. Fai clic sul ponte per raggiungere un punto, su un membro dell'equipaggio per aprirne la scheda."},
+  "deck":{"label":"Ponte {n}","bridge":"Plancia di comando","bridge_about":"Ufficiali alle console e sala riunioni","ops":"Ponte operativo","ops_about":"Mensa, alloggi dell'equipaggio, archivio, simulatori","engineering":"Ingegneria del reattore","engineering_about":"Tecnici ai terminali: i tuoi agenti di programmazione","hangar":"Hangar principale","hangar_about":"I nuovi membri dell'equipaggio arrivano qui in navetta"},
+  "state":{"working":"In servizio","waiting":"Ha bisogno di te","idle":"Fuori servizio","paused":"In pausa","error":"Guasto"},
+  "crew":{"aboard":"{count} a bordo","working":"{count} in servizio","waiting":"{count} hanno bisogno di te"},
+  "station":{
+   "agents_list":{"name":"Postazione di comando","action":"Apri l'elenco dell'equipaggio"},
+   "team":{"name":"Tavolo delle riunioni","action":"Apri la squadra"},
+   "service_record":{"name":"Archivio","action":"Apri il tuo stato di servizio"},
+   "mess_call":{"name":"Mensa","action":"Convoca in mensa l'equipaggio fuori servizio"},
+   "games":{"name":"Sala simulatori","action":"Avvia una simulazione"},
+   "quartermaster":{"name":"Furiere","action":"Scegli la tua uniforme"},
+   "coding_launcher":{"name":"Console centrale dei sistemi","action":"Avvia gli agenti di programmazione"},
+   "create_agent":{"name":"Accettazione arrivi","action":"Porta a bordo un nuovo ufficiale"},
+   "lift":{"name":"Turboascensore","action":"Raggiungi un altro ponte"}
+  },
+  "card":{"status":"Stato","rank":"Grado","post":"Postazione","open":"Apri la chat","open_pane":"Apri il terminale","show":"Mostra","walk":"Raggiungi","close":"Chiudi"},
+  "post":{"console":"Console della plancia","terminal":"Terminale di ingegneria","briefing":"Sala riunioni","mess":"Mensa","corridor":"Corridoio principale","viewport":"Oblò di prua","bunk":"Alloggi dell'equipaggio","workshop":"Ingegneria","elsewhere":"Altrove a bordo"},
+  "tools":{"overview":"Vista dall'alto","lift":"Turboascensore","commander":"Comandante","help":"Aiuto"},
+  "lift":{"title":"Turboascensore","here":"Questo ponte"},
+  "notice":{"mess_called":"{count} membri fuori servizio convocati in mensa.","mess_nobody":"Al momento nessuno è fuori servizio.","mess_ended":"L'equipaggio torna alle proprie attività.","no_team":"Nessuna squadra si riunisce ancora a questo tavolo. Creane una dall'elenco dell'equipaggio.","view_overview":"Vista dall'alto: WASD sposta la mappa. V ti riporta al comandante.","view_follow":"In terza persona: WASD muove il comandante, E attiva la postazione a portata di mano. V passa alla vista dall'alto."},
+  "screen":{"standby":"IN ATTESA","vacant":"LIBERO","fault":"GUASTO","waiting":"IN ATTESA DI ORDINI"},
+  "launcher":{"title":"Console centrale dei sistemi","workspace":"Area di lavoro","cli":"Agente","count":"Quanti","task":"Primo incarico (facoltativo)","start":"Avvia","starting":"Avvio di {count}…","started":"{count} avviati.","failed":"Impossibile avviare: {reason}","none":"Nessun agente di programmazione installato.","no_workspace":"Prima apri un'area di lavoro nell'IDE.","open_ide":"Apri l'IDE"},
+  "games":{"title":"Sala simulatori","loading":"Caricamento della simulazione…"}
+ }
+}

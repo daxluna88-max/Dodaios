@@ -39,7 +39,7 @@ import {
 import { WIZARD_STEP_IDS, type WizardStepId } from "./setupSteps";
 import { BackAction, StepFooter, StepHead } from "./wizardParts";
 
-const LANGS: UiLanguage[] = ["en", "de", "es", "zh", "pt"];
+const LANGS: UiLanguage[] = ["en", "de", "es", "zh", "pt", "it"];
 // Each language names itself, so a reader finds theirs before they can read
 // the rest of the window. Latin-script codes read fine as letters; Chinese
 // readers look for the characters.
@@ -49,6 +49,7 @@ const LANG_SWITCH_LABEL: Record<UiLanguage, string> = {
   es: "ES",
   zh: "中文",
   pt: "PT",
+  it: "IT",
 };
 
 export function SetupWizard({
@@ -199,7 +200,7 @@ function LanguageSwitch({ className }: { className?: string }) {
   const lang = useUiLanguage();
   return (
     <div
-      className={cn("flex items-center gap-0.5 rounded-full border border-border p-0.5", className)}
+      className={cn("flex flex-wrap items-center gap-0.5 rounded-full border border-border p-0.5", className)}
       role="radiogroup"
       aria-label={t("first_run.window.language")}
     >

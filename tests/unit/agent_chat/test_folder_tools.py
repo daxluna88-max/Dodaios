@@ -151,3 +151,14 @@ def test_workspace_plan_capability_only_allows_observation():
         assert allows_read(tool, {"action": action})
     for action in ("create", "send", "keys", "stop", "close", "unknown", None):
         assert not allows_read(tool, {"action": action})
+
+
+@pytest.mark.asyncio
+async def test_a_windows_drive_path_is_refused_not_written_as_a_filename(tmp_path: Path):
+    """A model inventing ``C:\\Users\\...`` must get an error, not a junk file."""
+    tools = ft.folder_tools(tmp_path, stance="bypass")
+    bad = "C:\\Users\\x\\Documents\\story.md"
+    result = await tools["Write"].execute({"file_path": bad, "content": "hi"}, _ctx())
+    assert result.success is False
+    assert "Windows path" in (result.error or "")
+    assert list(tmp_path.iterdir()) == []

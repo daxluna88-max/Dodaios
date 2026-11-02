@@ -469,3 +469,41 @@ def test_a_started_product_writes_its_user_dirs_only_under_its_own_directory(tmp
     assert state["dir"].endswith(f"-{product}"), out.stderr[-400:]
     assert state["skills"] and state["memory"] and state["logs"]
     assert not (tmp_path / ".dodaios-data").exists(), "the shared directory was not touched"
+
+
+_TOOL_VARS = (
+    "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME", "GEMINI_HOME", "JARVIS_VOICE_ENGINE_HOME",
+)
+
+
+def test_work_moves_tool_homes_under_its_own_directory_even_if_the_shell_set_them(shared):
+    paths = pp.paths_for("work", shared)
+    inherited = {name: f"/home/someone/shared/{name}" for name in _TOOL_VARS}
+    env = pp.environment(paths, inherited)
+    for name in _TOOL_VARS:
+        value = Path(env[name])
+        assert value.is_relative_to(paths.data_dir / "tools"), name
+        assert "shared" not in value.parts, name
+    assert len({env[name] for name in _TOOL_VARS}) == len(_TOOL_VARS)
+
+
+def test_consumer_leaves_tool_homes_untouched(shared):
+    paths = pp.paths_for("consumer", shared)
+    assert not (set(_TOOL_VARS) & set(pp.environment(paths, {"PATH": "/bin"})))
+    kept = pp.environment(paths, {"CLAUDE_CONFIG_DIR": "/mine"})
+    assert kept["CLAUDE_CONFIG_DIR"] == "/mine"
+
+
+def test_the_session_readers_follow_the_work_homes(shared, monkeypatch):
+    from dodaios.agentic_ide import agent_sessions as sessions
+    from dodaios.voice_engine import paths as voice_paths
+
+    env = pp.environment(pp.paths_for("work", shared), {})
+    for name in _TOOL_VARS:
+        monkeypatch.setenv(name, env[name])
+    tools = pp.paths_for("work", shared).data_dir / "tools"
+    assert sessions._claude_home() == tools / "claude"
+    assert sessions._codex_home() == tools / "codex"
+    assert sessions._grok_home() == tools / "grok"
+    assert sessions._agy_cli_root() == tools / "gemini" / "antigravity-cli"
+    assert voice_paths.engine_home() == (tools / "voice-engine").resolve()

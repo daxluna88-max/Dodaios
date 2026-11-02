@@ -173,6 +173,13 @@ const MARKDOWN_COMPONENTS: Components = {
     const local = localPathFromChatHref(href);
     return <a href={href} title={local || undefined} onClick={event => onChatLinkClick(event, href, label)}>{children}</a>;
   },
+  // A wide table scrolls sideways instead of breaking every word letter by
+  // letter inside the narrow phone column (the wrapper's anywhere-wrap rule).
+  table: ({ children }) => (
+    <div className="my-3 max-w-full overflow-x-auto">
+      <table className="w-max min-w-full border-collapse text-sm [overflow-wrap:normal] [&_td]:min-w-[4.5rem] [&_td]:px-2 [&_td]:py-1 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left">{children}</table>
+    </div>
+  ),
   pre: ({ children, node: _node, ...props }) => {
     const fence = readFence(children);
     if (fence) {

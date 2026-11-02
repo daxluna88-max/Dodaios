@@ -333,7 +333,7 @@ it("never writes the onboarding state in a replay", async () => {
 
 it("sends nothing to the first-run endpoints in a replay, so an installed app's settings stay as they are", async () => {
   firstRun = firstRunState();
-  render(<SetupTour onb={fakeOnb({ completed: true })} preview onFinished={vi.fn()} />);
+  render(<SetupTour onb={fakeOnb({ completed: true })} preview startAt="voice" onFinished={vi.fn()} />);
   fireEvent.click(await screen.findByTestId("setup-interaction-voice"));
   expect(calls.filter((c) => c.url.startsWith("/api/onboarding/first-run") && c.method !== "GET")).toHaveLength(0);
 });

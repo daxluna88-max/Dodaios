@@ -27,6 +27,14 @@ describe("chat visual fences", () => {
     expect(screen.getByTestId("inline-html-frame").getAttribute("srcdoc")).toContain(code);
   });
 
+  it("puts a table in a sideways-scrolling wrapper that keeps words whole", () => {
+    const { container } = render(<ChatMarkdown text={"| Repo | Language |\n| --- | --- |\n| Dodaios | Python |"} />);
+    const table = container.querySelector("table");
+    expect(table).not.toBeNull();
+    expect(table?.parentElement?.className).toContain("overflow-x-auto");
+    expect(table?.className).toContain("[overflow-wrap:normal]");
+  });
+
   it("gives fenced code its language and a copy button", async () => {
     const writeText = vi.fn(async () => undefined);
     Object.assign(navigator, { clipboard: { writeText } });

@@ -123,7 +123,7 @@ vi.mock("@/hooks/useVoiceMode", () => ({
   useVoiceMode: () => voiceModeMock.value,
 }));
 
-function renderSidebar(width?: number) {
+function renderSidebar(width?: number, onOpenMenu?: () => void) {
   const client = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -132,7 +132,7 @@ function renderSidebar(width?: number) {
   });
   return render(
     <QueryClientProvider client={client}>
-      <Sidebar width={width} />
+      <Sidebar width={width} onOpenMenu={onOpenMenu} />
     </QueryClientProvider>,
   );
 }
@@ -721,4 +721,21 @@ describe("compact sidebar navigation", () => {
       expect(isSectionId(id)).toBe(true);
     }
   });
+});
+
+test("the icon rail offers the history sheet only when it is handed an opener", () => {
+  act(() => useEventStore.setState({ activeSection: "chats" }));
+  const open = vi.fn();
+  const { unmount } = renderSidebar(SIDEBAR_RAIL_WIDTH, open);
+  fireEvent.click(screen.getByTestId("sidebar-open-menu"));
+  expect(open).toHaveBeenCalledTimes(1);
+  unmount();
+  cleanup();
+
+  renderSidebar(SIDEBAR_RAIL_WIDTH);
+  expect(screen.queryByTestId("sidebar-open-menu")).toBeNull();
+  cleanup();
+
+  renderSidebar(SIDEBAR_DEFAULT_WIDTH, open);
+  expect(screen.queryByTestId("sidebar-open-menu")).toBeNull();
 });

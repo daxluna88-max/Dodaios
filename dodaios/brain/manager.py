@@ -28,6 +28,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import re
 import time
 from collections.abc import (
@@ -2398,6 +2399,88 @@ def _turn_phrase_language(owner: object, user_text: str) -> str:
     )
 
 
+def _turn_now() -> Any:
+    """Now, in the zone of the person's device when it is known, else the server's.
+
+    A server on UTC otherwise labels the turn "10:30 UTC" and the model has to
+    convert to the user's zone itself, which small models get wrong by an hour.
+    """
+    from datetime import datetime
+
+    from dodaios.tasks.context import turn_timezone
+
+    zone = turn_timezone()
+    if zone:
+        try:
+            from zoneinfo import ZoneInfo
+
+            return datetime.now(ZoneInfo(zone))
+        except Exception:  # noqa: BLE001 — an unknown zone name falls back to the server clock
+            pass
+    return datetime.now().astimezone()
+
+
+def _current_time_label(now: Any) -> str:
+    """The per-turn "current date and time" line, with the zone it is read in.
+
+    An unlabelled wall-clock reading was taken for the user's local time: a
+    server running on UTC answered "21:02 in Rome" at 22:02 CET. The zone name
+    and the UTC offset ride along, so the model converts instead of guessing.
+    ``now`` must be timezone-aware (``datetime.now().astimezone()``). The weekday
+    is a fixed English tuple so the label reads the same on every OS (a
+    ``strftime('%A')`` would leak the machine's locale into the LLM context).
+    """
+    weekdays_en = (
+        "Monday", "Tuesday", "Wednesday", "Thursday",
+        "Friday", "Saturday", "Sunday",
+    )
+    offset = now.strftime("%z") or "+0000"
+    return (
+        f"[Current date and time: {weekdays_en[now.weekday()]}, "
+        f"{now.strftime('%Y-%m-%d %H:%M')} {now.tzname() or 'local time'} "
+        f"(UTC{offset[:3]}:{offset[3:5]})]"
+    )
+
+
+def _configured_direct_tools(config: Any) -> int:
+    """How many tools a request may show directly, or 0 for no limit.
+
+    ``JARVIS_MAX_DIRECT_TOOLS`` wins over ``[brain] max_direct_tools``; anything
+    that is not a positive integer means "no limit".
+    """
+    raw = os.environ.get("JARVIS_MAX_DIRECT_TOOLS")
+    if raw is None or not raw.strip():
+        raw = getattr(getattr(config, "brain", None), "max_direct_tools", 0)
+    try:
+        return max(int(raw), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _personal_context_allowed(config: Any) -> bool:
+    """Whether the personal blocks may go into the system prompt.
+
+    ``[brain] personal_context_to_cloud = false`` keeps the profile, learned
+    notebook, people, contacts, identity card, core memory, the per-turn wiki
+    snippets and the dated plans out of every request, and withdraws the tools
+    that read that data back (``_PERSONAL_READ_TOOLS``). It does not look at the
+    provider: a fallback may hand the same prompt to a cloud model, so the
+    switch is applied before the chain starts. What the person already typed in
+    the chat history, and what an earlier turn already sent, stays as it is.
+    """
+    brain = getattr(config, "brain", None)
+    return bool(getattr(brain, "personal_context_to_cloud", True))
+
+
+#: Tools whose RESULT is the person's own stored data (profile summary, wiki
+#: pages, contacts). With ``personal_context_to_cloud`` off they are withdrawn
+#: for the turn: leaving the prompt blocks out is pointless if a tool call can
+#: read the same data back into the request.
+_PERSONAL_READ_TOOLS: frozenset[str] = frozenset(
+    {"whoami", "wiki-list", "wiki-page-read", "wiki-recall", "contact-lookup"}
+)
+
+
 class BrainManager:
     """Top-level orchestrator with intent router and smart fallback."""
 
@@ -3404,6 +3487,8 @@ class BrainManager:
         the only others that are (``TurnOverride.tools_direct``).
         """
         tools = tools_override if tools_override is not None else self._tools
+        if not _personal_context_allowed(getattr(self, "_config", None)):
+            tools = {name: tool for name, tool in tools.items() if name not in _PERSONAL_READ_TOOLS}
         system_prompt = self._build_system_prompt()
         history = _TURN_HISTORY_OVERRIDE.get()
         if history is None:
@@ -4113,7 +4198,8 @@ class BrainManager:
         except Exception:  # noqa: BLE001
             pass
 
-        if self._user_profile is not None:
+        _personal_ok = _personal_context_allowed(getattr(self, "_config", None))
+        if _personal_ok and self._user_profile is not None:
             try:
                 parts.append(self._user_profile.render_for_prompt())
             except Exception:  # noqa: BLE001
@@ -4125,13 +4211,13 @@ class BrainManager:
         try:
             from dodaios.memory.learning.notebook import snapshot_block
 
-            learned_block = snapshot_block()
+            learned_block = snapshot_block() if _personal_ok else ""
             if learned_block:
                 parts.append(learned_block)
         except Exception:  # noqa: BLE001 — a notebook fault never breaks a prompt build
             log.debug("learned notebook block unavailable", exc_info=True)
 
-        if self._people is not None:
+        if _personal_ok and self._people is not None:
             try:
                 people_block = self._people.render_for_prompt()
                 if people_block:
@@ -4145,7 +4231,7 @@ class BrainManager:
         # book is empty — either way no block is injected. Defensive try/except
         # so a store error never crashes the system-prompt build (AP-9-adjacent);
         # ``getattr`` guard tolerates __init__-bypassing tests (see _tools above).
-        _contacts = getattr(self, "_contacts", None)
+        _contacts = getattr(self, "_contacts", None) if _personal_ok else None
         if _contacts is not None:
             try:
                 contacts_block = _contacts.render_for_prompt(max_chars=8_000)
@@ -4165,13 +4251,15 @@ class BrainManager:
         try:
             from dodaios.brain.identity_card import identity_card_block
 
-            _identity_block = identity_card_block(getattr(self, "_config", None))
+            _identity_block = (
+                identity_card_block(getattr(self, "_config", None)) if _personal_ok else ""
+            )
             if _identity_block:
                 parts.append(_identity_block)
         except Exception:  # noqa: BLE001
             pass
 
-        if self._core_memory is not None:
+        if _personal_ok and self._core_memory is not None:
             # Mandatory: re-read BEFORE rendering. Otherwise the LLM only sees
             # facts that existed at init time — UI additions and remember-tool
             # writes from this process are in the file but not in the cache.
@@ -4282,7 +4370,8 @@ class BrainManager:
             _proactivity.directive(_proactivity.current_level(getattr(self, "_config", None)))
         )
         if not self._cache_optimized():
-            upcoming = self._upcoming_block()
+            # Dated plans are read from the notebooks: with the privacy switch off they stay home.
+            upcoming = self._upcoming_block() if _personal_ok else ""
             if upcoming:
                 parts.append(upcoming)
 
@@ -4292,7 +4381,11 @@ class BrainManager:
         # = no injection (no-op path, search returned nothing, or timed out).
         # Wave 2 (omni-latency): wiki context also moves to the per-turn user
         # message in cache-optimized mode (keeps the cached system prefix stable).
-        if self._wiki_context_suffix and not self._cache_optimized():
+        if (
+            self._wiki_context_suffix
+            and not self._cache_optimized()
+            and _personal_context_allowed(getattr(self, "_config", None))
+        ):
             parts.append(self._wiki_context_suffix)
 
         # Agentic IDE: while the user has the focused coding mode ON, this turn
@@ -4415,23 +4508,18 @@ class BrainManager:
         # tuple by ``weekday()`` (0=Monday) so the label reads the same English on
         # every OS. The date is ISO-8601 (unambiguous internationally, unlike a
         # dotted d.m.Y); wall-clock time stays local (``datetime.now``).
-        _weekdays_en = (
-            "Monday", "Tuesday", "Wednesday", "Thursday",
-            "Friday", "Saturday", "Sunday",
-        )
-        _now = datetime.now()
         parts: list[str] = [
             # Date/time belongs per-turn, never in the cached prefix (also fixes
             # the missing BUG-005 date injection).
-            f"[Current date and time: {_weekdays_en[_now.weekday()]}, "
-            f"{_now.strftime('%Y-%m-%d %H:%M')}]"
+            _current_time_label(_turn_now())
         ]
         private = _TURN_OVERRIDE.get()
         if private is not None and private.tool_context.get("tool_origin") == "society":
             return "\n\n".join(parts)
-        if self._wiki_context_suffix:
+        _personal_ok = _personal_context_allowed(getattr(self, "_config", None))
+        if self._wiki_context_suffix and _personal_ok:
             parts.append(self._wiki_context_suffix)
-        upcoming = self._upcoming_block()
+        upcoming = self._upcoming_block() if _personal_ok else ""
         if upcoming:
             parts.append(upcoming)
         agentic_block = self._agentic_focus_block()
@@ -6451,7 +6539,8 @@ class BrainManager:
         except (TypeError, ValueError):
             # A malformed tool limit means 'unknown'; no trimming then.
             max_tools = 0
-        if window <= 0 and max_tools <= 0 and direct_tools is None:
+        configured = _configured_direct_tools(getattr(self, "_config", None))
+        if window <= 0 and max_tools <= 0 and direct_tools is None and configured <= 0:
             return tools, nothing
         keep: set[str] = {name for name in own_tools if name in tools}
         mandated = getattr(self, "_evidence_required_tool", None)
@@ -6469,6 +6558,8 @@ class BrainManager:
         limits = [max(max_tools - 1, 1)] if max_tools > 0 else []
         if 0 < window <= _SMALL_WINDOW_TOKENS:
             limits.append(_SMALL_MODEL_DIRECT_TOOLS + len(keep))
+        if configured > 0:
+            limits.append(configured + len(keep))
         max_direct = min(limits) if limits else 0
         only = None if direct_tools is None else {*direct_tools, *ROLE_BASE}
         plan = plan_surface(
@@ -10558,6 +10649,72 @@ class BrainManager:
             needs_tools=bool(getattr(self, "_turn_needs_tools", False)),
         )
 
+    def engine_trace(self) -> dict[str, Any]:
+        """Which engines a turn would use, per level — names only, no secrets.
+
+        Read-only answer to "who answers, and who takes over": the active
+        provider, the resolved fallback chain for each level, the configured
+        tiers (router / worker / deep) and why a subscription-CLI brain such as
+        Codex is, or is not, on the generic chain. Building a chain touches the
+        per-turn router-lead marker, so it is saved and restored.
+        """
+        saved_lead = getattr(self, "_router_lead_key", None)
+
+        def _pair(entry: tuple[str, str | None]) -> dict[str, str | None]:
+            return {"provider": entry[0], "model": entry[1]}
+
+        def _tier(tier: Any) -> dict[str, str | None] | None:
+            if tier is None:
+                return None
+            return {
+                "provider": getattr(tier, "provider", None),
+                "model": getattr(tier, "model", None),
+                "fallback_provider": getattr(tier, "fallback_provider", None),
+                "fallback_model": getattr(tier, "fallback_model", None),
+            }
+
+        chains: dict[str, list[dict[str, str | None]]] = {}
+        try:
+            for level in ("fast", "deep", "code"):
+                try:
+                    chains[level] = [_pair(e) for e in self._build_fallback_chain(level)]
+                except Exception:  # noqa: BLE001 — a diagnostic never breaks the app
+                    chains[level] = []
+        finally:
+            self._router_lead_key = saved_lead
+        brain_cfg = self._config.brain
+        available = set(self._registry.available())
+        active = self._active_name
+        codex_tools = self._brain_can_call_tools("codex", None) if "codex" in available else None
+        on_chain = any(e["provider"] == "codex" for c in chains.values() for e in c)
+        if "codex" not in available:
+            codex_reason = "codex is not available (not installed or not signed in)"
+        elif on_chain:
+            codex_reason = "codex is on the chain"
+        elif codex_tools is False:
+            codex_reason = (
+                "codex cannot emit tool calls over the subscription login, and it is not "
+                "in the generic cross-provider order; it answers only when it is the active "
+                "brain or is named in [brain] fallbacks"
+            )
+        else:
+            codex_reason = "codex is not in the generic cross-provider order"
+        return {
+            "active": active,
+            "active_can_call_tools": self._active_can_call_tools(),
+            "primary": getattr(brain_cfg, "primary", None),
+            "deep_brain": getattr(brain_cfg, "deep_brain", None),
+            "router": _tier(getattr(brain_cfg, "router", None)),
+            "worker": _tier(getattr(brain_cfg, "worker", None)),
+            "configured_fallbacks": [
+                {"provider": n, "model": m} for n, m in self._configured_fallbacks
+            ],
+            "available": sorted(available),
+            "dead_providers": sorted(self._dead_providers),
+            "chains": chains,
+            "codex": {"available": "codex" in available, "on_chain": on_chain, "reason": codex_reason},
+        }
+
     def _keep_off_voice_key(
         self,
         chain: list[tuple[str, str | None]],
@@ -12319,7 +12476,10 @@ class BrainManager:
                     provider_errors.append(
                         (prov_name, model, "rate_limit", "HTTP 429"))
                 else:
-                    log.warning("Brain %s(%s) fehlgeschlagen: %s", prov_name, model, exc)
+                    log.warning(
+                        "Brain %s(%s) fehlgeschlagen: %s | detail=%.400s",
+                        prov_name, model, exc, getattr(exc, "body", None),
+                    )
                     if (
                         turn_override is None
                         and kind in _DEAD_LIST_KINDS

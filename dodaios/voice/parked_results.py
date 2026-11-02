@@ -54,7 +54,7 @@ SURFACE_PIPELINE: Final[str] = "pipeline"
 SURFACE_CHAT: Final[str] = "chat"
 SURFACE_CHANNEL: Final[str] = "channel"
 
-_SUPPORTED_LANGUAGES: Final[tuple[str, ...]] = ("de", "en", "es", "pt")
+_SUPPORTED_LANGUAGES: Final[tuple[str, ...]] = ("de", "en", "es", "pt", "it")
 _DEFAULT_LANGUAGE: Final[str] = "en"
 _MAX_WAIT_QUERY_WORDS: Final[int] = 9
 _TOPIC_MAX_WORDS: Final[int] = 8
@@ -212,11 +212,12 @@ def requested_result(items: Sequence[ParkedResult], query: str) -> ParkedResult 
 _LEAD_IN: Final[str] = (
     r"(?:(?:ja|yes|s[ií]|und|and|y|also|so|okay|ok|hey|hallo|hello|hola|"
     r"jarvis|bitte|please|por\s+favor|sag\s+mal|tell\s+me|dime|"
-    r"sim|e|ent(?:ã|a)o|ol(?:á|a)|diz\s+me)\s+)*"
+    r"sim|e|ent(?:ã|a)o|ol(?:á|a)|diz\s+me|"
+    r"s[ìi]|allora|ciao|ehi|per\s+favore|dimmi)\s+)*"
 )
 _TAIL: Final[str] = (
     r"(?:\s+(?:damit|dabei|schon|jetzt|denn|eigentlich|now|yet|already|ya|ahora|con\s+eso|"
-    r"j(?:á|a)|agora|com\s+isso))*"
+    r"j(?:á|a)|agora|com\s+isso|ora|adesso|gi(?:à|a)|con\s+questo))*"
 )
 
 _PROGRESS_CORES: Final[tuple[str, ...]] = (
@@ -251,6 +252,15 @@ _PROGRESS_CORES: Final[tuple[str, ...]] = (
     r"(?:j(?:á|a)\s+)?(?:acabaste|terminaste|est(?:á|a)\s+pronto)",
     r"quanto\s+(?:tempo\s+)?(?:falta|demora)",
     r"ainda\s+est(?:á|a)s\s+(?:a\s+trabalhar(?:\s+nisso)?|nisso)",
+    # --- Italian ---
+    r"a\s+che\s+punto\s+sei",
+    r"come\s+va(?:\s+(?:con\s+)?(?:quello|questo))?",
+    r"come\s+sta\s+andando",
+    r"(?:hai\s+)?(?:gi(?:à|a)\s+)?(?:finito|terminato)",
+    r"sei\s+(?:gi(?:à|a)\s+)?(?:pronto|a\s+posto)",
+    r"quanto\s+(?:ci\s+)?(?:manca|vuole|metti|ci\s+metti)",
+    r"ci\s+vuole\s+ancora\s+(?:molto|tanto)",
+    r"stai\s+ancora\s+(?:lavorando(?:\s+(?:su\s+)?(?:quello|questo))?|su\s+(?:quello|questo))",
 )
 
 _RESULT_CORES: Final[tuple[str, ...]] = (
@@ -280,6 +290,12 @@ _RESULT_CORES: Final[tuple[str, ...]] = (
     r"(?:j(?:á|a)\s+)?tens\s+(?:o|um|algum)?\s*resultado",
     r"e\s+o\s+resultado",
     r"qual\s+(?:(?:é|e)\s+)?o\s+resultado",
+    # --- Italian ---
+    r"(?:che\s+)?cosa\s+hai\s+trovato",
+    r"(?:hai\s+)?(?:gi(?:à|a)\s+)?(?:un\s+|il\s+)?risultato",
+    r"e\s+il\s+risultato",
+    r"qual\s+(?:è|e)\s+il\s+risultato",
+    r"cosa\s+(?:è|e)\s+(?:venuto|uscito)\s+fuori",
 )
 
 
@@ -333,6 +349,10 @@ _TOPIC_STOPWORDS: Final[dict[str, frozenset[str]]] = {
     "pt": frozenset(
         "por favor podes podias me mim eu hey olá jarvis ok pronto e depois "
         "o a os as um uma uns umas".split()
+    ),
+    "it": frozenset(
+        "per favore puoi potresti mi me io ehi ciao jarvis ok va bene e poi "
+        "il lo la i gli le un uno una".split()
     ),
 }
 

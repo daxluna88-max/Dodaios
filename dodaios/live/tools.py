@@ -52,9 +52,13 @@ _GO_AHEAD_WORDS = frozenset(
         # European Portuguese  # i18n-allow: spoken confirmation vocabulary
         "sim", "avança", "avanca", "força", "forca", "pode", "podes", "faz",
         "isso", "manda", "envia", "certo", "confirmado",
+        # Italian  # i18n-allow: spoken confirmation vocabulary
+        "sì", "certo", "certamente", "conferma", "confermo", "confermato",  # i18n-allow
+        "procedi", "vai", "avanti", "fallo", "invialo", "manda", "mandalo",  # i18n-allow
+        "esatto", "ora", "pure", "va", "bene",  # i18n-allow
     }
 )  # fmt: skip
-_APPROVAL_LOCALES = ("de", "en", "es", "pt")
+_APPROVAL_LOCALES = ("de", "en", "es", "pt", "it")
 _RECENT_SEGMENTS = 4
 _REQUEST_TEXT_CHARS = 1200
 # Declared before every other tool so the size budget never drops them: the

@@ -715,7 +715,7 @@ export function AgentComposer({ autoFocus = false }: { autoFocus?: boolean }) {
         className={cn("max-h-[50vh] scrollbar-jarvis", minimal ? "min-h-[64px] px-2 text-base" : "text-reading")}
       />
       {minimal ? (
-        <div className="flex min-w-0 items-center gap-0.5" data-testid="composer-row">
+        <div className="flex min-w-0 items-center gap-0.5 max-md:flex-wrap max-md:gap-y-1" data-testid="composer-row">
           <ComposerAddMenu
             key={activeSessionId ?? "new"}
             compact
@@ -740,7 +740,7 @@ export function AgentComposer({ autoFocus = false }: { autoFocus?: boolean }) {
               picks in one line, split by hairlines. Each opens its own menu:
               the models with a provider rail, the effort ladder with the
               provider's default marked, the stances with one line each. */}
-          <span className="flex min-w-0 items-center" data-testid="composer-brain">
+          <span className="flex min-w-0 items-center gap-0.5" data-testid="composer-brain">
             <ComposerBrainPicker
               value={brainValue(draft.provider, draft.model)}
               groups={brainGroups}
@@ -769,7 +769,7 @@ export function AgentComposer({ autoFocus = false }: { autoFocus?: boolean }) {
             {showEffort && (
               <>
                 <ControlSeparator />
-                <span className="inline-flex shrink-0" title={locks?.effort}>
+                <span className="inline-flex min-w-0 max-w-[45%] shrink" title={locks?.effort}>
                   <Combobox
                     value={draft.effort}
                     groups={effortMenuGroups}
@@ -780,7 +780,7 @@ export function AgentComposer({ autoFocus = false }: { autoFocus?: boolean }) {
                     testId="composer-effort"
                     triggerHint={false}
                     panelMinWidth={220}
-                    className={COMPOSER_CONTROL_CLASS}
+                    className={cn(COMPOSER_CONTROL_CLASS, "min-w-0")}
                   />
                 </span>
               </>
@@ -1284,7 +1284,7 @@ function Pick({
 
 /** The thin upright line between two picks on the front page's row. */
 function ControlSeparator() {
-  return <span aria-hidden className="mx-0.5 hidden h-4 w-px shrink-0 bg-border-strong sm:block" />;
+  return <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-border-strong" />;
 }
 
 /** The front page's one round action — voice mode, Send or Stop. */

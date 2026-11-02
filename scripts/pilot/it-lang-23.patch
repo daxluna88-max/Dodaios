@@ -1,0 +1,54 @@
+diff --git a/dodaios/core/turn_language.py b/dodaios/core/turn_language.py
+index 219c72c39..5b89294b3 100644
+--- a/dodaios/core/turn_language.py
++++ b/dodaios/core/turn_language.py
+@@ -93,31 +93,33 @@ _TOKEN_RE = re.compile(r"\b[\w']+\b", re.UNICODE)
+ # translation, quotation, negation, or task. The vocabulary is speech input.
+ _LANGUAGE_REQUEST_RE = re.compile(
+     r"(?:jarvis[\s,]+)?"
+-    r"(?:(?:please|bitte|por favor)[\s,]+)?"  # i18n-allow
++    r"(?:(?:please|bitte|por favor|per favore|per piacere)[\s,]+)?"  # i18n-allow
+     r"(?:(?:always|from now on|immer|ab jetzt|siempre|a partir de ahora|sempre"  # i18n-allow
+-    r"|a partir de agora)\s+)?"  # i18n-allow
++    r"|a partir de agora|d'ora in poi|da ora in poi)\s+)?"  # i18n-allow
+     r"(?:(?:can|could|would) you\s+|(?:kannst|könntest) du\s+|puedes\s+"  # i18n-allow
+-    r"|(?:podes|consegues|pode|podia|podias)\s+)?"  # i18n-allow
+-    r"(?:(?:please|bitte|por favor)\s+)?"  # i18n-allow
++    r"|(?:podes|consegues|pode|podia|podias)\s+|(?:puoi|potresti|riesci a)\s+)?"  # i18n-allow
++    r"(?:(?:please|bitte|por favor|per favore|per piacere)\s+)?"  # i18n-allow
+     r"(?:(?:speak|reply|respond|answer|write|continue|switch)(?:\s+to me)?\s+"
+     r"|(?:sprich|spreche|antworte|antworten|schreib|schreibe|rede|wechsel|wechsle)\s+"  # i18n-allow
+     r"|(?:sollst|du sollst)\s+"  # i18n-allow
+     r"|(?:habla|háblame|responde|contesta|escribe|cambia)\s+"
++    r"|(?:parla|parlare|parlami|rispondi|rispondere|rispondimi|scrivi|scrivere|scrivimi|cambia|cambiare|passa|passare)\s+"
+     r"|(?:fala|fale|falar|responde|responda|responder|escreve|escreva|escrever"  # i18n-allow
+     r"|muda|mude|passa|continua)(?:-me)?(?:\s+comigo)?\s+)?"  # i18n-allow
+-    r"(?:(?:please|bitte|por favor)\s+)?"  # i18n-allow
++    r"(?:(?:please|bitte|por favor|per favore|per piacere)\s+)?"  # i18n-allow
+     r"(?:(?:always|from now on|immer|ab jetzt|siempre|a partir de ahora|sempre"  # i18n-allow
+-    r"|a partir de agora)\s+)?"  # i18n-allow
++    r"|a partir de agora|d'ora in poi|da ora in poi)\s+)?"  # i18n-allow
+     r"(?:(?:in|auf|en|to|zu|a|em|para)\s+)?"  # i18n-allow
+     r"(?P<language>deutsch|german|alemán|aleman|english|englisch|inglés|ingles"  # i18n-allow
+     r"|español|espanol|spanish|spanisch"  # i18n-allow
+     r"|português|portugues|portugués|portuguese|portugiesisch"  # i18n-allow
+     r"|alemão|alemao|inglês|espanhol"  # i18n-allow
++    r"|italiano|inglese|spagnolo|tedesco|francese|portoghese"  # i18n-allow
+     r"|turkish|türkisch|türkçe|turkce|french|französisch|italian|italienisch"  # i18n-allow
+     r"|dutch|niederländisch|polish|polnisch|russian|russisch|greek|griechisch"  # i18n-allow
+     r"|arabic|arabisch|japanese|japanisch|korean|koreanisch|chinese|chinesisch)"  # i18n-allow
+     r"(?:\s+(?:antworten|sprechen|konuş|konus|cevap ver))?"  # i18n-allow
+-    r"(?:[\s,]+(?:please|bitte|por favor|now|jetzt|ahora|agora))?"  # i18n-allow
++    r"(?:[\s,]+(?:please|bitte|por favor|now|jetzt|ahora|agora|adesso|ora))?"  # i18n-allow
+     r"[\s.!?]*",
+     re.IGNORECASE,
+ )
+@@ -129,6 +131,8 @@ _REQUEST_LANGUAGE_CODES = {
+     "portuguese": "pt", "portugiesisch": "pt",  # i18n-allow
+     "alemão": "de", "alemao": "de", "inglês": "en", "espanhol": "es",  # i18n-allow
+     # Languages without translated system phrases: the model still answers in them.
++    "italiano": "it", "inglese": "en", "spagnolo": "es", "tedesco": "de",  # i18n-allow
++    "francese": "fr", "portoghese": "pt",  # i18n-allow
+     "turkish": "tr", "türkisch": "tr", "türkçe": "tr", "turkce": "tr",  # i18n-allow
+     "french": "fr", "französisch": "fr", "italian": "it", "italienisch": "it",  # i18n-allow
+     "dutch": "nl", "niederländisch": "nl", "polish": "pl", "polnisch": "pl",  # i18n-allow

@@ -597,3 +597,18 @@ def test_the_brain_prompt_carries_the_learned_block(book: JarvisNotebook) -> Non
 
     assert "The user's printer is in the attic." in prompt
     assert prompt == manager._build_system_prompt()  # byte-stable for the prompt cache
+
+
+def test_the_realtime_instructions_drop_the_learned_block_when_the_privacy_switch_is_off(
+    book: JarvisNotebook,
+) -> None:
+    from dodaios.realtime.session import _personal_context_allowed, _session_instructions
+
+    notebook_module.set_active(book)
+    book.apply(target="user", operation="add", text="The user's daughter is called Mia.")
+    assert "Mia" in _session_instructions("en")
+    assert "Mia" in _session_instructions("en", personal_context=True)
+    assert "Mia" not in _session_instructions("en", personal_context=False)
+    off = SimpleNamespace(brain=SimpleNamespace(personal_context_to_cloud=False))
+    assert _personal_context_allowed(off) is False
+    assert _personal_context_allowed(SimpleNamespace()) is True

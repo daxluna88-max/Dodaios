@@ -1,0 +1,39 @@
+diff --git a/dodaios/browser_voice/session.py b/dodaios/browser_voice/session.py
+index abb326da9..abceb6164 100644
+--- a/dodaios/browser_voice/session.py
++++ b/dodaios/browser_voice/session.py
+@@ -153,8 +153,18 @@ _PHANTOM_PHRASES = frozenset(
+ )
+ 
+ 
++# Whisper writes sounds as stage directions: "*sospiro*", "[musica]", "(rumore)". They are not speech.
++_ANNOTATION = re.compile(r"\*[^*]*\*|\[[^\]]*\]|\([^)]*\)")
++
++
++def _without_annotations(heard: str) -> str:
++    return _ANNOTATION.sub(" ", heard)
++
++
+ def _is_phantom(heard: str) -> bool:
+-    return " ".join(w.lower() for w in _WORD.findall(heard)) in _PHANTOM_PHRASES
++    if heard.strip() and not _without_annotations(heard).strip():
++        return True  # only a sound annotation, e.g. "*sospiro*"
++    return " ".join(w.lower() for w in _WORD.findall(_without_annotations(heard))) in _PHANTOM_PHRASES
+ 
+ 
+ # What Whisper writes for silence or room noise. Unlike ``_PHANTOM_PHRASES`` this list leaves out "ciao" and "ok",
+@@ -164,10 +174,12 @@ _SILENCE_HALLUCINATIONS = _PHANTOM_PHRASES - {"ciao", "ok"}
+ 
+ def _is_silence_hallucination(heard: str) -> bool:
+     """True when every sentence is an invented one (so "Grazie. Grazie." counts too)."""
++    if heard.strip() and not _without_annotations(heard).strip():
++        return True  # only sound annotations: no speech at all
+     sentences = [
+         " ".join(w.lower() for w in _WORD.findall(part))
+-        for part in re.split(r"[.!?…]+", heard)
+-        if part.strip()
++        for part in re.split(r"[.!?…]+", _without_annotations(heard))
++        if part.strip() and _WORD.findall(part)
+     ]
+     if not sentences:
+         return False

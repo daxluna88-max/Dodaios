@@ -37,6 +37,7 @@ import { MemorySearch } from "@/components/memory/MemorySearch";
 import { MemoryHealth } from "@/components/memory/MemoryHealth";
 import { ConfirmDialog, NewPageDialog, type CreatableKind } from "@/components/memory/MemoryDialogs";
 import { ObsidianStatus } from "@/components/wiki/ObsidianStatus";
+import { isLocalHost } from "@/lib/localHost";
 import { ObsidianSetupDialog } from "@/components/wiki/ObsidianSetupDialog";
 import type { ObsidianStatus as ObsidianStatusType } from "@/types/setup";
 
@@ -127,7 +128,8 @@ export function MemoryView(): JSX.Element {
         if (!statusResp.ok || !stateResp.ok) return;
         const status = (await statusResp.json()) as ObsidianStatusType;
         const state = (await stateResp.json()) as { obsidian_setup_seen: boolean };
-        if (state.obsidian_setup_seen === false && status.recommended_action !== "ok") setSetupHint(status);
+        // Remote host: Obsidian would have to be installed on the server, which is not what the person wants.
+        if (state.obsidian_setup_seen === false && status.recommended_action !== "ok" && isLocalHost()) setSetupHint(status);
       } catch (err) {
         if ((err as { name?: string })?.name !== "AbortError") console.debug("[MemoryView] setup probe failed:", err);
       }

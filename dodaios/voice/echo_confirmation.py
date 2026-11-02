@@ -196,6 +196,54 @@ _AMBIGUOUS_PATTERNS_PT: tuple[str, ...] = (
     r"\b(hum|hmm|hm|eh)\b",
 )
 
+# Italian. A bare "puoi" ("can you") is NOT a confirmation: it opens questions
+# such as "puoi ripetere?", which must never approve a pending action. "fai"
+# counts only as the whole reply or as "fai pure" / "fallo".
+_CONFIRM_PATTERNS_IT: tuple[str, ...] = (
+    r"\bs(ì|i)\b",
+    r"\bcerto\b",
+    r"\bcertamente\b",
+    r"\bvai pure\b",
+    r"\bpuoi (procedere|continuare|inviare|farlo|mandare)\b",
+    r"^\W*fai\W*$",
+    r"\bfai pure\b",
+    r"\bfallo\b",
+    r"\bavanti\b",
+    r"\bprocedi\b",
+    r"\bok\b",
+    r"\bokay\b",
+    r"\bgiusto\b",
+    r"\besatto\b",
+    r"\bperfetto\b",
+    r"\bd'accordo\b",
+    r"\bconferm(o|a|are|ato)\b",
+)
+
+_VETO_PATTERNS_IT: tuple[str, ...] = (
+    r"\bno\b",
+    r"\bnon\b",
+    r"\bannulla(re)?\b",
+    r"\binterrompi\b",
+    r"\bferma(ti|re)?\b",
+    r"\bsmetti\b",
+    r"\blascia (stare|perdere)\b",
+    r"\bdimentica(lo)?\b",
+    r"\bnemmeno per sogno\b",
+    r"\bbasta\b",
+    r"\bsbagliato\b",
+    r"\bnegativo\b",
+)
+
+_AMBIGUOUS_PATTERNS_IT: tuple[str, ...] = (
+    r"\bforse\b",
+    r"\bmagari\b",
+    r"\baspetta\b",
+    r"\bun attimo\b",
+    r"\bun momento\b",
+    r"\bnon so\b",
+    r"\b(boh|mah|uhm|hmm|hm|eh)\b",
+)
+
 ResponseVerdict = Literal["confirm", "veto", "ambiguous", "unknown"]
 
 
@@ -226,6 +274,10 @@ def classify_response(
         veto_pats = _VETO_PATTERNS_PT
         confirm_pats = _CONFIRM_PATTERNS_PT
         ambig_pats = _AMBIGUOUS_PATTERNS_PT
+    elif language == "it":
+        veto_pats = _VETO_PATTERNS_IT
+        confirm_pats = _CONFIRM_PATTERNS_IT
+        ambig_pats = _AMBIGUOUS_PATTERNS_IT
     else:
         veto_pats = _VETO_PATTERNS_DE
         confirm_pats = _CONFIRM_PATTERNS_DE

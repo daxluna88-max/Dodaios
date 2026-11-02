@@ -78,7 +78,8 @@ describe("PersonalitySection", () => {
     mount();
     expect(await screen.findByTestId("personality-mood")).toBeTruthy();
     expect(screen.getByText("assistant_view.personality_simulated")).toBeTruthy();
-    expect(screen.getByTestId("personality-mood-now").textContent).toContain("assistant_view.personality_reason_default");
+    await waitFor(() =>
+      expect(screen.getByTestId("personality-mood-now").textContent).toMatch(/ — default$/)); // no dictionary here: the component shows the bare reason code
   });
 
   it("does not save anything until Save, and Save sends only what the owner set", async () => {
@@ -105,7 +106,9 @@ describe("PersonalitySection", () => {
     await waitFor(() => expect(calls.some((c) => c.url.endsWith("/mood"))).toBe(true));
     expect(calls.find((c) => c.url.endsWith("/mood"))?.body).toEqual({ action: "set", mood: "serious" });
     expect(calls.filter((c) => c.method === "PUT")).toHaveLength(0);
-    expect(await screen.findByText(/personality_mood_serious/)).toBeTruthy();
+    // The label also names the "serious" button: read the current-mood line only.
+    await waitFor(() =>
+      expect(screen.getByTestId("personality-mood-now").textContent).toMatch(/personality_mood_serious/));
   });
 
   it("mood buttons are disabled while the assistant is starting", async () => {

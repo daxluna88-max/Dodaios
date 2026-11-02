@@ -627,3 +627,82 @@ def test_output_language_validator_flags_portuguese_under_es_pin() -> None:
 
     assert result.status == "mismatch"
     assert result.detected_language == "pt"
+
+
+@pytest.mark.parametrize("text", ["Ricorda", "Salvalo", "ok"])
+def test_short_text_without_history_falls_back_to_the_ui_language(text: str) -> None:
+    from dodaios.core.turn_language import resolve_conversation_language
+
+    assert resolve_conversation_language("auto", None, text) == "unknown"
+    assert resolve_conversation_language("auto", None, text, fallback_language="it") == "it"
+    assert resolve_output_language("auto", None, text, fallback_language="it") == "it"
+
+
+def test_ui_fallback_never_overrides_history_text_pin_or_stt_tag() -> None:
+    from dodaios.core.turn_language import resolve_conversation_language
+
+    kw = {"fallback_language": "it"}
+    # History wins over the UI language for a thin turn.
+    assert resolve_conversation_language(
+        "auto", None, "Ricorda", conversation_language="de", **kw
+    ) == "de"
+    # Clearly detected text wins.
+    assert resolve_conversation_language("auto", None, "What is the weather like today?", **kw) == "en"
+    # An explicit pin wins.
+    assert resolve_conversation_language("es", None, "Ricorda", **kw) == "es"
+    # The STT tag is evidence, the UI language is only a last resort.
+    assert resolve_conversation_language("auto", "german", "Ricorda", **kw) == "de"
+
+
+def test_ui_fallback_ignores_an_unknown_code() -> None:
+    from dodaios.core.turn_language import resolve_conversation_language
+
+    assert resolve_conversation_language("auto", None, "Ricorda", fallback_language="xx") == "unknown"
+    assert resolve_output_language("auto", None, "Ricorda", fallback_language="") == DEFAULT_LOCALE
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Rispondi in italiano", "it"),
+        ("Parla in italiano", "it"),
+        ("Parla italiano", "it"),
+        ("Per favore rispondi in italiano", "it"),
+        ("Puoi parlare in italiano?", "it"),
+        ("Scrivi sempre in italiano", "it"),
+        ("Rispondimi in inglese", "en"),
+        ("Passa a spagnolo", "es"),
+        ("Da ora in poi parla in tedesco", "de"),
+        ("Rispondi in francese adesso", "fr"),
+    ],
+)
+def test_italian_language_request_overrides_english_session(text: str, expected: str) -> None:
+    assert detect_language_request(text) == expected
+    if expected in {"it", "en", "de", "es", "pt"}:
+        assert resolve_output_language("auto", "en", text, conversation_language="en") == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Non parlare in italiano", "Traduci in italiano: hello", "italiano", "Il mio amico parla italiano"],
+)
+def test_italian_mentions_are_not_language_requests(text: str) -> None:
+    assert detect_language_request(text) == ""
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["No lo sé", "Buenas noches señor", "Ayúdame con esto", "Dime qué hora es"],
+)
+def test_short_spanish_phrases_are_not_taken_for_italian(text: str) -> None:
+    from dodaios.core.turn_language import resolve_conversation_language
+
+    assert detect_text_language(text) == "es"
+    assert resolve_conversation_language(
+        "auto", "", text, conversation_language="", fallback_language="it",
+    ) == "es"
+
+
+@pytest.mark.parametrize("text", ["Non lo so", "Buona notte", "Che ora è"])
+def test_short_italian_phrases_stay_italian(text: str) -> None:
+    assert detect_text_language(text) == "it"

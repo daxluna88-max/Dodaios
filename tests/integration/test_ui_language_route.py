@@ -42,7 +42,7 @@ def test_get_returns_current_ui_language(ctx) -> None:
     tc, _, _ = ctx
     body = tc.get("/api/settings/ui-language").json()
     assert body["language"] == "en"
-    assert set(body["options"]) == {"en", "de", "es", "pt", "zh"}
+    assert set(body["options"]) == {"en", "de", "es", "pt", "zh", "it"}
 
 
 def test_put_persists_and_broadcasts(ctx) -> None:
@@ -73,6 +73,20 @@ def test_put_accepts_european_portuguese(ctx) -> None:
     assert 'language = "pt"' in config_file.read_text(encoding="utf-8")
     assert any(ev.language == "pt" for ev in captured)
 
+
+
+def test_put_accepts_italian_and_preserves_reply_and_recognition(ctx) -> None:
+    tc, config_file, captured = ctx
+    before = tc.app.state.config
+    reply, recognition = before.brain.reply_language, before.stt.language
+    res = tc.put("/api/settings/ui-language", json={"language": "it"})
+    assert res.status_code == 200, res.text
+    assert res.json() == {"ok": True, "language": "it", "persisted": True}
+    assert 'language = "it"' in config_file.read_text(encoding="utf-8")
+    assert tc.get("/api/settings/ui-language").json()["language"] == "it"
+    assert any(ev.language == "it" for ev in captured)
+    assert tc.app.state.config.brain.reply_language == reply
+    assert tc.app.state.config.stt.language == recognition
 
 def test_put_rejects_unknown_language(ctx) -> None:
     tc, _, _ = ctx

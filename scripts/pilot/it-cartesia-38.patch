@@ -1,0 +1,35 @@
+diff --git a/dodaios/plugins/tts/__init__.py b/dodaios/plugins/tts/__init__.py
+index aaa7d65b7..536b90e8e 100644
+--- a/dodaios/plugins/tts/__init__.py
++++ b/dodaios/plugins/tts/__init__.py
+@@ -720,6 +720,7 @@ def _build_provider(tts_cfg: Any, provider: str) -> Any:
+             voice_id_en=ct.get("voice_id_en"),
+             voice_id_es=ct.get("voice_id_es"),
+             voice_id_pt=ct.get("voice_id_pt"),
++            voice_id_it=ct.get("voice_id_it"),
+             language=ct.get("language", tts_cfg.language_code or "auto"),
+             chunk_by_sentence=bool(ct.get("chunk_by_sentence", True)),
+             speed=float(ct.get("speed", tts_cfg.speed)),
+diff --git a/dodaios/plugins/tts/cartesia_tts.py b/dodaios/plugins/tts/cartesia_tts.py
+index e418a3047..ac96f84e7 100644
+--- a/dodaios/plugins/tts/cartesia_tts.py
++++ b/dodaios/plugins/tts/cartesia_tts.py
+@@ -79,6 +79,7 @@ class CartesiaTTS:
+         voice_id_en: str | None = None,
+         voice_id_es: str | None = None,
+         voice_id_pt: str | None = None,
++        voice_id_it: str | None = None,
+         language: str = "auto",
+         chunk_by_sentence: bool = True,
+         speed: float = 1.0,
+@@ -99,6 +100,10 @@ class CartesiaTTS:
+             "es": voice_id_es or DEFAULT_VOICE_ID_ES,
+             "pt": voice_id_pt or DEFAULT_VOICE_ID_PT,
+         }
++        # Italian has no built-in default: only a configured voice enables it, otherwise
++        # Italian falls back to the doctrine default locale as before.
++        if voice_id_it:
++            self._voice_by_lang["it"] = voice_id_it
+         self._language = language
+         # Voice used when neither a per-call language_code nor the text sniff
+         # resolves a language. A configured concrete language pins it; else the

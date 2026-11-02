@@ -1803,6 +1803,12 @@ def _preferences_block(config: Any, *, compact: bool = False) -> str:
         return ""
 
 
+def _personal_context_allowed(config: Any) -> bool:
+    """The ``[brain] personal_context_to_cloud`` switch, as the classic brain reads it."""
+    brain = getattr(config, "brain", None)
+    return bool(getattr(brain, "personal_context_to_cloud", True))
+
+
 def _learned_block(*, compact: bool = False) -> str:
     """Jarvis' learned notebooks (cached snapshot; at most one ``stat``).
 
@@ -1879,8 +1885,12 @@ def _session_instructions(
     compact: bool = False,
     history_lost: bool = False,
     proactivity_level: str | None = None,
+    personal_context: bool = True,
 ) -> str:
     """Assemble the session instructions, static first and dynamic last.
+
+    ``personal_context`` False (the privacy switch is off) leaves out the learned
+    notebooks and the dated plans, the two blocks that carry the person's data.
 
     One order for every provider: everything identical from turn to turn forms
     a stable prefix a prompt cache (Ollama's KV prefix, OpenAI, Gemini) can
@@ -1936,6 +1946,8 @@ def _session_instructions(
     )
     history_lost_line = _HISTORY_LOST_INSTRUCTION if history_lost else ""
     initiative, upcoming = _initiative_blocks(proactivity_level, compact=compact)
+    if not personal_context:
+        upcoming = ""
     parts = [
         # Who the assistant is (wake-word name + SOUL.md) frames everything.
         identity,
@@ -1943,7 +1955,7 @@ def _session_instructions(
         # The user's own standing instructions refine the persona for THIS user
         # and frame every operational directive below.
         preferences,
-        _learned_block(compact=compact),
+        _learned_block(compact=compact) if personal_context else "",
         _VOICE_CONTRACT,
         # What to add once the request is answered: one grounded idea at most,
         # never an action. Static per level, so it stays in the cached prefix.
@@ -3353,6 +3365,7 @@ class RealtimeVoiceSession:
                 instructions=_session_instructions(
                     self._language,
                     proactivity_level=_proactivity_level(self._config),
+                    personal_context=_personal_context_allowed(self._config),
                     identity=_identity_block(
                         self._config,
                         compact=bool(
@@ -4968,6 +4981,7 @@ class RealtimeVoiceSession:
                             "instructions": _session_instructions(
                                 new_language,
                                 proactivity_level=_proactivity_level(self._config),
+                                personal_context=_personal_context_allowed(self._config),
                                 identity=_identity_block(
                                     self._config,
                                     compact=getattr(
@@ -6856,6 +6870,7 @@ class RealtimeVoiceSession:
                 instructions=_session_instructions(
                     self._language,
                     proactivity_level=_proactivity_level(self._config),
+                    personal_context=_personal_context_allowed(self._config),
                     identity=_identity_block(
                         self._config,
                         compact=getattr(self, "_compact_instructions", False),

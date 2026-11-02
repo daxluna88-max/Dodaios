@@ -144,6 +144,15 @@ def _local_models_tools(cfg: Any, _brain: Any) -> dict[str, Tool]:
     return build_tools(cfg, root=server_root(cfg))
 
 
+async def _jarvis_chat_extra(_cfg: Any, _brain: Any) -> str:
+    """The front chat answers in the chat; files are for when a person asks for one."""
+    return (
+        "Answer writing, explaining and brainstorming requests directly in the chat. "
+        "Use Write, Edit or RunCommand only when the person asks for a file, a "
+        "command or a change on disk."
+    )
+
+
 async def _local_models_extra(cfg: Any, _brain: Any) -> str:
     """What the assistant can already see: machine, inventory, roles, catalogue.
 
@@ -266,6 +275,7 @@ _KITS: Final[dict[str, SurfaceKit]] = {
         ladder=_JARVIS_LADDER,
         uses_stance=True,
         session_tools=_jarvis_tools,
+        system_extra=_jarvis_chat_extra,
         # Typed turns teach Jarvis the same way spoken ones do.
         turn_completed=_jarvis_completed,
         # Not the home directory: this surface hands out the folder tools, and

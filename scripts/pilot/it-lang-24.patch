@@ -1,0 +1,14 @@
+diff --git a/dodaios/core/turn_language.py b/dodaios/core/turn_language.py
+index 5b89294b3..ad53475bf 100644
+--- a/dodaios/core/turn_language.py
++++ b/dodaios/core/turn_language.py
+@@ -244,7 +244,8 @@ _ES_TOKENS: frozenset[str] = frozenset({
+     "hola", "sí", "puedes", "puedo", "puede", "quiero", "necesito", "dime",
+     "dame", "muestra", "lee", "escribe", "y", "pero",
+     "muy", "bien", "hay", "yo", "tú", "eso", "esto", "también",
+-    "entonces", "tengo",
++    "entonces", "tengo", "sé", "buenas", "buenos", "noches", "señor", "ayuda",
++    "ayúdame",
+ })
+ # Portuguese words also common in Spanish, German or English ("que", "para",
+ # "está", "da", "dos", "das", "um", "as", "do", "o", "e", "na", "tu", "porque",

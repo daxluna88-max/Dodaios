@@ -73,6 +73,12 @@ MAX_TURNS: Final[int] = 40
 #: How much of the chat's own log rides along as history.
 _HISTORY_MAX: Final[int] = 40
 
+#: Appended to a turn the person stopped, so the next turn does not pick it up.
+_STOPPED_NOTE: Final[str] = (
+    "\n[The user pressed Stop: the request above was abandoned. Do not resume "
+    "or answer it unless the user asks for it again.]"
+)
+
 _EFFORTS: Final[frozenset[str]] = frozenset(get_args(ReasoningEffort))
 
 
@@ -98,7 +104,13 @@ def brain_history_from_events(
     validation. Capped to the last ``_HISTORY_MAX`` messages.
     """
     out: list[BrainMessage] = []
-    for message in messages_from_events(events, max_events=None if max_messages is None else 600):
+    marked: list[dict[str, Any]] = []
+    for ev in events:
+        marked.append(ev)
+        if ev.get("kind") == "turn_finished" and (ev.get("payload") or {}).get("status") == "cancelled":
+            # Without this the model sees an unanswered request and resumes it.
+            marked.append({"kind": "assistant_text", "payload": {"text": _STOPPED_NOTE}})
+    for message in messages_from_events(marked, max_events=None if max_messages is None else 600):
         if message.role == "user":
             text = message.content if isinstance(message.content, str) else ""
             if text.strip():
@@ -294,7 +306,7 @@ class _StepMirror:
     defensive: a malformed event never reaches the brain (AP-18).
     """
 
-    __slots__ = ("_bus", "_children", "_emit", "_open", "_seen_text", "_trace_id", "_turn_id")
+    __slots__ = ("_bus", "_children", "_emit", "_open", "_seen_text", "_trace_id", "_turn_id", "results")
 
     def __init__(self, emit: Any, turn_id: str, bus: Any | None, trace_id: UUID) -> None:
         self._emit = emit
@@ -302,6 +314,7 @@ class _StepMirror:
         self._bus = bus
         self._trace_id = trace_id
         self._open: list[tuple[str, str]] = []  # (tool name, call id)
+        self.results: list[tuple[str, bool, str]] = []  # (tool name, ok, output), as they finish
         self._children: set[UUID] = set()
         self._seen_text: set[str] = set()
 
@@ -353,6 +366,7 @@ class _StepMirror:
             # without a start) would draw a headless row; drop it.
             return
         _, call_id = self._open.pop(index)
+        self.results.append((tool_name, ok, str(output)[:300]))
         await self._emit(
             "tool_result",
             {
@@ -530,6 +544,7 @@ async def run_brain_turn(
     _note_skill_trigger(brain, text)
 
     if bridge is not None:
+        from dodaios.agent_chat.destructive_guard import needs_confirmation
         from dodaios.society.surface import requires_explicit_approval
 
         bridge.arm(
@@ -545,7 +560,7 @@ async def run_brain_turn(
                     lambda name, args: requires_explicit_approval(session.session_id, name, args)
                 )
                 if session.surface == "society"
-                else lambda _name, _args: False,
+                else needs_confirmation,
             ),
         )
 
@@ -587,18 +602,62 @@ async def run_brain_turn(
 
     if status == "done" and handle.cancel.is_set():
         status = "cancelled"
-    if status == "done":
+    # ``text_delta`` is live only and never stored, so the words already on screen when the
+    # person pressed Stop (or the provider failed) would vanish on the next reload. The partial
+    # answer is kept as the turn's text, marked partial.
+    if status in ("done", "cancelled", "error"):
         answer = (reply or "").strip() or "".join(seen).strip()
+        from dodaios.brain.action_honesty import memory_claim_language, memory_not_saved_phrase
+
+        claimed = memory_claim_language(person_request or text, answer, mirror.results)
+        if claimed is not None:
+            log.warning("agent chat %s: reply claimed a save that did not happen", session.session_id)
+            answer = memory_not_saved_phrase(claimed)
         if answer:
-            await emit(
-                "assistant_text", {"turn_id": turn_id, "message_id": message_id, "text": answer}
-            )
+            payload: dict[str, Any] = {"turn_id": turn_id, "message_id": message_id, "text": answer}
+            if status != "done":
+                payload["partial"] = True
+            await emit("assistant_text", payload)
+    if status == "done":
         # Keep the safe explanation visible, but distinguish provider success
         # from an answer rejected by the execution/evidence backstop.
         if override.receipt.guard_failure:
             status = "error"
             error = override.receipt.failure_reason or "guarded_response"
     await finish(status, override.receipt.usage(), error)
+
+
+def _ui_language_fallback(brain: Any, text: str, history: list[BrainMessage]) -> str:
+    """The language to force for a turn whose own text names none, else ``""``.
+
+    A short message ("Ricorda", "Salvalo") has no detectable language, and the
+    first turn of a chat has no history to inherit one from, so the model got
+    only the soft "mirror the user" line and answered in English even in an
+    Italian-only UI. Same resolver as the brain's own, with the configured
+    ``ui.language`` as the last resort; detected text and history still win,
+    and a ``brain.reply_language`` pin is left to the brain.
+    """
+    from dodaios.core.turn_language import (
+        conversation_language_from_history,
+        resolve_conversation_language,
+    )
+
+    from dodaios.agent_chat.delegation_wait import CONTINUE_TURN
+
+    if text == CONTINUE_TURN:  # neutral English line, not the person's words
+        return ""
+    ui_language = getattr(getattr(getattr(brain, "_config", None), "ui", None), "language", "")
+    if not isinstance(ui_language, str) or not is_known_language(ui_language):
+        return ""
+    pin = getattr(brain, "reply_language", "auto") or "auto"
+    language = resolve_conversation_language(
+        pin,
+        "unknown",
+        text,
+        conversation_language=conversation_language_from_history(history, reply_language=pin),
+        fallback_language=ui_language,
+    )
+    return language if is_known_language(language) else ""
 
 
 async def _generate(
@@ -626,6 +685,8 @@ async def _generate(
         output_language = await resolve_agent_reply_language(
             session.session_id, text, output_language
         )
+    if not output_language and session.surface != "society" and not handle.continuation:
+        output_language = _ui_language_fallback(brain, text, history)
     handle.output_language = output_language
     kwargs: dict[str, Any] = {
         "use_history": False,

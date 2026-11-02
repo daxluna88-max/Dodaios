@@ -11,7 +11,7 @@
  *   <span>{t("nav.skills")}</span>
  *
  *   import { useUiLanguage, setUiLanguage } from "@/i18n";
- *   const lang = useUiLanguage();      // "en" | "de" | "es" | "zh" | "pt"
+ *   const lang = useUiLanguage();      // "en" | "de" | "es" | "zh" | "pt" | "it"
  *   setUiLanguage("de");               // updates reactively when loaded
  *
  * STT recognition language (what Whisper transcribes the spoken voice INTO) is
@@ -23,10 +23,10 @@ import { create } from "zustand";
 import enJson from "./locales/en.json";
 import { useEventStore } from "@/store/events";
 
-export type UiLanguage = "en" | "de" | "es" | "zh" | "pt";
+export type UiLanguage = "en" | "de" | "es" | "zh" | "pt" | "it";
 // "auto" mirrors the user's input language; the rest hard-pin the reply language.
 // Mirrors jarvis/brain/manager.py::SUPPORTED_REPLY_LANGUAGES (single source of truth).
-export type ReplyLanguage = "auto" | "en" | "de" | "es" | "pt";
+export type ReplyLanguage = "auto" | "en" | "de" | "es" | "pt" | "it";
 // "auto" lets the recogniser detect the spoken language per utterance (the
 // default); a concrete code forces what it transcribes into. Deliberately a
 // plain string, not a union: the accepted set is every language the recogniser
@@ -43,10 +43,10 @@ const STT_FALLBACK_OPTIONS: readonly string[] = ["auto"];
 const REPLY_LANGUAGE_ENDPOINT = "/api/settings/reply-language";
 const UI_LANGUAGE_ENDPOINT = "/api/settings/ui-language";
 const STT_LANGUAGE_ENDPOINT = "/api/settings/stt-language";
-const REPLY_VALUES: readonly ReplyLanguage[] = ["auto", "en", "de", "es", "pt"];
+const REPLY_VALUES: readonly ReplyLanguage[] = ["auto", "en", "de", "es", "pt", "it"];
 
 export function isUiLanguage(v: unknown): v is UiLanguage {
-  return v === "en" || v === "de" || v === "es" || v === "zh" || v === "pt";
+  return v === "en" || v === "de" || v === "es" || v === "zh" || v === "pt" || v === "it";
 }
 
 function isReplyLanguage(v: unknown): v is ReplyLanguage {
@@ -67,6 +67,7 @@ const RESOURCES: Record<UiLanguage, Record<string, unknown>> = {
   es: enJson as Record<string, unknown>,
   zh: enJson as Record<string, unknown>,
   pt: enJson as Record<string, unknown>,
+  it: enJson as Record<string, unknown>,
 };
 
 type LazyUiLanguage = Exclude<UiLanguage, "en">;
@@ -76,6 +77,7 @@ const UI_LOCALE_LOADERS: Record<LazyUiLanguage, () => Promise<unknown>> = {
   es: () => import("./locales/es.json"),
   zh: () => import("./locales/zh.json"),
   pt: () => import("./locales/pt.json"),
+  it: () => import("./locales/it.json"),
 };
 const UI_LOCALE_PROMISES: Partial<Record<LazyUiLanguage, Promise<void>>> = {};
 
@@ -105,7 +107,7 @@ export function loadUiLocale(lang: UiLanguage): Promise<void> {
 /**
  * Locale chunks that load on demand.
  *
- * English rides in the startup bundle; German, Spanish, Chinese and Portuguese
+ * English rides in the startup bundle; German, Spanish, Chinese, Portuguese and Italian
  * load on demand.
  * A section nobody opens on start — the marketplace's publish studio, say —
  * keeps its strings in
@@ -158,6 +160,7 @@ const CHUNK_LOADERS: Record<LocaleChunk, Record<UiLanguage, () => Promise<unknow
     es: () => import("./locales/marketplace/es.json"),
     zh: () => import("./locales/marketplace/zh.json"),
     pt: () => import("./locales/marketplace/pt.json"),
+    it: () => import("./locales/marketplace/it.json"),
   },
   local_models: {
     en: () => import("./locales/local_models/en.json"),
@@ -165,6 +168,7 @@ const CHUNK_LOADERS: Record<LocaleChunk, Record<UiLanguage, () => Promise<unknow
     es: () => import("./locales/local_models/es.json"),
     zh: () => import("./locales/local_models/zh.json"),
     pt: () => import("./locales/local_models/pt.json"),
+    it: () => import("./locales/local_models/it.json"),
   },
   society: {
     en: () => import("./locales/society/en.json"),
@@ -172,6 +176,7 @@ const CHUNK_LOADERS: Record<LocaleChunk, Record<UiLanguage, () => Promise<unknow
     es: () => import("./locales/society/es.json"),
     zh: () => import("./locales/society/zh.json"),
     pt: () => import("./locales/society/pt.json"),
+    it: () => import("./locales/society/it.json"),
   },
   computers: {
     en: () => import("./locales/computers/en.json"),
@@ -179,6 +184,7 @@ const CHUNK_LOADERS: Record<LocaleChunk, Record<UiLanguage, () => Promise<unknow
     es: () => import("./locales/computers/es.json"),
     zh: () => import("./locales/computers/zh.json"),
     pt: () => import("./locales/computers/pt.json"),
+    it: () => import("./locales/computers/it.json"),
   },
   // First-run guide and app tour: read on one boot, then only on a replay.
   onboarding: {
@@ -187,6 +193,7 @@ const CHUNK_LOADERS: Record<LocaleChunk, Record<UiLanguage, () => Promise<unknow
     es: () => import("./locales/onboarding/es.json"),
     zh: () => import("./locales/onboarding/zh.json"),
     pt: () => import("./locales/onboarding/pt.json"),
+    it: () => import("./locales/onboarding/it.json"),
   },
   // The appshot editor: opened from a capture, never on start.
   appshot_editor: {
@@ -195,6 +202,7 @@ const CHUNK_LOADERS: Record<LocaleChunk, Record<UiLanguage, () => Promise<unknow
     es: () => import("./locales/appshot_editor/es.json"),
     zh: () => import("./locales/appshot_editor/zh.json"),
     pt: () => import("./locales/appshot_editor/pt.json"),
+    it: () => import("./locales/appshot_editor/it.json"),
   },
   // The provider page (Settings → API Keys).
   providers: {
@@ -203,6 +211,7 @@ const CHUNK_LOADERS: Record<LocaleChunk, Record<UiLanguage, () => Promise<unknow
     es: () => import("./locales/providers/es.json"),
     zh: () => import("./locales/providers/zh.json"),
     pt: () => import("./locales/providers/pt.json"),
+    it: () => import("./locales/providers/it.json"),
   },
   // A pane's "Review changes" dialog: opened from its title bar, never on start.
   pane_review: {
@@ -211,10 +220,11 @@ const CHUNK_LOADERS: Record<LocaleChunk, Record<UiLanguage, () => Promise<unknow
     es: () => import("./locales/pane_review/es.json"),
     zh: () => import("./locales/pane_review/zh.json"),
     pt: () => import("./locales/pane_review/pt.json"),
+    it: () => import("./locales/pane_review/it.json"),
   },
   // The Dodaios Verse starship (Agents > Dodaios Verse, the IDE's engineering tab).
   // Its strings live in several files per language (`ship/<lang>.json` and `ship/<area>.<lang>.json`).
-  ship: { en: shipLocale("en"), de: shipLocale("de"), es: shipLocale("es"), zh: shipLocale("zh"), pt: shipLocale("pt") },
+  ship: { en: shipLocale("en"), de: shipLocale("de"), es: shipLocale("es"), zh: shipLocale("zh"), pt: shipLocale("pt"), it: shipLocale("it") },
   // The Memory section (the vault reader, map and editor).
   memory: {
     en: () => import("./locales/memory/en.json"),
@@ -222,6 +232,7 @@ const CHUNK_LOADERS: Record<LocaleChunk, Record<UiLanguage, () => Promise<unknow
     es: () => import("./locales/memory/es.json"),
     zh: () => import("./locales/memory/zh.json"),
     pt: () => import("./locales/memory/pt.json"),
+    it: () => import("./locales/memory/it.json"),
   },
   // "Built for you": what the self-building loop made, opened from its nav row.
   self_build: {
@@ -230,10 +241,11 @@ const CHUNK_LOADERS: Record<LocaleChunk, Record<UiLanguage, () => Promise<unknow
     es: () => import("./locales/self_build/es.json"),
     zh: () => import("./locales/self_build/zh.json"),
     pt: () => import("./locales/self_build/pt.json"),
+    it: () => import("./locales/self_build/it.json"),
   },
 };
 
-const EXTRA: Record<UiLanguage, Record<string, unknown>[]> = { en: [], de: [], es: [], zh: [], pt: [] };
+const EXTRA: Record<UiLanguage, Record<string, unknown>[]> = { en: [], de: [], es: [], zh: [], pt: [], it: [] };
 const CHUNK_PROMISES: Partial<Record<LocaleChunk, Promise<void>>> = {};
 
 function unwrapModule(mod: unknown): Record<string, unknown> {

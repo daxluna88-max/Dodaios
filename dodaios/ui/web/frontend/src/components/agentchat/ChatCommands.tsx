@@ -16,7 +16,7 @@ const LOCAL = new Set<ChatCommandName>(["help", "clear", "history", "model", "ro
 export function useChatCommands({ value, setValue, onModel, onClear, agentId = "jarvis", attachments = [], attachmentsBusy = false, onAttachmentsSent }: Options) {
   const t = useT();
   const localeValue = t("slash.locale");
-  const locale = ["en", "de", "es", "pt"].includes(localeValue) ? localeValue : "en";
+  const locale = ["en", "de", "es", "pt", "it"].includes(localeValue) ? localeValue : "en";
   const store = useAgentChatApi();
   const sid = useAgentChat((s) => s.activeSessionId);
   const surface = useAgentChat((s) => s.surface);
@@ -201,7 +201,7 @@ export function ChatCommandPanel({ control, anchorRef }: { control: ReturnType<t
     {control.panel ? <section role="dialog" aria-label={t(`slash.${control.panel}`)} className="mb-2 max-h-[45vh] overflow-auto rounded-lg border border-border bg-card p-3">
       <button aria-label={t("slash.close")} className="float-right" onClick={() => control.setPanel(null)}><X className="h-4 w-4" /></button>
       {control.panel === "routines" ? <AgentRoutinesList agentId={control.agentId} variant="rail" /> : null}
-      {control.panel === "status" ? <div className="space-y-2"><p>{t("slash.mode")}: {control.state?.mode}</p>
+      {control.panel === "status" ? <div className="space-y-2"><p>{t("slash.mode")}: {control.state ? t(`slash.${control.state.mode}_active`) : ""}</p>
         <p>{t("slash.task")}: {control.state?.last_request || t("slash.no_task")}</p>
         {goal ? <><p>{t("slash.goal")}: {goal.objective} — {t(`slash.goal_${goal.status}`)}</p><p>{goal.reason}</p></> : null}</div> : null}
       {control.panel === "find" ? control.hits.length ? control.hits.map((hit) => <button key={hit.seq} onClick={() => control.reveal(hit)} className="block w-full border-b border-border p-2 text-left hover:bg-secondary">

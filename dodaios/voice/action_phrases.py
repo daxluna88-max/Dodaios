@@ -7,7 +7,7 @@ displayed VERBATIM, so it must be rendered in the turn's language HERE (live
 bug 2026-06-15: an all-English computer-use turn ended with the German
 "Erledigt." completion readback).
 
-Pure dict lookups — no LLM, no IO (AP-9 / AP-11). Languages: de / en / es / pt;
+Pure dict lookups — no LLM, no IO (AP-9 / AP-11). Languages: de / en / es / pt / it;
 an unknown language falls back to German (the historical default). The German
 column is intentionally the same wording the paths used before, so a German
 turn is byte-identical to the old behavior.
@@ -20,9 +20,9 @@ from dodaios.core.turn_language import resolve_turn_language
 from dodaios.i18n import catalog as i18n_catalog
 
 _DEFAULT = "en"
-_SUPPORTED = ("de", "en", "es", "pt")
+_SUPPORTED = ("de", "en", "es", "pt", "it")
 
-#: ``HarnessTask.env`` key carrying the turn's resolved output language (de/en/es/pt)
+#: ``HarnessTask.env`` key carrying the turn's resolved output language (de/en/es/pt/it)
 #: into the computer-use harness, so the in-harness verifier writes its spoken
 #: ``proof`` in the user's language instead of defaulting to English (live bug
 #: 2026-06-27: a German turn read back "Erledigt — The file explorer window is
@@ -45,9 +45,9 @@ _PHRASES: dict[str, dict[str, str]] = i18n_catalog.nested_table("voice.action.ph
 
 
 def resolve_phrase_language(reply_language: str | None, user_text: str) -> str:
-    """Resolve de/en/es/pt for a deterministic action phrase.
+    """Resolve de/en/es/pt/it for a deterministic action phrase.
 
-    An explicit ``brain.reply_language`` pin (de/en/es/pt) wins; otherwise the
+    An explicit ``brain.reply_language`` pin (de/en/es/pt/it) wins; otherwise the
     turn's language is detected from ``user_text``; ambiguous text keeps the
     historical German default. Mirrors ``BrainManager._direct_ack_language`` so
     every non-LLM spoken path resolves language the same way.
@@ -302,6 +302,7 @@ _REASON_FAMILIES: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
             "en": "{subject} is not connected. Connect it in the Plugins view.",
             "es": "{subject} no está conectado. Conéctalo en la vista de Plugins.",
             "pt": "{subject} não está ligado. Liga-o na vista de Plugins.",
+            "it": "{subject} non è collegato. Collegalo nella vista Plugin.",
         },
     ),
     (
@@ -315,6 +316,7 @@ _REASON_FAMILIES: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
             "en": "The sign-in for {subject} expired. Reconnect it in the Plugins view.",
             "es": "La sesión de {subject} caducó. Vuelve a conectarlo en la vista de Plugins.",
             "pt": "A sessão de {subject} expirou. Volta a ligá-lo na vista de Plugins.",
+            "it": "La sessione di {subject} è scaduta. Ricollegalo nella vista Plugin.",
         },
     ),
     (
@@ -324,6 +326,7 @@ _REASON_FAMILIES: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
             "en": "I don't know a skill called {subject}.",
             "es": "No conozco ninguna skill llamada {subject}.",
             "pt": "Não conheço nenhuma skill chamada {subject}.",
+            "it": "Non conosco nessuna skill chiamata {subject}.",
         },
     ),
     (
@@ -335,6 +338,7 @@ _REASON_FAMILIES: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
             "en": "The skill {subject} is still a draft. Promote it first.",
             "es": "La skill {subject} sigue siendo un borrador. Actívala primero.",
             "pt": "A skill {subject} ainda é um rascunho. Ativa-a primeiro.",
+            "it": "La skill {subject} è ancora una bozza. Attivala prima.",
         },
     ),
     (
@@ -347,6 +351,7 @@ _REASON_FAMILIES: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
             "en": "The skill {subject} is switched off. Switch it back on first.",
             "es": "La skill {subject} está desactivada. Vuelve a activarla primero.",
             "pt": "A skill {subject} está desativada. Volta a ativá-la primeiro.",
+            "it": "La skill {subject} è disattivata. Riattivala prima.",
         },
     ),
 )
@@ -382,12 +387,14 @@ _PERMISSION_FIXED_CAUSES: dict[str, dict[str, str]] = {
         "en": "Dodaios paused because a macOS system dialog is open.",
         "es": "Dodaios se detuvo porque hay un cuadro de diálogo del sistema abierto.",
         "pt": "O Dodaios parou porque há uma caixa de diálogo do sistema aberta.",
+        "it": "Dodaios si è fermato perché c'è una finestra di dialogo di sistema aperta.",
     },
     "A macOS permission is missing right now.": {
         "de": "Eine macOS-Berechtigung fehlt gerade.",  # i18n-allow
         "en": "A macOS permission is missing right now.",
         "es": "Falta un permiso de macOS en este momento.",
         "pt": "Falta uma permissão do macOS neste momento.",
+        "it": "In questo momento manca un'autorizzazione di macOS.",
     },
 }
 
@@ -542,7 +549,7 @@ _CU_BLOCKED_PERMISSION_RE = re.compile(
 #: The engine's exit code for a tool/action failure; ``blocked_permission`` rides it.
 _CU_TOOL_EXIT_CODE = 8
 
-#: How the localized (de/es/pt) phrase names a permission, found by keyword in the
+#: How the localized (de/es/pt/it/it) phrase names a permission, found by keyword in the
 #: engine's English sentence: ``(keyword, {lang: (permission name, settings pane)})``.
 #: The pane names are the macOS UI labels (UNVERIFIED on a real Mac: they move
 #: between macOS versions).
@@ -561,6 +568,10 @@ _BLOCKED_PERMISSION_NAMES: tuple[tuple[str, dict[str, tuple[str, str]]], ...] = 
             "pt": (
                 "Acessibilidade",
                 "Definições do Sistema > Privacidade e segurança > Acessibilidade",
+            ),
+            "it": (
+                "Accessibilità",
+                "Impostazioni di Sistema > Privacy e sicurezza > Accessibilità",
             ),
         },
     ),
@@ -582,6 +593,11 @@ _BLOCKED_PERMISSION_NAMES: tuple[tuple[str, dict[str, tuple[str, str]]], ...] = 
                 "Definições do Sistema > Privacidade e segurança > Gravação de ecrã e áudio do "
                 "sistema",
             ),
+            "it": (
+                "Registrazione schermo e audio di sistema",
+                "Impostazioni di Sistema > Privacy e sicurezza > "
+                "Registrazione schermo e audio di sistema",
+            ),
         },
     ),
     (
@@ -598,6 +614,10 @@ _BLOCKED_PERMISSION_NAMES: tuple[tuple[str, dict[str, tuple[str, str]]], ...] = 
             "pt": (
                 "Monitorização de entrada",
                 "Definições do Sistema > Privacidade e segurança > Monitorização de entrada",
+            ),
+            "it": (
+                "Monitoraggio input",
+                "Impostazioni di Sistema > Privacy e sicurezza > Monitoraggio input",
             ),
         },
     ),
@@ -616,6 +636,10 @@ _BLOCKED_PERMISSION_NAMES: tuple[tuple[str, dict[str, tuple[str, str]]], ...] = 
                 "Microfone",
                 "Definições do Sistema > Privacidade e segurança > Microfone",
             ),
+            "it": (
+                "Microfono",
+                "Impostazioni di Sistema > Privacy e sicurezza > Microfono",
+            ),
         },
     ),
     (
@@ -632,6 +656,10 @@ _BLOCKED_PERMISSION_NAMES: tuple[tuple[str, dict[str, tuple[str, str]]], ...] = 
             "pt": (
                 "Automatização",
                 "Definições do Sistema > Privacidade e segurança > Automatização",
+            ),
+            "it": (
+                "Automazione",
+                "Impostazioni di Sistema > Privacy e sicurezza > Automazione",
             ),
         },
     ),
@@ -669,15 +697,15 @@ def _spoken_en(sentence: str) -> str:
 
 def _spoken_pane(text: str, lang: str) -> str:
     """Replace the written Settings-path separators with speakable words."""
-    and_word = {"de": "und", "es": "y", "pt": "e"}.get(lang, "and")
-    then_word = {"de": "dann", "es": "luego", "pt": "depois"}.get(lang, "then")
+    and_word = {"de": "und", "es": "y", "pt": "e", "it": "e"}.get(lang, "and")
+    then_word = {"de": "dann", "es": "luego", "pt": "depois", "it": "poi"}.get(lang, "then")
     return text.replace(" > ", f", {then_word} ").replace(" & ", f" {and_word} ")
 
 
 def _blocked_permission_readback(lang: str, sentence: str) -> str:
     """The localized readback of a ``blocked_permission`` mission (no LLM, AP-11).
 
-    English forwards the engine's own sentence (second person, speakable). de/es/pt
+    English forwards the engine's own sentence (second person, speakable). de/es/pt/it
     cannot (it is English), so they name the permission by keyword and pick the
     remedy by REASON: a dialog still open, a restart, an unaskable permission or a
     restriction each get their own phrase, and only a switch that is off says "allow

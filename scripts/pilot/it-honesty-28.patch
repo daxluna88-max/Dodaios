@@ -1,0 +1,16 @@
+diff --git a/dodaios/brain/action_honesty.py b/dodaios/brain/action_honesty.py
+index 84a77e65d..7b8842c30 100644
+--- a/dodaios/brain/action_honesty.py
++++ b/dodaios/brain/action_honesty.py
+@@ -451,6 +451,11 @@ _MEMORY_CLAIM_RE = re.compile(
+     r"\bd'ora\s+in\s+poi\s+(?:mi\s+occupo|memorizzo|ricordo)\b|"
+     r"\bi(?:'ve|\s+have)\s+(?:saved|stored|noted|recorded|logged|remembered)\b|"
+     r"\b(?:noted|saved|stored)\s*(?:[\u2014:,-]|that\b|it\b)|"
++    # Live 2026-10-30: "Noted. Il tuo colore di prova è verde acqua." (a full stop, not a dash)
++    # confirmed a save that never happened and passed the patterns above.
++    r"\bnoted\b|\bricevuto\b|"
++    r"\b(?:lo|la|li|le)\s+ricorder\w+|\bricorder\w+\s+che\b|"
++    r"\bterr\w+\s+a\s+mente\b|\bme\s+lo\s+segno\b|"
+     r"\bin\s+(?:your|my)\s+profile\b"
+ )
+ _MEMORY_DENIAL_RE = re.compile(
