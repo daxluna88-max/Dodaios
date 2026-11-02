@@ -136,8 +136,8 @@ describe("ControlStrip", () => {
   it("unknown counts are shown as unknown, not as zero", async () => {
     serve({ ...BASE, state: "unknown", indicators: { audio: "unknown", jobs: null, approvals: null } });
     mount();
-    await screen.findByText("control_strip.state_unknown");
-    expect(screen.getAllByText("control_strip.level_unknown").length).toBe(3);
+    // The badge also reads "unknown" before the first reading arrives: wait for the counts.
+    await waitFor(() => expect(screen.getAllByText("control_strip.level_unknown").length).toBe(3));
   });
 
   it("a lost connection never leaves the old state on screen as current", async () => {
