@@ -32,10 +32,14 @@ export function MicControls({ live }: { live: boolean }) {
           data-testid="mic-gate"
           aria-pressed={open}
           onClick={push ? undefined : () => setMicGateOpen(!open)}
-          onPointerDown={push ? () => setMicGateOpen(true) : undefined}
+          onPointerDown={push ? (e) => {
+            // Capture the pointer: a finger that drifts off the button must not release it.
+            try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* not supported */ }
+            setMicGateOpen(true);
+          } : undefined}
           onPointerUp={push ? () => setMicGateOpen(false) : undefined}
-          onPointerLeave={push ? () => setMicGateOpen(false) : undefined}
           onPointerCancel={push ? () => setMicGateOpen(false) : undefined}
+          style={push ? { touchAction: "none", WebkitTouchCallout: "none", WebkitUserSelect: "none" } : undefined}
           onContextMenu={push ? (e) => e.preventDefault() : undefined}
           className={cn(
             "h-7 touch-manipulation select-none rounded-full px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
