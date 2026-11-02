@@ -44,6 +44,7 @@ RESPONSE_REQUEST = "response.request"
 TOOL_RESULT = "tool.result"
 TEXT = "text"
 TURN_CONTEXT = "turn.context"
+LLM_DELTA = "llm.delta"
 INTERRUPT = "interrupt"
 TRUNCATE = "truncate"
 SELFTEST = "selftest"
@@ -62,6 +63,8 @@ USAGE = "usage"
 METRICS = "metrics"
 ERROR = "error"
 SELFTEST_RESULT = "selftest.result"
+LLM_REQUEST = "llm.request"
+LLM_CANCEL = "llm.cancel"
 
 
 class ProtocolError(ValueError):

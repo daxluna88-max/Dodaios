@@ -87,6 +87,10 @@ def supports_api_runner(provider: str) -> bool:
 
 
 def build_brain(provider: str, model: str) -> Any:
+    from dodaios.brain import engine_policy
+
+    # Product policy (ADR-0049): this path builds the client directly, not through the registry.
+    engine_policy.check_provider(provider)
     mod_name, cls_name = BRAIN_BY_PROVIDER[provider]
     mod = __import__(mod_name, fromlist=[cls_name])
     return getattr(mod, cls_name)(model=model or None)

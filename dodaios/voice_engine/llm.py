@@ -9,7 +9,9 @@ OpenAI-compatible client (llama-server, LM Studio) follows in phase P1.
 from __future__ import annotations
 
 import http.client
+import ipaddress
 import json
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -20,6 +22,29 @@ from urllib.parse import urlsplit
 from dodaios.voice_engine.chunker import ClauseChunker
 
 DEFAULT_BASE_URL = "http://127.0.0.1:11434"
+
+
+def _refuse_remote_host_for_work(host: str) -> None:
+    """Product policy (ADR-0049): under Work the Ollama server must be on this machine.
+
+    Same rule as ``dodaios.brain.engine_policy`` (loopback literal, ``localhost``, or a host in
+    ``JARVIS_LOCAL_ALLOWED_HOSTS``; unknown product values mean Work). Repeated here because
+    the voice engine may not import the app (test_package_contract).
+    """
+    product = (os.environ.get("JARVIS_PRODUCT") or "").strip().lower()
+    if not product or product == "consumer":
+        return
+    name = host.strip().strip("[]").lower()
+    raw_allowed = os.environ.get("JARVIS_LOCAL_ALLOWED_HOSTS", "")
+    allowed = {h.strip().lower() for h in raw_allowed.split(",")}
+    if name in allowed or name == "localhost" or name.endswith(".localhost"):
+        return
+    try:
+        if ipaddress.ip_address(name).is_loopback:
+            return
+    except ValueError:  # not an IP literal: any other name is never considered local
+        pass
+    raise ValueError(f"Work product: Ollama host {host!r} is not this machine")
 
 
 @dataclass(slots=True)
@@ -69,6 +94,7 @@ class OllamaChat:
         parts = urlsplit(base_url)
         if parts.scheme != "http" or not parts.hostname:
             raise ValueError(f"expected an http://host:port Ollama address, got {base_url!r}")
+        _refuse_remote_host_for_work(parts.hostname)
         self.model = model
         self._host = parts.hostname
         self._port = parts.port or 11434

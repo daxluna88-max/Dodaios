@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import {
   makeProviderCategories,
   ProviderCategory,
+  TierSection,
   useTierHealth,
 } from "@/components/providers/ProviderTierSection";
 import { useProviders } from "@/hooks/useProviders";
@@ -156,5 +157,37 @@ export function PipelinePane({ onOpenAgents }: { onOpenAgents: () => void }) {
         health={health.tts}
       />
     </div>
+  );
+}
+
+/**
+ * The experimental on-device voice, shown under whichever engine pane is open.
+ *
+ * It is the existing Local voice card (setup, self-test, who answers), mounted on
+ * the one screen where live calls are chosen. Nothing here turns it on: switching
+ * to it still goes through the card's own experimental acknowledgement. Hidden
+ * until the provider list has loaded and while it cannot be reached.
+ */
+export function LocalVoiceSection() {
+  const t = useT();
+  const { providers, loading, error, refetch, setActiveOptimistic } = useProviders();
+  const health = useTierHealth(providers);
+  const local = providers.filter((provider) => provider.id === "local-voice");
+  if (loading || error || local.length === 0) return null;
+  return (
+    <section data-testid="voice-local-section" className="mt-6">
+      <h3 className="text-sm font-medium text-foreground">
+        {t("providers_page.local_voice_section_title")}
+      </h3>
+      <p className="mb-3 mt-1 text-xs text-muted-foreground">
+        {t("providers_page.local_voice_section_desc")}
+      </p>
+      <TierSection
+        providers={local}
+        onChanged={refetch}
+        onActivateOptimistic={setActiveOptimistic}
+        health={health.realtime}
+      />
+    </section>
   );
 }

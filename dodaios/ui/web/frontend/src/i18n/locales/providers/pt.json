@@ -1,5 +1,7 @@
 {
   "providers_page": {
+    "local_voice_section_title": "Neste computador (experimental)",
+    "local_voice_section_desc": "Chamadas de voz que rodam neste computador. Escolha quem responde: o modelo local ou qualquer provedor que o app consiga alcançar.",
     "subtitle": "As chamadas em direto correm no OpenAI GPT-Live ou, se mudares, na Pipeline. Os agentes correm em todas as subscrições ou chaves que ativares aqui.",
     "checking": "A verificar…",
     "checked_now": "Verificado agora mesmo",

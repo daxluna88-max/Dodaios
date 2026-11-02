@@ -1,5 +1,7 @@
 {
   "providers_page": {
+    "local_voice_section_title": "Auf diesem Rechner (experimentell)",
+    "local_voice_section_desc": "Sprachanrufe, die auf diesem Rechner laufen. Wähle, wer antwortet: das lokale Modell oder ein Anbieter, den die App erreichen kann.",
     "subtitle": "Live-Gespräche laufen über OpenAI GPT-Live oder, wenn du umschaltest, über die Pipeline. Die Agenten laufen über jedes Abo und jeden Schlüssel, den du hier einschaltest.",
     "checking": "Wird geprüft…",
     "checked_now": "Gerade geprüft",

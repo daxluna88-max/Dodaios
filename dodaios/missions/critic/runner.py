@@ -2078,6 +2078,7 @@ class CriticRunner:
         reservation: PaidReservation | None = None
         call_usd: float | None = None
         try:
+            from dodaios.brain import engine_policy
             from dodaios.brain.provider_registry import BrainProviderRegistry
             from dodaios.core.config import (
                 get_jarvis_agent_secret,
@@ -2085,6 +2086,8 @@ class CriticRunner:
             )
             from dodaios.core.protocols import BrainMessage, BrainRequest
 
+            # Product policy (ADR-0049): this path builds the class directly, not via the registry.
+            engine_policy.check_provider(provider)
             cls = BrainProviderRegistry().get_class(provider)
             worker_key = get_jarvis_agent_secret(provider)
             with override_provider_secrets({provider: worker_key}):

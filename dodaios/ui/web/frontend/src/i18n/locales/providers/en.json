@@ -1,5 +1,7 @@
 {
   "providers_page": {
+    "local_voice_section_title": "On this machine (experimental)",
+    "local_voice_section_desc": "Voice calls that run on this computer. Choose who answers: the local model, or any provider the app can reach.",
     "subtitle": "Live calls run on OpenAI GPT-Live, or on the Pipeline if you switch to it. Agents run on every subscription or key you turn on here.",
     "checking": "Checking…",
     "checked_now": "Checked just now",

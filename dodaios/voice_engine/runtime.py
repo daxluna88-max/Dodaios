@@ -42,6 +42,8 @@ class RuntimeConfig:
     # Low, like the bench's tool runs: a voice turn wants the same tool for the
     # same request, not variety (plan section 4.6).
     llm_temperature: float = 0.2
+    #: ``ollama`` (a local server reached from here) or ``bridge`` (the app answers; ADR-0051).
+    llm_source: str = "ollama"
     engine: EngineConfig = field(default_factory=EngineConfig)
 
     @classmethod
@@ -58,6 +60,7 @@ class RuntimeConfig:
             llm_num_ctx=int(llm.get("num_ctx") or cls.llm_num_ctx),
             llm_keep_alive=str(llm.get("keep_alive") or cls.llm_keep_alive),
             llm_temperature=float(llm.get("temperature", cls.llm_temperature)),
+            llm_source="bridge" if llm.get("source") == "bridge" else "ollama",
             engine=engine,
         )
 
@@ -114,15 +117,20 @@ def build_models(config: RuntimeConfig, progress: Progress) -> tuple[EngineModel
         return voices[config.languages[0]]
 
     progress("llm", 0.8)
-    llm = OllamaChat(config.llm_model, base_url=config.llm_base_url, num_ctx=config.llm_num_ctx,
-                     keep_alive=config.llm_keep_alive, temperature=config.llm_temperature)
-    timings["llm_load"] = round(llm.warm(), 2)
+    if config.llm_source == "bridge":
+        from dodaios.voice_engine.bridge_llm import BridgeChat  # noqa: PLC0415
+
+        llm: Any = BridgeChat()  # no local model to load; the app answers each call
+    else:
+        llm = OllamaChat(config.llm_model, base_url=config.llm_base_url, num_ctx=config.llm_num_ctx,
+                         keep_alive=config.llm_keep_alive, temperature=config.llm_temperature)
+        timings["llm_load"] = round(llm.warm(), 2)
     models = EngineModels(
         vad_factory=lambda: SileroVad(vad_path), turn=turn, stt=stt, tts_for=tts_for, llm=llm
     )
     progress("loaded", 0.9)
-    return models, {"load_s": timings, "voices": voice_kind, "llm": config.llm_model,
-                    "errors": errors}
+    llm_name = config.llm_model if config.llm_source == "ollama" else "app-bridge"
+    return models, {"load_s": timings, "voices": voice_kind, "llm": llm_name, "errors": errors}
 
 
 def selftest(models: EngineModels, languages: list[str]) -> dict[str, Any]:

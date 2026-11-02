@@ -4702,6 +4702,12 @@ class VoiceEngineConfig(BaseModel):
     #: Ollama tag the engine answers with. Empty = automatic: the model setup
     #: picked (installed models first), else the machine-class default.
     llm_model: str = ""
+    #: Who answers the engine's model calls: ``ollama`` (a local server, the default) or
+    #: ``brain`` (the app, through ``answer_provider`` / ``answer_provider_model``; Work allows only
+    #: local providers).
+    answer_source: str = "ollama"
+    answer_provider: str = ""
+    answer_provider_model: str = ""
     #: Languages the engine loads a voice for; the first is the fallback voice.
     languages: list[str] = Field(default_factory=lambda: ["de", "en"])
 
@@ -4711,10 +4717,15 @@ class VoiceEngineConfig(BaseModel):
         text = str(value or "").strip().lower()
         return text if text in VOICE_ENGINE_VOICES else "pocket"
 
-    @field_validator("llm_model", mode="before")
+    @field_validator("llm_model", "answer_provider", "answer_provider_model", mode="before")
     @classmethod
     def _strip_model(cls, value: object) -> str:
         return str(value or "").strip()
+
+    @field_validator("answer_source", mode="before")
+    @classmethod
+    def _known_answer_source(cls, value: object) -> str:
+        return "brain" if str(value or "").strip().lower() == "brain" else "ollama"
 
     @field_validator("languages", mode="before")
     @classmethod
@@ -4722,6 +4733,25 @@ class VoiceEngineConfig(BaseModel):
         items = value if isinstance(value, list | tuple) else []
         cleaned = [str(x).strip().lower() for x in items if str(x).strip()]
         return cleaned or ["de", "en"]
+
+
+class NetworkConfig(BaseModel):
+    """``[network]`` — the opt-in strict offline profile (ADR-0053).
+
+    ``policy = "local-only"`` refuses every connection and DNS lookup that is not this machine (or a host
+    listed in ``JARVIS_LOCAL_ALLOWED_HOSTS``). It is read at process start, so a change needs a restart;
+    ``JARVIS_NETWORK_POLICY`` overrides it. Written only through ``config_writer.set_network_policy``.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    policy: str = "off"
+
+    @field_validator("policy", mode="before")
+    @classmethod
+    def _known_policy(cls, value: object) -> str:
+        text = str(value or "").strip().lower()
+        return text if text in ("off", "local-only") else "off"
 
 
 class SelfBuildConfig(BaseModel):
@@ -4775,6 +4805,7 @@ class JarvisConfig(BaseModel):
     live: LiveConfig = Field(default_factory=LiveConfig)
     # [voice_engine] — the Jarvis-owned local voice engine (ADR-0037).
     voice_engine: VoiceEngineConfig = Field(default_factory=VoiceEngineConfig)
+    network: NetworkConfig = Field(default_factory=NetworkConfig)
     # Google key routing (AI Studio vs Vertex express) — see GoogleAuthConfig.
     google: GoogleAuthConfig = Field(default_factory=GoogleAuthConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)

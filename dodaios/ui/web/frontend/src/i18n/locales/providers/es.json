@@ -1,5 +1,7 @@
 {
   "providers_page": {
+    "local_voice_section_title": "En este equipo (experimental)",
+    "local_voice_section_desc": "Llamadas de voz que se ejecutan en este equipo. Elige quién responde: el modelo local o cualquier proveedor al que la app pueda llegar.",
     "subtitle": "Las llamadas en directo funcionan con OpenAI GPT-Live o, si cambias, con la Pipeline. Los agentes funcionan con cada suscripción o clave que actives aquí.",
     "checking": "Comprobando…",
     "checked_now": "Comprobado ahora",

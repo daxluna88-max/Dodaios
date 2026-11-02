@@ -69,6 +69,10 @@ def load(group: str, name: str, protocol: type[Protocol] | None = None) -> type[
     if not _is_plugin_group(group):
         raise ValueError(f"Unknown plugin group: {group}")
 
+    # Product policy (ADR-0049): Work refuses cloud STT/TTS/realtime plugins at this door.
+    from dodaios.brain.engine_policy import check_service
+
+    check_service(group, name)
     eps = entry_points_for(group)
     candidates = [ep for ep in eps if ep.name == name]
     if not candidates:

@@ -94,6 +94,14 @@ export interface LocalVoiceStatus {
   llm_choices: string[];
   voice: string;
   voices: string[];
+  /** Who answers voice turns: this machine's Ollama, or an app-side provider (ADR-0051). */
+  answer_source: "ollama" | "brain";
+  answer_provider: string;
+  answer_provider_model: string;
+  /** Providers the app could answer with; the Work product lists local ones only. */
+  answer_providers: Array<{ id: string; local: boolean }>;
+  /** `work` | `consumer` | null (no product set). */
+  product: string | null;
   machine_class: LocalVoiceMachineClass;
   expected_latency: LocalVoiceLatency;
   platform: "windows" | "macos" | "linux";
@@ -127,6 +135,9 @@ export async function runLocalVoiceSelftest(): Promise<LocalVoiceStatus> {
 export async function saveLocalVoiceSettings(change: {
   voice?: string;
   llm_model?: string;
+  answer_source?: "ollama" | "brain";
+  answer_provider?: string;
+  answer_provider_model?: string;
 }): Promise<LocalVoiceStatus> {
   return readJson<LocalVoiceStatus>(
     await fetch(`${BASE}/settings`, {

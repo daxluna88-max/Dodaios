@@ -28,6 +28,10 @@ class LocalVoiceSettingsBody(BaseModel):
     voice: str | None = None
     #: An Ollama tag; an empty string returns to the automatic choice.
     llm_model: str | None = None
+    #: ``ollama`` (default) or ``brain``: the app answers with ``answer_provider`` (ADR-0051).
+    answer_source: str | None = None
+    answer_provider: str | None = None
+    answer_provider_model: str | None = None
 
 
 def _config(request: Request) -> Any:
@@ -110,9 +114,21 @@ async def local_voice_settings(request: Request, body: LocalVoiceSettingsBody) -
     from dodaios.core import config_writer  # noqa: PLC0415
     from dodaios.realtime.local_voice_setup import card_status  # noqa: PLC0415
 
+    if body.answer_source == "brain" and body.answer_provider:
+        from dodaios.brain import engine_policy  # noqa: PLC0415
+
+        try:  # the Work product accepts a local provider only (ADR-0049)
+            engine_policy.check_provider(body.answer_provider.strip().lower(), check_endpoint=False)
+        except engine_policy.EnginePolicyError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         await asyncio.to_thread(
-            config_writer.set_voice_engine_settings, tts=body.voice, llm_model=body.llm_model
+            config_writer.set_voice_engine_settings,
+            tts=body.voice,
+            llm_model=body.llm_model,
+            answer_source=body.answer_source,
+            answer_provider=body.answer_provider,
+            answer_provider_model=body.answer_provider_model,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -123,4 +139,10 @@ async def local_voice_settings(request: Request, body: LocalVoiceSettingsBody) -
             section.tts = body.voice.strip().lower()
         if body.llm_model is not None:
             section.llm_model = body.llm_model.strip()
+        if body.answer_source is not None:
+            section.answer_source = body.answer_source.strip().lower()
+        if body.answer_provider is not None:
+            section.answer_provider = body.answer_provider.strip().lower()
+        if body.answer_provider_model is not None:
+            section.answer_provider_model = body.answer_provider_model.strip()
     return await card_status(cfg)

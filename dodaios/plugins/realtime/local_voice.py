@@ -113,6 +113,11 @@ class EngineSettings:
     tts_options: dict[str, Any] = field(default_factory=dict)
     llm_model: str = DEFAULT_LLM
     llm_base_url: str = "http://127.0.0.1:11434"
+    #: ``ollama``: the worker talks to a local server. ``brain``: the app answers each model call
+    #: with ``answer_provider`` / ``answer_provider_model`` through the provider registry (ADR-0051).
+    answer_source: str = "ollama"
+    answer_provider: str = ""
+    answer_provider_model: str = ""
 
     @classmethod
     def from_config(cls, cfg: Any) -> EngineSettings:
@@ -143,12 +148,20 @@ class EngineSettings:
             tts_options=dict(pick("tts_options", {})),
             llm_model=str(pick("llm_model", recorded.get("llm_model") or DEFAULT_LLM)),
             llm_base_url=str(pick("llm_base_url", _ollama_root())),
+            answer_source="brain" if str(pick("answer_source", "ollama")) == "brain" else "ollama",
+            answer_provider=str(pick("answer_provider", "")),
+            answer_provider_model=str(pick("answer_provider_model", "")),
         )
 
     def configure_message(self) -> dict[str, Any]:
         return {"type": "configure", "languages": self.languages, "tts": self.tts,
                 "tts_options": self.tts_options,
-                "llm": {"model": self.llm_model, "base_url": self.llm_base_url}}
+                "llm": {"model": self.llm_model, "base_url": self.llm_base_url,
+                        "source": "bridge" if self.answer_source == "brain" else "ollama"}}
+
+
+def _no_provider() -> Any:
+    raise RuntimeError("Voice answers come from the app but [voice_engine] names no provider.")
 
 
 def _engine_home(home: str | None) -> Path:
@@ -253,6 +266,7 @@ class _Engine:
         self._launching: asyncio.Task[Any] | None = None
         self._load_watchdog: asyncio.Task[None] | None = None
         self._selftests: list[asyncio.Future[dict[str, Any]]] = []
+        self._bridge: Any = None
 
     async def ensure_started(self) -> None:
         async with self._start_lock:
@@ -356,6 +370,9 @@ class _Engine:
             if kind == "_exited":
                 await self._on_exit()
                 return
+            if kind in ("llm.request", "llm.cancel"):
+                self._llm_bridge().route(message)  # ADR-0051: the app answers model calls
+                continue
             if kind == "selftest.result":
                 for waiter in list(self._selftests):
                     if not waiter.done():
@@ -391,8 +408,24 @@ class _Engine:
             if session is not None:
                 session._deliver_audio(frame.pcm)
 
+    def _llm_bridge(self) -> Any:
+        if self._bridge is None:
+            from dodaios.realtime.llm_bridge import BrainLlmBridge, brain_resolver  # noqa: PLC0415
+
+            settings = self.settings
+            resolver = (
+                brain_resolver(settings.answer_provider, settings.answer_provider_model or None)
+                if settings.answer_provider
+                else _no_provider
+            )
+            self._bridge = BrainLlmBridge(self.send, resolver)
+        return self._bridge
+
     async def _on_exit(self) -> None:
         log.warning("local voice engine exited (phase %s)", self.phase)
+        if self._bridge is not None:
+            await self._bridge.stop()
+            self._bridge = None
         for session in list(self._sessions.values()):
             session._deliver({"type": "_engine_exited"})
         self._sessions.clear()

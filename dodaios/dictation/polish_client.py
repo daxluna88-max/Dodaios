@@ -662,6 +662,11 @@ def resolve_polish_chain(cfg: Any) -> tuple[PolishFamily, ...]:
     chain under rule 1 — where the alternative is not a faster provider but no
     polish at all.
     """
+    from dodaios.brain.engine_policy import current_product
+
+    if current_product() == "work":
+        # Product policy (ADR-0049): Work polishes on this machine only; a cloud pin is ignored.
+        return tuple(f for f in POLISH_FAMILIES if f.runs_on_device)
     pin = str(getattr(cfg, "polish_provider", "auto") or "auto").strip().lower()
     pinned = family_by_id(pin) if pin not in ("", "auto") else None
     if pinned is None and pin not in ("", "auto"):
