@@ -877,6 +877,70 @@ describe("realtime audio client", () => {
     await client.disconnect();
   });
 
+  it("keeps sending silence for 3.2 s after the mic gate closes, then stops, and resumes on reopen", async () => {
+    installVoiceBrowserFakes();
+    vi.useFakeTimers();
+    try {
+      const client = new RealtimeAudioClient();
+      const connecting = client.connect();
+      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = FakeWebSocket.instances[0];
+      socket.open();
+      socket.receive({ type: "audio_ready", output_sample_rate: 24000 });
+      await connecting;
+      const capture = FakeAudioNode.instances.find(node => node.port.onmessage)!;
+      const frame = (...values: number[]) =>
+        capture.port.onmessage!({ data: new Uint8Array(values).buffer } as MessageEvent);
+      const audio = () => socket.sent.filter(x => x instanceof ArrayBuffer)
+        .map(x => [...new Uint8Array(x as ArrayBuffer)]);
+
+      frame(5, 6);
+      client.setMicOpen(false);
+      frame(7, 8); // right after release: silent frame of the same size, never the real samples
+      vi.advanceTimersByTime(3199);
+      frame(9, 9); // still inside the tail
+      expect(audio()).toEqual([[5, 6], [0, 0], [0, 0]]);
+      vi.advanceTimersByTime(2);
+      frame(4, 4); // tail over: nothing leaves the browser
+      expect(audio()).toHaveLength(3);
+
+      client.setMicOpen(true);
+      frame(1, 2); // gate reopened: real audio again
+      expect(audio()[3]).toEqual([1, 2]);
+      await client.disconnect();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reopening the gate during the tail cancels it and sends real audio", async () => {
+    installVoiceBrowserFakes();
+    vi.useFakeTimers();
+    try {
+      const client = new RealtimeAudioClient();
+      const connecting = client.connect();
+      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = FakeWebSocket.instances[0];
+      socket.open();
+      socket.receive({ type: "audio_ready", output_sample_rate: 24000 });
+      await connecting;
+      const capture = FakeAudioNode.instances.find(node => node.port.onmessage)!;
+      const frame = (...values: number[]) =>
+        capture.port.onmessage!({ data: new Uint8Array(values).buffer } as MessageEvent);
+      client.setMicOpen(false);
+      vi.advanceTimersByTime(1000);
+      client.setMicOpen(true);
+      frame(3, 4);
+      vi.advanceTimersByTime(5000); // the cancelled tail timer must not suspend the open mic
+      frame(5, 6);
+      expect(socket.sent.filter(x => x instanceof ArrayBuffer).map(x => [...new Uint8Array(x as ArrayBuffer)]))
+        .toEqual([[3, 4], [5, 6]]);
+      await client.disconnect();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves the negotiated peer when only the subscription sideband reconnects", async () => {
     installVoiceBrowserFakes();
     let readyCount = 0;
