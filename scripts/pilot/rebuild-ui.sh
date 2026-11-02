@@ -47,9 +47,18 @@ say "free RAM: ${mem_mb} MB (needs ${MIN_MEM_MB}); free disk: ${disk_mb} MB (nee
 [ "$mem_mb" -ge "$MIN_MEM_MB" ] || die "not enough free RAM for the build (Node runs out of memory below the limit). Stop other work, or stop the server first: pkill -x jarvis"
 [ "$disk_mb" -ge "$MIN_DISK_MB" ] || die "not enough free disk"
 
-if [ -n "$(git -C "$SRC" status --porcelain)" ]; then die "the checkout $SRC has local changes; refusing to build over them"; fi
+# `dist` is build output tracked in git; every earlier build leaves it modified. Ignore it in the check
+# and restore it before the update, so only real local edits stop the script.
+DIST_REL="dodaios/ui/web/dist"
+if [ -n "$(git -C "$SRC" status --porcelain -- . ":(exclude)$DIST_REL")" ]; then die "the checkout $SRC has local changes; refusing to build over them"; fi
 
 before="$(git -C "$SRC" rev-parse --short HEAD)"
+if [ "$EXEC" -eq 1 ]; then
+  git -C "$SRC" checkout -- "$DIST_REL"
+  git -C "$SRC" clean -fdq -- "$DIST_REL"
+else
+  say "would restore $DIST_REL in the checkout (build output only)"
+fi
 run git -C "$SRC" fetch origin "$BRANCH"
 run git -C "$SRC" checkout "$BRANCH"
 run git -C "$SRC" merge --ff-only "origin/$BRANCH"
