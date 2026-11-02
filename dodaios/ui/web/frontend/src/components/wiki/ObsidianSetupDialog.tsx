@@ -32,6 +32,7 @@ import { Button } from "@/components/ui/button";
 import { BrandedSelect } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
+import { isLocalHost } from "@/lib/localHost";
 import { useEventStore } from "@/store/events";
 import type { ObsidianStatus } from "@/types/setup";
 import {
@@ -474,6 +475,15 @@ export function ObsidianSetupDialog({
               {t("obsidian_setup_dialog.install_body_2")}{" "}
               <strong>Obsidian</strong>.
             </p>
+            {!isLocalHost() && (
+              <p
+                className="rounded-md border border-border bg-secondary px-3 py-2 text-xs text-foreground"
+                data-testid="obsidian-setup-remote-note"
+                role="note"
+              >
+                {t("obsidian_setup_dialog.remote_note")}
+              </p>
+            )}
             <a
               href={OBSIDIAN_DOWNLOAD_URL}
               target="_blank"

@@ -4284,7 +4284,8 @@
     "active_vault_label": "{name} schreibt nach",
     "restart_required_hint": "Starte {name} neu, damit der neue Speicherort verwendet wird.",
     "restart_now": "Jetzt neu starten",
-    "restarting": "Starte neu…"
+    "restarting": "Starte neu…",
+    "remote_note": "Obsidian is optional. It is installed on the computer where Jarvis runs, not on your phone or in the browser: if you use Jarvis remotely you can close this guide. The wiki can also be read inside Jarvis."
   },
   "docs_sidebar": {
     "title": "Dokumentation",

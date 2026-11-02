@@ -4284,7 +4284,8 @@
     "active_vault_label": "{name} escribe en",
     "restart_required_hint": "Reinicia {name} para empezar a escribir en la nueva ubicación.",
     "restart_now": "Reiniciar ahora",
-    "restarting": "Reiniciando…"
+    "restarting": "Reiniciando…",
+    "remote_note": "Obsidian is optional. It is installed on the computer where Jarvis runs, not on your phone or in the browser: if you use Jarvis remotely you can close this guide. The wiki can also be read inside Jarvis."
   },
   "docs_sidebar": {
     "title": "Documentación",
