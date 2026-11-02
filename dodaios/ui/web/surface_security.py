@@ -803,6 +803,9 @@ def _http_auth_exception(path: str, method: str) -> bool:
             and method == "POST"
         )
         or (path == "/api/computers/pairing/enter" and method in {"GET", "POST"})
+        # The phone companion authenticates its paired device inside every handler
+        # (dodaios/ui/web/phone_routes.py); the owner's /api/phone-admin stays behind the guard.
+        or path.startswith("/api/phone/")
         or _is_static_request(path, method)
         or (path == "/api/health" and method == "GET")
         or (path == "/api/ui/shell-painted" and method == "POST")

@@ -1,9 +1,11 @@
 /**
  * First-run setup as data, in two acts.
  *
- * 1. The setup window: one centred dialog with three steps — the
- *    assistant's name (which is also its wake word), connecting an AI
- *    (subscriptions and an API key), and how the user talks to it.
+ * 1. The setup window: one centred dialog with six steps — the
+ *    assistant's name (which is also its wake word) and the owner's, how the
+ *    user talks to it, a personality (optional), the engine (Consumer: one AI,
+ *    Work: local only), privacy and actions, and a summary read back from the
+ *    real configuration (issue 18).
  * 2. The walk: the user's pet walks the REAL app and explains each section
  *    in place — chat, voice, agents, the Agentic IDE, plugins and where the
  *    wake word lives. The walk is one persisted step (`tour`); its stops
@@ -15,12 +17,27 @@ import type { HomeSurface } from "@/lib/homeSurface";
 import type { TourPlacement } from "../tour/tourSteps";
 
 /** Must match `ONBOARDING_STEPS` in dodaios/setup/onboarding_meta.py. */
-export const SETUP_STEP_IDS = ["name", "connect", "voice", "tour"] as const;
+export const SETUP_STEP_IDS = [
+  "name",
+  "voice",
+  "personality",
+  "connect",
+  "privacy",
+  "summary",
+  "tour",
+] as const;
 
 export type SetupStepId = (typeof SETUP_STEP_IDS)[number];
 
 /** The steps shown inside the setup window, in order. */
-export const WIZARD_STEP_IDS = ["name", "connect", "voice"] as const;
+export const WIZARD_STEP_IDS = [
+  "name",
+  "voice",
+  "personality",
+  "connect",
+  "privacy",
+  "summary",
+] as const;
 
 export type WizardStepId = (typeof WIZARD_STEP_IDS)[number];
 

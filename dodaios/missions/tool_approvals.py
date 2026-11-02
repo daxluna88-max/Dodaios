@@ -52,14 +52,32 @@ class MissionToolApprovalCoordinator:
         self._bus = bus
         self._pending: dict[UUID, PendingMissionToolApproval] = {}
         self._lock = asyncio.Lock()
+        # False while the owner's STOP holds the door closed (ADR-0058): nothing new is queued
+        # for a decision and nothing is approved. Flipped synchronously with the door.
+        self._accepting = True
         bus.subscribe(ActionApprovalRequired, self._on_required)
         bus.subscribe(ActionApproved, self._on_resolved)
         bus.subscribe(ActionDenied, self._on_resolved)
         bus.subscribe(ActionExecuted, self._on_resolved)
 
+    def set_accepting(self, accepting: bool) -> None:
+        """Open or close the gate (the stop controller calls this with the door)."""
+        self._accepting = bool(accepting)
+
     async def _on_required(self, event: ActionApprovalRequired) -> None:
         mission_id = str(event.mission_id or "").strip()
         if not mission_id or event.expires_at_ns <= time.time_ns():
+            return
+        if not self._accepting:
+            # A call that asks for a decision after STOP is denied, never left waiting to be
+            # approved into running.
+            await self._bus.publish(
+                ActionDenied(
+                    trace_id=event.trace_id,
+                    tool_name=event.tool_name,
+                    reason="stopped_by_owner",
+                )
+            )
             return
         pending = PendingMissionToolApproval(
             trace_id=event.trace_id,
@@ -113,8 +131,20 @@ class MissionToolApprovalCoordinator:
         *,
         approved_by: str,
     ) -> PendingMissionToolApproval | None:
+        if not self._accepting:
+            return None
         pending = await self._take_live(mission_id, trace_id)
         if pending is None:
+            return None
+        if not self._accepting:
+            # STOP closed the door while this was being taken: it must not run.
+            await self._bus.publish(
+                ActionDenied(
+                    trace_id=trace_id,
+                    tool_name=pending.tool_name,
+                    reason="stopped_by_owner",
+                )
+            )
             return None
         await self._bus.publish(
             ActionApproved(
@@ -161,6 +191,12 @@ class MissionToolApprovalCoordinator:
                 return None
             self._pending.pop(trace_id, None)
             return pending
+
+    async def pending_count(self) -> int:
+        """How many approvals wait, across every mission (expired ones are not counted)."""
+        now_ns = time.time_ns()
+        async with self._lock:
+            return sum(1 for item in self._pending.values() if item.expires_at_ns > now_ns)
 
     async def deny_all(self, *, reason: str) -> None:
         """Release every waiter during orderly application shutdown."""

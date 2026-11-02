@@ -31,8 +31,11 @@ CURRENT_TERMS_VERSION = "1.1"
 # ``resumeStep``); the backend never validates the stored id.
 ONBOARDING_STEPS: list[str] = [
     "name",
-    "connect",
     "voice",
+    "personality",
+    "connect",
+    "privacy",
+    "summary",
     "tour",
 ]
 
