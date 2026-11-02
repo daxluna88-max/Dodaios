@@ -1,4 +1,4 @@
-sha=b5f1beb963fea1ca12e599dcc59e81d27bc42ec4 started=2026-11-02T15:36:02Z
+sha=ebfd22f8e99487705f037dbb2025a2fbc8a7b1a8 started=2026-11-02T15:51:02Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -79,10 +79,10 @@ sha=b5f1beb963fea1ca12e599dcc59e81d27bc42ec4 started=2026-11-02T15:36:02Z
 = env JARVIS_BROWSER_VOICE_SILENCE_MS (already switched: voice-silence-1)
 Nothing to apply; server not restarted (use --restart to force).
 update_exit=0
-PASS     CHK-TIME: real_rome_time=16:36 status=done secs=1 tool_errors=0 reply='Sono le sedici e trentasei, ora italiana.'
-PASS     CHK-STOP: first=cancelled second=done second_len=50 resumed=False leaked_internal_text=False reply='Sono le sedici e trentasei di lunedì due novembre.'
+PASS     CHK-TIME: real_rome_time=16:51 status=done secs=2 tool_errors=0 reply='Sono le sedici e cinquantuno, ora italiana.'
+PASS     CHK-STOP: first=cancelled second=done second_len=58 resumed=False leaked_internal_text=False reply='Sono le quattro e cinquantuno di pomeriggio, ora italiana.'
 SKIPPED  CHK-WIKI-HONEST: live memory check is off: it writes to the real profile
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
 SUMMARY: 3 PASS, 0 FAIL, 0 BLOCKED, 1 SKIPPED
 check_exit=0
-finished=2026-11-02T15:36:27Z
+finished=2026-11-02T15:51:27Z
