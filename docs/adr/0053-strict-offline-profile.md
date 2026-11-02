@@ -35,6 +35,9 @@ It is not a sandbox: a native extension that opens sockets without Python's `soc
 do not install the guard are not covered (the voice engine worker only ever talks to loopback by design). The guard
 is not installed by default for Work, and no Work install selects it yet; the Local voice card has no switch for it.
 
+See ADR-0060 for the function coverage registry (uncoverable tools and children are refused) and the design of
+OS-level enforcement, which is not built.
+
 ## Consequences
 
 With the guard on, a representative Work turn (refused remote engine, local engine answering) makes zero outbound

@@ -1075,6 +1075,16 @@ def main(
     argv = list(sys.argv[1:] if argv is None else argv)
     if len(argv) < 2:
         return 2
+    # The restarted app keeps the product it ran as (data directory, vault, ports) through the
+    # inherited environment, never through a flag; an inconsistent one is refused before the
+    # log sink, the config or the update finalizer touches anything (ADR-0054).
+    from dodaios.core import product_profile  # noqa: PLC0415
+
+    try:
+        product_profile.validate_entry([])
+    except product_profile.ProductError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     try:
         pid = int(argv[0])
     except ValueError:

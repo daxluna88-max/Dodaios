@@ -676,7 +676,8 @@ class ActionApprovalRequired(Event):
 
     tool_name: str = ""
     risk_tier: RiskTier = "ask"
-    reason: str = "risk_tier"  # "risk_tier" | "plausibility" | "gate"
+    # "risk_tier" | "plausibility" | "gate" | "duplicate_effect" | "effect_unknown"
+    reason: str = "risk_tier"
     args_preview: str = ""
     expires_at_ns: int = 0
     mission_id: str | None = None
@@ -691,18 +692,24 @@ class ActionApprovalRequired(Event):
     effect: str = ""
     target_origin: str = ""
     origin_source: str = ""
+    #: Digest of the exact tool + arguments awaiting a decision (block 7); an answer echoes it.
+    call_fingerprint: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class ActionApproved(Event):
     tool_name: str = ""
     approved_by: str = "auto"  # "auto" | "user" | "whitelist"
+    #: Digest of the exact tool + arguments this approval was given for (block 7). A non-empty
+    #: value that differs from the armed request's is ignored; empty is a legacy answer.
+    call_fingerprint: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class ActionDenied(Event):
     tool_name: str = ""
     reason: str = ""
+    call_fingerprint: str = ""
 
 
 @dataclass(frozen=True, slots=True)

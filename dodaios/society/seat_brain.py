@@ -227,8 +227,13 @@ def _cli_adapter(seat: Seat, model: str) -> Any:
 
 def _build(config: Any, seat: Seat, caller: str) -> SeatBrain:
     """Instantiate exactly ``seat``. Blocking: call it in a thread."""
+    from dodaios.brain import engine_policy
     from dodaios.brain.resolver import resolve_browser_brain
 
+    try:  # product policy (ADR-0049): before any CLI adapter or credential read
+        engine_policy.check_provider(seat.provider)
+    except engine_policy.EnginePolicyError as exc:
+        raise SeatUnavailable(str(exc)) from None
     model = seat.model
     if seat.keyed and not model:
         model = _chat_default_model(config, seat.provider)

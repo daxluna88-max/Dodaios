@@ -173,6 +173,11 @@ class MCPClient:
 
             if self.spec.transport == "stdio":
                 command, args, env = self._resolve_install_command()
+                from dodaios.core import egress_guard
+
+                egress_guard.require_child(
+                    f"the MCP server {self.spec.name!r}", [command, *args], env
+                )
                 if shutil.which(command) is None:
                     # Fail actionable, not raw: without this check
                     # ``stdio_client`` spawns the launcher itself and a

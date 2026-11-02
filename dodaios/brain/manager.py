@@ -211,6 +211,28 @@ class _StopTurn:
 _STOP_TURN: ContextVar[_StopTurn | None] = ContextVar("jarvis_brain_stop_turn", default=None)
 
 
+class _TurnFlags:
+    """Outcome flags of ONE turn (``generate``), so concurrent turns never share them."""
+
+    __slots__ = ("all_failed",)
+
+    def __init__(self) -> None:
+        self.all_failed = False
+
+
+_TURN_FLAGS: ContextVar[_TurnFlags | None] = ContextVar("jarvis_brain_turn_flags", default=None)
+
+
+def _chain_has_remote(chain: Any) -> bool:
+    """True when any engine in the fallback chain is not provably on this machine (fails closed)."""
+    from dodaios.brain import engine_policy  # noqa: PLC0415
+
+    try:
+        return any(not engine_policy.destination_of(str(entry[0])).local for entry in chain)
+    except Exception:  # noqa: BLE001 - unreadable means unknown means remote
+        return True
+
+
 def _turn_is_stale() -> bool:
     turn = _STOP_TURN.get()
     return turn is not None and turn.stale()
@@ -640,9 +662,17 @@ _SCREEN_CONFIRM_TTL_S = 20.0
 class _PendingVoiceConfirm:
     """A deferred consequential action awaiting the user's next yes/no."""
 
-    __slots__ = ("trace_id", "lang", "tool_name", "reasks")
+    __slots__ = ("trace_id", "lang", "tool_name", "reasks", "fingerprint")
 
-    def __init__(self, trace_id: UUID, lang: str, tool_name: str, reasks: int = 0) -> None:
+    def __init__(
+        self,
+        trace_id: UUID,
+        lang: str,
+        tool_name: str,
+        reasks: int = 0,
+        fingerprint: str = "",
+    ) -> None:
+        self.fingerprint = fingerprint
         self.trace_id = trace_id
         self.lang = lang
         self.tool_name = tool_name
@@ -2558,7 +2588,9 @@ class BrainManager:
         # whether to speak a spoken "all providers are down" fallback instead
         # of returning silently to LISTENING. A legitimate empty turn
         # (suppress_response fire-and-forget) leaves this False.
-        self._last_turn_all_failed: bool = False
+        # Per turn while a turn runs (``_TURN_FLAGS``); this is the value of the last turn that
+        # finished, which is what a caller reading it after ``generate()`` returns sees.
+        self._last_turn_all_failed_done: bool = False
         # AD-OE6 companion signal. True for exactly one turn when the winning
         # provider finished with ``suppress_response`` (a fire-and-forget
         # ``spawn_worker`` background mission that reports back over the bus).
@@ -4019,6 +4051,20 @@ class BrainManager:
             )
         except Exception:  # noqa: BLE001 - the screen's record never breaks a turn
             log.debug("turn record could not be finished", exc_info=True)
+
+    @property
+    def _last_turn_all_failed(self) -> bool:
+        """The running turn's own flag; outside a turn, the last finished turn's."""
+        flags = _TURN_FLAGS.get()
+        return flags.all_failed if flags is not None else self._last_turn_all_failed_done
+
+    @_last_turn_all_failed.setter
+    def _last_turn_all_failed(self, value: bool) -> None:
+        flags = _TURN_FLAGS.get()
+        if flags is not None:
+            flags.all_failed = bool(value)
+        else:
+            self._last_turn_all_failed_done = bool(value)
 
     def personality_snapshot(self) -> tuple[Any, Any, bool]:
         """(effective profile, mood state now, adaptation on) for the settings screen."""
@@ -7738,10 +7784,27 @@ class BrainManager:
         names: list[str],
         user_text: str,
     ) -> None:
-        """Brief newly mounted Codex panes once their real input lines exist."""
+        """Brief newly mounted Codex panes once their real input lines exist.
+
+        The STOP generation taken when this background task was created travels in
+        ``work_ticket`` (ADR-0058); it is re-verified at the start and right before the prompts
+        are delivered.
+        """
         from dodaios.agentic_ide import fanout as ide_fanout
         from dodaios.agentic_ide import intent as ide_intent
         from dodaios.agentic_ide.fleet_actions import wait_for_prompt_ready
+        from dodaios.control.stop import get_stop_controller, work_ticket  # noqa: PLC0415
+
+        stop_ticket = work_ticket.get()
+
+        def _stopped() -> bool:
+            return stop_ticket is not None and not get_stop_controller().admit(
+                stop_ticket
+            ).allowed
+
+        if _stopped():
+            log.info("Agentic IDE spawned-fleet briefing: not started, the owner pressed STOP")
+            return
 
         instruction = ide_intent.spawn_instruction(user_text)
         # Read once, up front: this runs as a background task that outlives the
@@ -7807,6 +7870,9 @@ class BrainManager:
                 ", ".join(missing),
             )
         if not ready:
+            return
+        if _stopped():
+            log.info("Agentic IDE spawned-fleet briefing: not delivered, the owner pressed STOP")
             return
 
         result = await ide_fanout.deliver(
@@ -8087,10 +8153,17 @@ class BrainManager:
             if tasks is None:
                 tasks = set()
                 self._ide_background_tasks = tasks
-            task = asyncio.create_task(
-                self._brief_spawned_agentic_ide_fleet(session, names, user_text),
-                name="agentic-ide-spawned-fleet-briefing",
-            )
+            from dodaios.control.stop import get_stop_controller, work_ticket  # noqa: PLC0415
+
+            # The task copies this context: the ticket is taken now, at creation.
+            ticket_token = work_ticket.set(get_stop_controller().ticket())
+            try:
+                task = asyncio.create_task(
+                    self._brief_spawned_agentic_ide_fleet(session, names, user_text),
+                    name="agentic-ide-spawned-fleet-briefing",
+                )
+            finally:
+                work_ticket.reset(ticket_token)
             tasks.add(task)
 
             def _briefing_done(done: asyncio.Task[Any]) -> None:
@@ -9695,7 +9768,9 @@ class BrainManager:
             text=response_text,
         )
 
-        if self._curator is not None and not (
+        from dodaios.brain import provenance  # noqa: PLC0415
+
+        if self._curator is not None and not provenance.is_restricted(response_text) and not (
             (profile_override := _TURN_OVERRIDE.get()) is not None
             and profile_override.tool_context.get("tool_origin") == "society"
         ):
@@ -9864,6 +9939,7 @@ class BrainManager:
         lang = _turn_phrase_language(self, user_text)
         self._pending_voice_confirm = _PendingVoiceConfirm(
             trace_id=tid, lang=lang, tool_name=str(descriptor.get("tool_name", "")),
+            fingerprint=str(descriptor.get("call_fingerprint") or ""),
         )
         log.info(
             "voice-confirm armed: tool=%s trace=%s lang=%s",
@@ -9894,6 +9970,7 @@ class BrainManager:
             try:
                 result = await self._tool_executor.execute_confirmed(
                     pending.trace_id, user_utterance=user_text,
+                    expected_fingerprint=pending.fingerprint or None,
                 )
             except Exception as exc:  # noqa: BLE001
                 log.warning("voice-confirm execute failed: %s", exc)
@@ -10734,6 +10811,8 @@ class BrainManager:
         stop_turn = _StopTurn(
             stop_ticket if stop_ticket is not None else get_stop_controller().ticket())
         stop_turn_token = _STOP_TURN.set(stop_turn)
+        turn_flags = _TurnFlags()
+        turn_flags_token = _TURN_FLAGS.set(turn_flags)
         text_consumer = _guard_text_consumer(text_consumer, stop_turn)
         crashed = True
         try:
@@ -10764,6 +10843,8 @@ class BrainManager:
         finally:
             self._finish_engine_record(stop_turn, crashed=crashed)
             _STOP_TURN.reset(stop_turn_token)
+            self._last_turn_all_failed_done = turn_flags.all_failed
+            _TURN_FLAGS.reset(turn_flags_token)
             # Keep the last completed turn inspectable for diagnostics/tests,
             # while active concurrent turns continue reading their own
             # ContextVar-backed state.
@@ -11754,7 +11835,9 @@ class BrainManager:
         ):
             from dodaios.brain.turn_memory import recall_block
 
-            memory_block = await recall_block(user_text)
+            # Any remote engine in the chain (a fallback may be used) means local-only notes
+            # must not be recalled into the shared turn context (ADR-0050, block 7).
+            memory_block = await recall_block(user_text, remote=_chain_has_remote(chain))
             if memory_block:
                 self._wiki_context_suffix = (
                     f"{self._wiki_context_suffix}\n\n{memory_block}"
@@ -13473,23 +13556,48 @@ class BrainManager:
         model_tier: str = "auto",
         trace_id: UUID | None = None,
         prefer_api: bool = False,
+        stop_ticket: int | None = None,
     ) -> str:
-        """Keep the selected agent and billing account for the entire scheduled turn."""
+        """Keep the selected agent and billing account for the entire scheduled turn.
+
+        ``stop_ticket`` is the STOP generation the task was created under (ADR-0058): a task
+        whose ticket is stale does not start, and its tools stop at the next call after STOP.
+        """
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
         from dodaios.core.model_selection import (
             operation_model,
             use_operation_model,
             worker_selection,
         )
 
+        from dodaios.control.stop import work_ticket  # noqa: PLC0415
+
+        outer = _STOP_TURN.get()
+        if stop_ticket is None and work_ticket.get() is not None:
+            stop_ticket = work_ticket.get()  # handed down by whoever created the run
+        if stop_ticket is None and outer is not None:
+            ticket = outer.ticket  # called from inside a turn: it keeps that turn's generation
+        else:
+            ticket = stop_ticket if stop_ticket is not None else get_stop_controller().ticket()
+        if not get_stop_controller().admit(ticket).allowed:
+            log.info("a scheduled task was not started: the owner pressed STOP")
+            return ""
+        stop_turn = _StopTurn(ticket)
+        stop_token = _STOP_TURN.set(stop_turn)
         selected = operation_model.get() or worker_selection(self._config)
-        with use_operation_model(selected):
-            return await self._run_task_with_selection(
-                prompt=prompt,
-                allowed_tools=allowed_tools,
-                model_tier=model_tier,
-                trace_id=trace_id,
-                prefer_api=prefer_api,
-            )
+        try:
+            with use_operation_model(selected):
+                result = await self._run_task_with_selection(
+                    prompt=prompt,
+                    allowed_tools=allowed_tools,
+                    model_tier=model_tier,
+                    trace_id=trace_id,
+                    prefer_api=prefer_api,
+                )
+            # A reply that finished after STOP is not delivered.
+            return "" if stop_turn.stale() else result
+        finally:
+            _STOP_TURN.reset(stop_token)
 
     async def _run_task_with_selection(
         self,

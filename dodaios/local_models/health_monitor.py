@@ -336,6 +336,9 @@ async def _chat_probe(root: str, body: dict[str, Any]) -> dict[str, Any]:
     from dodaios.plugins.brain.ollama import normalize_server_root
 
     root = normalize_server_root(root)
+    from dodaios.brain.engine_policy import check_endpoint_url
+
+    check_endpoint_url(root, "Ollama chat probe")  # Work (ADR-0049): local endpoint only
     # The inventory's client factory, so tests drive this through the same
     # fake server the sweep uses instead of the network.
     async with ollama_inventory._make_client() as client:

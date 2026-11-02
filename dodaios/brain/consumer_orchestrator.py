@@ -63,6 +63,26 @@ class ContextItem:
     text: str
     category: str  # e.g. "task", "note", "file", "history"
     local_only: bool = False
+    #: Categories of the items this one was derived from (summary, quote, memory note). They
+    #: count at the gate as if they were this item's own: a summary of a "file" is still "file".
+    derived_from: tuple[str, ...] = ()
+
+    @classmethod
+    def derive(cls, sources: Sequence[ContextItem], text: str, category: str) -> ContextItem:
+        """A new item made FROM ``sources``: it inherits ``local_only`` and every source category,
+        so relabelling a derivation as plain ("task", "note") cannot launder it past the gate."""
+        cats = {category}
+        for src in sources:
+            cats.add(src.category)
+            cats.update(src.derived_from)
+        return cls(
+            text, category, any(src.local_only for src in sources),
+            tuple(sorted(cats - {category})),
+        )
+
+    def restricted_for(self, allowed: frozenset[str]) -> bool:
+        """Whether a remote destination may not see this item (local-only or withheld category)."""
+        return self.local_only or not {self.category, *self.derived_from} <= allowed
 
 
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
@@ -120,7 +140,7 @@ class PrivacyGate:
         for item in items:
             if not local and item.local_only:
                 withheld += 1
-            elif not local and item.category not in self.allowed_categories | extra_allowed:
+            elif not local and item.restricted_for(self.allowed_categories | extra_allowed):
                 continue
             else:
                 kept.append(item)
@@ -233,6 +253,8 @@ class BranchResult:
     #: Identity of the run that produced this result (``turn/generation/nonce``). Synthesis accepts
     #: only results of the run that is still current for its turn; empty means "not from a run".
     run_id: str = ""
+    #: Tool calls the engine asked for anyway. They were DROPPED, never run (block 7).
+    dropped_tool_calls: int = 0
 
 
 @dataclass(slots=True)
@@ -243,6 +265,9 @@ class SynthesisResult:
     sources: tuple[str, ...] = ()  # branch ids whose answers were offered to the synthesizer
     withheld: int = 0  # answers kept back because the synthesizer is remote
     egress: EgressRecord | None = None
+    #: The text derives from material a remote destination may not see (provenance): it must not
+    #: be sent to a remote engine, a remote TTS or a shared memory.
+    tainted: bool = False
 
 
 SYNTHESIS_INSTRUCTION = (
@@ -289,6 +314,10 @@ class Orchestrator:
             return "the branch timeout must be a finite number of seconds > 0"
         if not b.authenticated:
             return f"{b.provider} is not authenticated"
+        if getattr(b.brain, "executes_tools_itself", False) is True:
+            # A branch must not act: an engine that runs its own tools outside ToolExecutor
+            # (no approval, no STOP, no ledger) cannot be a review branch.
+            return f"{b.provider} runs its own tools and cannot be a no-tools branch"
         if b.needs_api and b.kind == "subscription":
             return f"{b.provider} is an app subscription connection: it is not API access"
         try:
@@ -359,8 +388,7 @@ class Orchestrator:
                 extra_allowed=extra_allowed,
             )
             tainted = local and any(
-                i.local_only or i.category not in self.gate.allowed_categories | extra_allowed
-                for i in items
+                i.restricted_for(self.gate.allowed_categories | extra_allowed) for i in items
             )
             text = f"{b.instruction}\n\n{prompt}".strip() if b.instruction else prompt
             # no tools: a review/parallel branch never executes anything
@@ -371,6 +399,7 @@ class Orchestrator:
                 b.kind, "local_resources"
             )
             timing: dict[str, float] = {}
+            dropped = [0]
 
             def done(status: str, **fields: Any) -> BranchResult:
                 began = timing.get("start")
@@ -378,7 +407,8 @@ class Orchestrator:
                     b.branch_id, b.provider, status, egress=record,
                     first_token_s=timing.get("first"),
                     total_s=None if began is None else time.perf_counter() - began,
-                    cost_basis=basis, tainted=tainted, run_id=run_id, **fields,
+                    cost_basis=basis, tainted=tainted, run_id=run_id,
+                    dropped_tool_calls=dropped[0], **fields,
                 )
 
             async with sem:
@@ -401,7 +431,8 @@ class Orchestrator:
                             if self._current.get(turn_id) != gen:
                                 return done("stale")
                             if delta.tool_call is not None:
-                                continue  # tools are centralized: a branch cannot ask to run one
+                                dropped[0] += 1  # tools are centralized: dropped, never run
+                                continue
                             if delta.content:
                                 timing.setdefault("first", time.perf_counter() - started)
                                 out.append(delta.content)
@@ -492,10 +523,12 @@ class Orchestrator:
                 withheld=withheld,
                 reason="every answer contains local-only material and the synthesizer is remote",
             )
-        derived = [ContextItem(i.text, i.category, i.local_only) for i in items
+        derived = [ContextItem(i.text, i.category, i.local_only, i.derived_from) for i in items
                    if i.category == "task"]
         derived += [ContextItem(f"[{r.provider}] {r.text}", ANSWER_CATEGORY, r.tainted)
                     for r in forwardable]
+        # a restricted answer or task item makes the synthesis restricted, whatever the gate did
+        inherited = any(r.tainted for r in forwardable) or any(i.local_only for i in derived)
         instruction = "\n\n".join(
             part for part in (SYNTHESIS_INSTRUCTION, synthesizer.instruction) if part
         )
@@ -505,6 +538,7 @@ class Orchestrator:
         return SynthesisResult(
             out.status, text=out.text, reason=out.reason,
             sources=tuple(r.branch_id for r in forwardable), withheld=withheld, egress=out.egress,
+            tainted=out.tainted or inherited,
         )
 
 

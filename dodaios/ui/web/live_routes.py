@@ -135,6 +135,23 @@ def _profile_for_runtime(cfg) -> LiveConfig:
 async def get_live_profile(request: Request) -> dict:
     cfg = _config(request)
     profile = _profile_for_runtime(cfg)
+    from dodaios.brain.engine_policy import work_active
+
+    if work_active():
+        # Product policy (ADR-0049): GPT-Live is a cloud function. No key is read and no account
+        # check is made; the profile is reported as unavailable.
+        return {
+            "profile": profile.model_dump(),
+            "key_ready": False,
+            "active": False,
+            "agent_configured": cfg.brain.worker is not None,
+            "subscription": {
+                "account_id": "",
+                "account_connected": False,
+                "voice_status": "unavailable",
+                "reason": "unavailable under the Work product (local models only)",
+            },
+        }
     from dodaios.core.config import get_secret_any
     from dodaios.plugins.realtime.openai_live import OpenAILiveProvider
 

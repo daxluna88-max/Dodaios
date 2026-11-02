@@ -515,6 +515,10 @@ def resolve_subscription_brain(
     would later be handed to a spoken turn built to expect the conversational
     wrapper.
     """
+    from dodaios.brain.engine_policy import work_active
+
+    if work_active():
+        return None  # product policy (ADR-0049): a subscription is a cloud engine; no probe at all
     _ensure_bus_subscription(bus)
     try:
         candidates = _subscription_candidates(config)
@@ -742,8 +746,11 @@ def _provider_reachable(config: JarvisConfig, provider: str) -> bool:
     hardcoded provider-name list (AP-22). ``config`` is accepted for signature
     symmetry with the other resolver helpers and future per-config overrides.
     """
+    from dodaios.brain.engine_policy import provider_blocked_reason
     from dodaios.core.config import PROVIDER_SECRET_CANDIDATES, get_provider_secret
 
+    if provider_blocked_reason("brain", provider) is not None:
+        return False  # product policy (ADR-0049): a remote engine is never reachable under Work
     if provider not in PROVIDER_SECRET_CANDIDATES:
         # No API-key family — a local/self-hosted brain that needs no credential.
         return True

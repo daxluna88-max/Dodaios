@@ -157,6 +157,9 @@ class TurnHandle:
     control_service: Any = None
     #: A continuation keeps the turn's already resolved language and identity.
     continuation: bool = False
+    #: The STOP generation taken when the message was sent (ADR-0058); ``None`` = take it when
+    #: the brain turn starts.
+    stop_ticket: int | None = None
 
 
 async def _plain_images(handle: TurnHandle, brain: Any) -> tuple[Any, ...]:

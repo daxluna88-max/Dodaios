@@ -124,6 +124,14 @@ async def probe_polish_family(
             provider, ERROR, "This card has no provider family behind it."
         )
 
+    from dodaios.brain.engine_policy import work_active
+
+    if work_active() and not getattr(family, "runs_on_device", False):
+        # Product policy (ADR-0049): a cloud polish family is never contacted under Work.
+        return ProviderTestResult(
+            provider, NOT_CONFIGURED, "Unavailable under the Work product (local models only)."
+        )
+
     budget_ms = float(getattr(dictation_cfg, "polish_timeout_ms", 0) or _DEFAULT_BUDGET_MS)
     probe_model = _resolve_probe_model(family, dictation_cfg, model)
 

@@ -86,6 +86,23 @@ async def _refuse_if_stopped_meanwhile(ticket: int, mission_id: str, request: Re
     )
 
 
+async def _start_mission(
+    kontrollierer: Any, mission_id: str, ticket: int, request: Request
+) -> None:
+    """Background start of a dispatched mission, re-verified at the moment it begins.
+
+    The route took ``ticket`` before the mission existed. Between the response and this task
+    STOP (or STOP and a resume) may have landed: the mission is then cancelled, not run.
+    """
+    if not get_stop_controller().admit(ticket).allowed:
+        try:
+            await cancel_mission(mission_id, request)
+        except HTTPException:
+            logger.debug("mission %s was already terminal when STOP caught it", mission_id)
+        return
+    await kontrollierer.run_mission(mission_id)
+
+
 router = APIRouter(prefix="/api/missions", tags=["missions"])
 
 
@@ -568,7 +585,7 @@ async def dispatch_mission(
     await _refuse_if_stopped_meanwhile(ticket, mission_id, request)
 
     if kontrollierer is not None:
-        background_tasks.add_task(kontrollierer.run_mission, mission_id)
+        background_tasks.add_task(_start_mission, kontrollierer, mission_id, ticket, request)
         started = True
     else:
         logger.info(
@@ -883,7 +900,8 @@ async def rerun_mission(
     kontrollierer = _optional_kontrollierer(request)
     started = False
     if kontrollierer is not None:
-        background_tasks.add_task(kontrollierer.run_mission, new_mission_id)
+        background_tasks.add_task(
+            _start_mission, kontrollierer, new_mission_id, ticket, request)
         started = True
 
     return {

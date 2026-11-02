@@ -234,6 +234,64 @@ def check_service(group: str, name: str, *, product: str | None = None) -> None:
         )
 
 
+# -- cloud-only functions and non-registry doors (block 6 coverage, ADR-0049) ----------------
+
+UNAVAILABLE_CODE = "unavailable_under_work"
+
+
+def work_active(product: str | None = None) -> bool:
+    """True when the Work policy is in force (``JARVIS_PRODUCT=work`` or an unknown value)."""
+    return (product if product is not None else current_product()) == "work"
+
+
+def require_local_inference(what: str, *, product: str | None = None) -> None:
+    """Raise when ``what`` has a cloud implementation only and the product is Work.
+
+    For functions with no local engine behind them (a hosted-model client, a subscription
+    transport): under Work they are declared unavailable, never run, never given a credential.
+    """
+    if work_active(product):
+        raise EnginePolicyError(
+            f"{what} is a cloud function and is unavailable under the Work product "
+            "(local inference only).",
+            code=UNAVAILABLE_CODE,
+        )
+
+
+def provider_blocked_reason(
+    tier: str, provider_id: str, *, product: str | None = None
+) -> str | None:
+    """Why a provider card of ``tier`` (brain/stt/tts/realtime) may not run under Work, else None.
+
+    Never reads a credential. Dictation cards are decided by the caller (``runs_on_device``).
+    """
+    if not work_active(product):
+        return None
+    try:
+        if tier == "brain":
+            check_provider(provider_id, product="work", check_endpoint=False)
+        elif tier in LOCAL_SERVICES:
+            check_service(f"dodaios.{tier}", provider_id, product="work")
+        else:
+            require_local_inference(f"The {tier} function", product="work")
+    except EnginePolicyError as exc:
+        return str(exc)
+    return None
+
+
+def check_endpoint_url(url: str | None, what: str, *, product: str | None = None) -> None:
+    """Under Work refuse a model endpoint URL whose host is not this machine (or allowed)."""
+    if not work_active(product):
+        return
+    host = urlsplit(url if url and "//" in url else f"//{url or ''}").hostname
+    if not host_is_local(host):
+        raise EnginePolicyError(
+            f"{what}: endpoint host {host!r} is not this machine; the Work product accepts "
+            f"only a local endpoint (or a host listed in {ALLOWED_HOSTS_ENV}).",
+            code="remote_endpoint",
+        )
+
+
 # -- capabilities: unknown means unknown, never "supported"
 # -------------------------------------------------
 
@@ -397,6 +455,8 @@ __all__ = [
     "PolicyBrain",
     "capabilities_of",
     "LOCAL_SERVICES",
+    "UNAVAILABLE_CODE",
+    "check_endpoint_url",
     "check_provider",
     "check_service",
     "current_product",
@@ -406,5 +466,8 @@ __all__ = [
     "guard_stream",
     "host_is_local",
     "is_loopback_host",
+    "provider_blocked_reason",
+    "require_local_inference",
     "select_engine",
+    "work_active",
 ]

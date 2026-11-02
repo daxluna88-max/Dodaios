@@ -123,6 +123,11 @@ class CliTool:
         return "\n".join(lines)
 
     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:
+        from dodaios.core import egress_guard
+
+        offline = egress_guard.child_refusal(f"the command-line tool {self._spec.name!r}")
+        if offline is not None:
+            return ToolResult(success=False, output=None, error=offline)
         command = (args.get("command") or "").strip()
         timeout_s = float(args.get("timeout_s") or DEFAULT_TIMEOUT_S)
         cwd = args.get("cwd") or None

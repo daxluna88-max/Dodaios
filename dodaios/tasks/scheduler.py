@@ -358,13 +358,27 @@ class TaskScheduler:
                 continue
             self._hook_retry_at.pop(tid, None)
             self._hook_running.add(tid)
-            task = asyncio.create_task(self._run_hook(row), name=f"routine-hook-{tid}")
+            from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
+            task = asyncio.create_task(
+                self._run_hook(row, stop_ticket=get_stop_controller().ticket()),
+                name=f"routine-hook-{tid}",
+            )
             self._runner_tasks.add(task)
             task.add_done_callback(self._runner_tasks.discard)
 
-    async def _run_hook(self, row: dict[str, Any]) -> None:
+    async def _run_hook(self, row: dict[str, Any], *, stop_ticket: int | None = None) -> None:
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
         tid, delivery = str(row["task_id"]), str(row["delivery_id"])
+        controller = get_stop_controller()
+        ticket = stop_ticket if stop_ticket is not None else controller.ticket()
         try:
+            if not controller.admit(ticket).allowed:
+                # Delivered before STOP: it is not replayed after a resume (a stale event would
+                # run late), and it is not "done" either.
+                await self._store.hooks.mark(tid, delivery, "interrupted")
+                return
             current = await self._store.get(tid)
             if current is None or current["state"] != "scheduled":
                 return
@@ -372,14 +386,17 @@ class TaskScheduler:
             await self._store.append_step(
                 tid, "log", {"event": "hook_started", "delivery_id": delivery}
             )
-            await self._safe_run(
+            if await self._safe_run(
                 tid,
                 {
                     "hook_payload": row["payload_json"],
                     "hook_delivery_id": delivery,
                     "__trigger_path": json.loads(row.get("lineage_json") or "[]"),
                 },
-            )
+                stop_ticket=ticket,
+            ) is False:
+                await self._store.hooks.mark(tid, delivery, "interrupted")
+                return
             current = await self._store.get(tid)
             failed = (
                 current is None
@@ -460,8 +477,13 @@ class TaskScheduler:
             "paused" if state == "paused" and spec.trigger.type in PAUSABLE_TRIGGER_TYPES else None
         )
         await self._store.append_step(task_id, "log", {"event": "run_now"})
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
         task_obj = asyncio.create_task(
-            self._run_now_and_settle(task_id, restore_state, allow_paused=state == "paused"),
+            self._run_now_and_settle(
+                task_id, restore_state, allow_paused=state == "paused",
+                stop_ticket=get_stop_controller().ticket(),
+            ),
             name=f"task-run-now-{task_id}",
         )
         self._runner_tasks.add(task_obj)
@@ -471,9 +493,9 @@ class TaskScheduler:
         self,
         task_id: str,
         restore_state: str | None,
-        *, allow_paused: bool = False,
+        *, allow_paused: bool = False, stop_ticket: int | None = None,
     ) -> None:
-        await self._safe_run(task_id, None, allow_paused=allow_paused)
+        await self._safe_run(task_id, None, allow_paused=allow_paused, stop_ticket=stop_ticket)
         if restore_state is None:
             return
         # The runner leaves a recurring task as `scheduled` (or `failed`);
@@ -977,13 +999,40 @@ class TaskScheduler:
         if self._runner is None:
             log.warning("TaskScheduler.run: no runner attached, task %s falls through", task_id)
             return
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
         task = asyncio.create_task(
-            self._safe_run(task_id, trigger_event), name=f"task-runner-{task_id}"
+            # The ticket is taken here, when the run is created, not when its task starts.
+            self._safe_run(task_id, trigger_event, stop_ticket=get_stop_controller().ticket()),
+            name=f"task-runner-{task_id}",
         )
         self._runner_tasks.add(task)
         task.add_done_callback(self._runner_tasks.discard)
 
     async def _safe_run(
+        self, task_id: str, trigger_event: dict[str, Any] | None = None,
+        *, allow_paused: bool = False, stop_ticket: int | None = None,
+    ) -> bool | None:
+        """Run one task. Returns ``False`` only when the owner's STOP overtook it (ADR-0058).
+
+        ``stop_ticket`` is the STOP generation taken when the run was created (queued); without
+        one the run is taken to be created now. It is handed down to the runner through
+        ``work_ticket``, so every side effect of the run can re-verify it."""
+        from dodaios.control.stop import get_stop_controller, work_ticket  # noqa: PLC0415
+
+        controller = get_stop_controller()
+        ticket = stop_ticket if stop_ticket is not None else controller.ticket()
+        if not controller.admit(ticket).allowed:
+            log.info("task %s was not started: the owner pressed STOP", task_id)
+            return False
+        ticket_token = work_ticket.set(ticket)
+        try:
+            await self._safe_run_admitted(task_id, trigger_event, allow_paused=allow_paused)
+        finally:
+            work_ticket.reset(ticket_token)
+        return None
+
+    async def _safe_run_admitted(
         self, task_id: str, trigger_event: dict[str, Any] | None = None,
         *, allow_paused: bool = False,
     ) -> None:

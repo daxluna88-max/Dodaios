@@ -1166,6 +1166,11 @@ class AgentChatService:
         picture and pressing Enter is a complete gesture — but an empty message
         with nothing attached is still refused.
         """
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
+        # The turn's STOP ticket is taken here, when the message is sent, not when the brain
+        # starts: a STOP that lands while the turn is being prepared makes it stale (ADR-0058).
+        stop_ticket = get_stop_controller().ticket()
         session = self.store.get_session(session_id)
         if session is None:
             raise NoSuchSession(session_id)
@@ -1482,6 +1487,7 @@ class AgentChatService:
                 output_language=output_language,
                 goal_turn=native_goal,
                 control_service=self,
+                stop_ticket=stop_ticket,
             )
         except BaseException as exc:
             try:
@@ -1562,6 +1568,31 @@ class AgentChatService:
             )
 
             async def run_attempt(active_handle: TurnHandle, run_prompt: str) -> None:
+                from dodaios.brain import engine_policy
+
+                if engine_policy.work_active() and (
+                    control_runner is not None or supports_cli_runner(runner)
+                ):
+                    # Product policy (ADR-0049): a vendor CLI / external runtime / vendor control
+                    # runner is a cloud engine. Under Work only the "brain" and "api" runners
+                    # (both registry- or check_provider-gated) may answer; nothing is launched.
+                    await self._emit(
+                        session_id,
+                        make_event(
+                            "turn_finished",
+                            {
+                                "turn_id": turn_id,
+                                "status": "error",
+                                "duration_ms": 0,
+                                "usage": {},
+                                "error": (
+                                    f"The {runner!r} runner is a cloud engine and is unavailable "
+                                    "under the Work product (local models only)."
+                                ),
+                            },
+                        ),
+                    )
+                    return
                 if control_runner is not None:
                     vendor = await control_runner(active_handle, text)
                     if vendor:

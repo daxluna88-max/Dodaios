@@ -312,6 +312,13 @@ class MeteredTTS(_MeteredProvider):
         the caller actually gave them — a third-party plugin with a narrower
         signature keeps working.
         """
+        # Provenance door (ADR-0050, block 7): text derived from local-only material is never
+        # sent to a remote TTS. The text stays on screen; only the remote speech is skipped.
+        from dodaios.brain import provenance  # noqa: PLC0415
+
+        if provenance.is_restricted(text) and not provenance.tts_is_local(self._inner):
+            log.info("TTS %s skipped: the text derives from local-only material", self.name)
+            return
         chars = len(text or "")
         kwargs: dict[str, Any] = dict(extra)
         if voice is not None:

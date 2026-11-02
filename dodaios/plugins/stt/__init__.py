@@ -156,6 +156,17 @@ def resolve_stt_model(stt_cfg: Any, provider_name: str) -> str:
     return pinned
 
 
+def _work_refuses_stt(provider_name: str) -> bool:
+    """True when the Work product (ADR-0049) does not allow this STT plugin (a cloud service)."""
+    from dodaios.brain.engine_policy import EnginePolicyError, check_service
+
+    try:
+        check_service(ENTRY_POINT_GROUP, provider_name)
+    except EnginePolicyError:
+        return True
+    return False
+
+
 def _stt_has_credential(provider_name: str, kwargs: dict[str, Any]) -> bool:
     """Whether the configured cloud STT has a usable key (else: fall to local).
 
@@ -164,6 +175,8 @@ def _stt_has_credential(provider_name: str, kwargs: dict[str, Any]) -> bool:
     ``_STT_SECRET_CANDIDATES`` (unknown / third-party) return True so their
     construction path is unchanged — only known cloud providers are gated.
     """
+    if _work_refuses_stt(provider_name):
+        return False  # product policy (ADR-0049): decided before any secret is read
     if kwargs.get("api_key"):
         return True
     candidates = _STT_SECRET_CANDIDATES.get(provider_name)
@@ -185,6 +198,8 @@ def _stt_family_has_key(provider_name: str) -> bool:
     local key), and treats unknown / third-party providers (no entry in
     ``_STT_SECRET_CANDIDATES``) as keyed so their path is never gated.
     """
+    if _work_refuses_stt(provider_name):
+        return False  # product policy (ADR-0049): no credential is read for a cloud family
     from dodaios.core import config as _cfg
 
     if provider_name == "groq-api":

@@ -244,7 +244,10 @@ def test_install_from_settings_with_no_file_and_no_env_installs_nothing(tmp_path
     eg.uninstall()
     assert eg.install_from_settings(tmp_path / "missing.toml", {}) == "none"
     status = eg.status()
-    assert {k: v for k, v in status.items() if k != "not_covered"} == {
+    # Block 6 added honest enforcement fields: nothing is enforced when nothing is installed.
+    assert status["os_enforcement_verified"] is False and status["python_guard_enforced"] is False
+    keep = ("active", "source", "blocked", "recent")
+    assert {k: v for k, v in status.items() if k in keep} == {
         "active": False, "source": "none", "blocked": 0, "recent": []}
 
 

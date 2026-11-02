@@ -47,6 +47,9 @@ class _Queued:
     attachments: list[dict[str, Any]] | None
     tool_choices: list[str] | None
     timezone: str | None = None
+    #: The STOP generation when the message was queued (ADR-0058). A message queued before the
+    #: owner's STOP is never sent after it, not even after a resume.
+    stop_ticket: int | None = None
 
 
 @dataclass(slots=True)
@@ -154,7 +157,12 @@ async def send_or_queue(
     # Earlier waiting messages go first, so a new one never overtakes them.
     if len(pending.items) >= MAX_QUEUED and not first:
         raise QueueFull(session_id)
-    item = _Queued(uuid.uuid4().hex, text, attachments, tool_choices, client_timezone.get())
+    from dodaios.control.stop import get_stop_controller
+
+    item = _Queued(
+        uuid.uuid4().hex, text, attachments, tool_choices, client_timezone.get(),
+        get_stop_controller().ticket(),
+    )
     # Recovery reads persisted notices off-thread. A generation fence detects
     # an admission that both starts and finishes while that snapshot is read.
     svc._society_send_generation = getattr(svc, "_society_send_generation", 0) + 1
@@ -204,6 +212,17 @@ async def _drain_loop(svc: Any, session_id: str, pending: _ChatQueue) -> None:
         if pending.starting or svc.is_running(session_id):
             continue
         head = pending.items[0]
+        from dodaios.control.stop import get_stop_controller
+
+        if head.stop_ticket is not None and not get_stop_controller().admit(
+            head.stop_ticket
+        ).allowed:
+            # Re-verified at the moment it would start: STOP (or STOP and a resume) came after
+            # the message was queued, so it is not the owner's current request any more.
+            log.info("agent chat: a queued message for %s was dropped after STOP", session_id)
+            pending.items.popleft()
+            await _fail(svc, session_id, head)
+            continue
         token = client_timezone.set(head.timezone)
         try:
             await svc.send(

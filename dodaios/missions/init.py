@@ -1420,6 +1420,16 @@ async def bootstrap_missions(
     def _worker_factory(step):  # noqa: ANN001 - Step type local
         task_text = getattr(step, "prompt", "") or ""
         capability_inventory = _assemble_worker_capability_inventory(task_text)
+        from dodaios.brain import engine_policy
+
+        if engine_policy.work_active():
+            # Product policy (ADR-0049): under Work a mission step runs ONLY on the in-process
+            # worker with a local engine. Every vendor CLI / subscription / cross-family
+            # fallback below is a cloud path and is never reached; a missing local engine is an
+            # error (EnginePolicyError), not a fallback.
+            local_provider = _live_subagent_provider(sub_jarvis_provider) or ""
+            engine_policy.check_provider(local_provider)
+            return ApiAgentWorker(local_provider, capability_inventory=capability_inventory)
         # Worker routing post-Welle-4:
         #
         # 1. If ``[brain.sub_jarvis].provider`` is set in jarvis.toml,

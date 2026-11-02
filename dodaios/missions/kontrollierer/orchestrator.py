@@ -128,6 +128,10 @@ from .worker_prompt import compose_worker_prompt
 logger = logging.getLogger(__name__)
 
 
+class MissionStopped(RuntimeError):
+    """The owner pressed STOP (or STOP and a resume) after this mission was created (ADR-0058)."""
+
+
 MAX_WORKERS_PER_MISSION: Final[int] = 5
 """ADR-0009 + jarvis.toml [phase6.orchestrator]: max_workers_per_mission."""
 
@@ -984,8 +988,29 @@ class Kontrollierer:
         # In-flight run_mission tasks by mission_id — lets an external
         # cancel (UI hold-to-abort) abort a running mission mid-flight.
         self._running_missions: dict[str, asyncio.Task[Any]] = {}
+        # mission_id -> STOP generation the mission was created under (ADR-0058).
+        self._mission_tickets: dict[str, int] = {}
 
-    async def run_mission(self, mission_id: str) -> MissionState:
+    def _tickets(self) -> dict[str, int]:
+        # setdefault on the instance dict: also works for a Kontrollierer built without __init__.
+        return self.__dict__.setdefault("_mission_tickets", {})
+
+    def _mission_stopped(self, mission_id: str) -> bool:
+        """STOP (or STOP and a resume) happened after this mission was created."""
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
+        ticket = self._tickets().get(mission_id)
+        return ticket is not None and not get_stop_controller().admit(ticket).allowed
+
+    async def _stop_mission(self, mission_id: str) -> MissionState:
+        """End a mission the owner's STOP overtook: CANCELLED, never started or continued."""
+        await self._safe_transition(mission_id, MissionState.CANCELLED, "stopped_by_owner")
+        view = await self._manager.mission(mission_id)
+        return view.state if view is not None else MissionState.CANCELLED
+
+    async def run_mission(
+        self, mission_id: str, *, stop_ticket: int | None = None
+    ) -> MissionState:
         """Runs a mission end-to-end and returns the final state.
 
         Returns: APPROVED | FAILED | CANCELLED | TIMED_OUT | WAITING_CAPACITY.
@@ -993,7 +1018,18 @@ class Kontrollierer:
         The in-flight asyncio task is tracked in ``_running_missions`` so an
         external cancel (REST ``POST /api/missions/{id}/cancel``) can abort
         the run mid-flight via :meth:`cancel_running_mission`.
+
+        ``stop_ticket`` is the STOP generation taken when the mission was created (ADR-0058);
+        without one the mission is taken to be created now. A refused ticket cancels the
+        mission instead of running it, and every worker spawn re-verifies it.
         """
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
+        controller = get_stop_controller()
+        ticket = stop_ticket if stop_ticket is not None else controller.ticket()
+        if not controller.admit(ticket).allowed:
+            return await self._stop_mission(mission_id)
+        self._tickets()[mission_id] = ticket
         task = asyncio.current_task()
         if task is not None:
             self._running_missions[mission_id] = task
@@ -1001,6 +1037,7 @@ class Kontrollierer:
             return await self._run_mission_inner(mission_id)
         finally:
             self._running_missions.pop(mission_id, None)
+            self._tickets().pop(mission_id, None)
 
     def amend_mission(self, mission_id: str, instruction: str) -> dict[str, Any]:
         """Keep a correction the user gave while the mission runs.
@@ -1766,6 +1803,8 @@ class Kontrollierer:
                         iteration=iteration,
                         resume_session_id=None,
                     )
+                except MissionStopped:
+                    return TaskOutcome.ERROR  # already CANCELLED; no further iteration
                 except Exception:  # noqa: BLE001
                     logger.exception(
                         "Task %s iter %d: worker spawn failed", step.task_id, iteration
@@ -2386,6 +2425,11 @@ class Kontrollierer:
         deep ``log_dir`` would place ``.codex`` inside a logs subfolder which is
         wrong (FIX-4: env_builder mission_dir consistency).
         """
+        if self._mission_stopped(mission_id):
+            # Re-verified right before the side effect: no worker process starts for a mission
+            # the owner's STOP overtook.
+            await self._stop_mission(mission_id)
+            raise MissionStopped(mission_id)
         worker_id = f"{mission_id[:13]}::{step.task_id[:13]}::iter{iteration}"
         job = self._job_factory()
         cost = 0.0
@@ -3336,6 +3380,10 @@ class Kontrollierer:
         Sequential on purpose — resumed missions must not compete for the one
         subscription window that just came back. Returns the resumed ids.
         """
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
+        if not get_stop_controller().admit().allowed:
+            return []  # after the owner's STOP nothing is resumed until they resume
         resumed: list[str] = []
         for mission_id, _prompt, state in await self._manager.store.list_non_terminal_missions():
             if state != MissionState.WAITING_CAPACITY.value:
@@ -3471,10 +3519,20 @@ class Kontrollierer:
         in ``_running_missions`` like ``run_mission`` so cancel and shutdown
         reach it.
         """
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
+        controller = get_stop_controller()
+        ticket = controller.ticket()
+        if not controller.admit(ticket).allowed:
+            return await self._stop_mission(mission_id)
         claim = await self._claim_resume(mission_id)
         if isinstance(claim, MissionState):
             return claim
-        return await self._run_claimed_resume(mission_id, claim, paid=None)
+        self._tickets()[mission_id] = ticket
+        try:
+            return await self._run_claimed_resume(mission_id, claim, paid=None)
+        finally:
+            self._tickets().pop(mission_id, None)
 
     async def _claim_resume(self, mission_id: str) -> _ResumeClaim | MissionState:
         """Take a parked mission out of WAITING_CAPACITY for exactly one run.

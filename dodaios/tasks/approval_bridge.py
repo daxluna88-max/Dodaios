@@ -58,6 +58,11 @@ class TaskAutoApprover:
         ctx = self._active.get(event.trace_id)
         if ctx is None:
             return
+        # Only a plain tier/plausibility confirmation can be pre-authorized. A gate, a
+        # duplicate-effect or an unknown-outcome confirmation needs a person (ADR-0044):
+        # left unanswered, the unattended surface reports "approval unavailable".
+        if event.reason not in ("risk_tier", "plausibility"):
+            return
         granted, approved_by = ctx
         if not self._tool_is_granted(event.tool_name, granted):
             await self._bus.publish(
@@ -73,6 +78,7 @@ class TaskAutoApprover:
                 trace_id=event.trace_id,
                 tool_name=event.tool_name,
                 approved_by=approved_by,
+                call_fingerprint=event.call_fingerprint,
             )
         )
 

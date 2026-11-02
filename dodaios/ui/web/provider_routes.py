@@ -1402,6 +1402,23 @@ def _human_detail(result: Any) -> str:
     return _provider_test.explain_provider_error(raw) or raw
 
 
+def _work_refusal(spec: ProviderSpec) -> str | None:
+    """Why the Work product (ADR-0049) must not contact this card's provider, else None.
+
+    Decided from the card alone, before any credential is read or any request is sent.
+    """
+    from dodaios.brain import engine_policy
+
+    if not engine_policy.work_active():
+        return None
+    if spec.tier == "dictation":
+        family = _polish_family(spec)
+        if family is not None and family.runs_on_device:
+            return None
+        return f"{spec.label} is a cloud service and is unavailable under the Work product."
+    return engine_policy.provider_blocked_reason(spec.tier, spec.id)
+
+
 @router.post("/providers/{provider_id}/test")
 async def test_provider_connection(provider_id: str, request: Request) -> ProviderTestResponse:
     """Run a REAL minimal call against ``provider_id`` and report the honest
@@ -1416,6 +1433,10 @@ async def test_provider_connection(provider_id: str, request: Request) -> Provid
     spec = get_spec(provider_id)
     if spec is None:
         raise HTTPException(status_code=404, detail=f"Unknown provider: {provider_id}")
+
+    refusal = _work_refusal(spec)
+    if refusal:
+        raise HTTPException(status_code=409, detail=refusal)
 
     cfg = _resolve_cfg(request)
     if cfg is None:
@@ -4050,6 +4071,10 @@ async def realtime_voice_preview(
             status_code=400,
             detail=f"Voice preview is not available for provider '{provider_id}'.",
         )
+
+    refusal = _work_refusal(spec)
+    if refusal:
+        raise HTTPException(status_code=409, detail=refusal)
 
     requires_api_key = bool(getattr(sampler, "requires_api_key", True))
     api_key = cfg_mod.get_provider_secret(provider_id) or ""

@@ -48,3 +48,107 @@ processes. An unknown product name is an error, not a default.
   vault and directory; use the flag.
 - Nothing migrates existing shared data or keys into a product; that is a separate, explicit
   step.
+
+## Block 5: environment and entry points
+
+Static review only. **Nothing was executed**: no pytest, no test, no build, no app; only
+`py_compile` and `ruff check` on the touched files.
+
+What changed:
+
+- `product_profile.validate_inherited` (used by the "already active, inherited" branch of
+  `activate_from_argv`): the child no longer accepts the parent's variables on trust. It checks
+  the announced product (`JARVIS_PRODUCT` and `JARVIS_PRODUCT_ACTIVE` agree), the credential
+  service, that the data directory is absolute, named `<root>-<product>` and does not overlap the
+  shared directory, that the config is that product's `dodaios.toml` inside it, and that the
+  `.product` marker exists and names this product (a missing, corrupt or other-product marker is
+  refused). Read-only: it does not claim and does not re-acquire the launch lock (the parent
+  holds it). A product credential service with no `JARVIS_PRODUCT_ACTIVE` is refused as a
+  half-inherited environment, in `activate_from_argv` and on every early entry.
+- `paths.user_data_dir` no longer returns the inherited path blindly: absolute, `-<product>`
+  suffix, and a marker that, if present, names the active product (else `RuntimeError`).
+- `product_profile.validate_entry` + `dodaios/__main__.py`: the early dispatches (`update`,
+  `--relauncher`, `--background-service` / `--persistent-server` / `--connect`, `--turn-host`)
+  used to match only `argv[1]`, so `--product work --background-service` fell into the normal
+  parser and `update --product work` hit the update parser. The entry flag is now found with
+  `--product` removed (any position, `--product work` and `--product=work`). `update`,
+  `--relauncher` and `--turn-host` validate the inherited environment before touching anything;
+  the two helpers refuse a `--product` flag (the product comes from the parent's environment).
+  The background-service entries pass the whole argv to the launcher, which selects or validates
+  the product (it already did). `relauncher.main`, `turn_host.main` and `app_update.main` validate
+  too, for `python -m <module>` starts that bypass `__main__`.
+- Relaunch: the restart chain carries no `--product`; the new launcher inherits the same
+  environment, validates it and reuses the same directory (no second suffix, no re-derivation).
+
+Not verified or not done:
+
+- Nothing above was run; the written tests (`tests/unit/core/test_product_profile_env.py`) were
+  never executed. The stricter validation could reject an environment a real run produces (for
+  example a legacy `Jarvis` shared directory renamed between parent and child is tolerated only
+  because the check compares overlap, not the exact name).
+- `update` is install-wide and takes no product lock: `dodaios update` from a shell cannot see a
+  running product app's session, so it does not detect a running Work/Consumer app (limit, not
+  fixed). `--product` on `update` is only validated, not used.
+- Frozen builds, macOS LaunchServices and Windows branded-launcher restarts were read, not run.
+  Other early or direct module entries (`--clipboard-read`, `--audio-device-probe`, the control
+  CLI) were not changed.
+
+<!-- BEGIN block 5: mirror and uninstall -->
+## Block 5: mirror and uninstall
+
+Written statically: **nothing was run** (no pytest, no test, no build, no uninstall, no app). Only
+`py_compile`, `bash -n` and `ruff check`.
+
+### Ownership
+
+The install folder (`cfg.PROJECT_ROOT`, its venv, the OS app registration, the login autostart
+entry, the terminal commands, the earlier-name links) is **shared** by both products. Each product
+owns only its data directory `<shared>-<product>` (marker `.product`), its credential service
+`dodaios-<product>`, and its Desktop output mirror.
+
+### What changed
+
+- **Desktop mirror** (`dodaios/core/paths.py`). A product launch uses its own root,
+  `~/Desktop/Dodaios-Output-<product>`; the unscoped app keeps `Dodaios-Output`. On Windows
+  `ensure_session_output_dir` no longer uses whatever is at the mirror path: it is used only if it
+  is a directory link that resolves to this product's own canonical folder (`mirror_is_safe`). A
+  link elsewhere (for instance the other product's output), a real folder, or a mirror root that
+  is itself a link is left untouched, never followed or deleted, and the canonical path is
+  returned. The mirror is also returned only if `mklink` really produced a safe link.
+- **Per-product uninstall** (`dodaios/setup/uninstall.py`). Run as
+  `python -m dodaios --product <work|consumer> --uninstall`: removes only that product's data
+  directory (it must be a real directory named `*-<product>`, not a link, carrying that product's
+  marker, outside the install folder) and the keys of its own credential service. It never removes
+  the install folder, registration, autostart, terminal commands or processes found by install
+  folder. `--keep-folder` keeps the data directory, `--keep-keys` the keys. Any doubt (no marker,
+  foreign marker, wrong credential service, link, overlap, contradicting `--product`) exits 3,
+  nothing changed.
+- **Full uninstall guard.** Unscoped, `run_uninstall` exits 3 while a Work/Consumer data directory
+  exists (current or earlier shared name) or the scan cannot tell, also on `--dry-run`. Remove
+  each product first, then the shared install.
+- **Bootstraps** (`install/uninstall.sh`, `install/uninstall.ps1`). Exit code 3 from the Python
+  step is reported as a refusal, with no "delete it by hand" advice. With `--product` they never
+  delete the install folder. Without a working venv they refuse (exit 3) if `--product` was given
+  or if a product data directory exists next to the shared one.
+
+### NOT done / NOT verified
+
+- Nothing was executed. The new tests (`tests/unit/core/test_desktop_mirror_products.py`,
+  `tests/unit/setup/test_uninstall_products.py`, `tests/unit/install/test_uninstall_bootstrap_products.py`)
+  are written, not run.
+- Real Windows junction behaviour, Windows locks on the running product's data directory during
+  its own removal (the product's launch lock file is open while it is deleted), macOS Keychain
+  and Windows Credential Manager removal under `dodaios-<product>`: not verified.
+- The shell/PowerShell product data paths in the no-venv fallback assume the default locations
+  (`~/.dodaios-data-<product>`, `%LOCALAPPDATA%\Dodaios-<product>`); a custom data location is not
+  seen there.
+- Identity is still shared and NOT separated: macOS `Dodaios.app` and bundle id
+  `com.personal-jarvis.desktop`, the autostart label/entry, the Windows Start menu shortcut,
+  Installed Apps key, AppUserModelID, the Linux `.desktop` entry and the terminal commands. The
+  full uninstall removes them only when no product data is left; a per-product install with its
+  own folder, shortcut, bundle id and autostart entry is not implemented.
+- Shared-install protection is by refusal only: a full uninstall does not offer a "remove
+  everything including products" mode; no product-selecting flag exists in the bootstraps
+  beyond passing `--product` through.
+- Old Desktop output under `Dodaios-Output` made before this change is not moved or re-linked.
+<!-- END block 5: mirror and uninstall -->

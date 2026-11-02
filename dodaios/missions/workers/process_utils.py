@@ -163,6 +163,9 @@ async def create_worker_subprocess(
     kwargs is NOT required — this helper sources the flags itself so the retry
     can mutate them.
     """
+    from dodaios.core import egress_guard
+
+    egress_guard.require_child("a worker process", cmd, kwargs.get("env"))
     flags = worker_creationflags()
     kwargs.pop("creationflags", None)  # this helper owns the flags
     if sys.platform != "win32":

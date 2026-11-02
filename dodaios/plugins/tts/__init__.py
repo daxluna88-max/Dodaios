@@ -123,6 +123,17 @@ def _canonical_tts_name(name: str) -> str:
     return n
 
 
+#: TTS families that run on this machine; every other family is a hosted service.
+_LOCAL_TTS_FAMILIES = frozenset({"piper-local", "piper"})
+
+
+def _work_refuses_tts(provider: str) -> bool:
+    """True under the Work product (ADR-0049) for any TTS family that is not on-device."""
+    from dodaios.brain.engine_policy import work_active
+
+    return work_active() and (provider or "").strip().lower() not in _LOCAL_TTS_FAMILIES
+
+
 def _tts_has_credential(canonical: str, tts_cfg: Any) -> bool:
     """Whether the TTS *family* ``canonical`` has a usable key on this host.
 
@@ -133,6 +144,8 @@ def _tts_has_credential(canonical: str, tts_cfg: Any) -> bool:
     Vertex card alike, the latter asking the shared credential state so the card
     and the runtime can never disagree.
     """
+    if _work_refuses_tts(canonical):
+        return False  # product policy (ADR-0049): decided before any secret is read
     candidates = _TTS_SECRET_CANDIDATES.get(canonical)
     if candidates is None:
         return True
@@ -335,7 +348,7 @@ def build_realtime_surface_tts(
     """
     provider_id = (realtime_provider or "").strip().lower()
     family = _REALTIME_SURFACE_TTS_FAMILY.get(provider_id)
-    if not family:
+    if not family or _work_refuses_tts(family):  # Work (ADR-0049): no hosted voice, no key read
         return None
     try:
         from dodaios.core.config import (
@@ -621,6 +634,16 @@ def build_tts_from_config(tts_cfg: Any) -> Any:
 
 def _build_provider(tts_cfg: Any, provider: str) -> Any:
     """Build a single TTS provider instance for ``provider`` (no fallback wrap)."""
+    if _work_refuses_tts(provider):
+        # Product policy (ADR-0049): no hosted TTS under Work, and the "unknown provider -> Gemini"
+        # default below must never be reached. Raised before any plugin import or key read.
+        from dodaios.brain.engine_policy import EnginePolicyError
+
+        raise EnginePolicyError(
+            f"TTS provider {provider!r} is a cloud service: the Work product allows only "
+            "piper-local.",
+            code="remote_service_in_local_only",
+        )
     allow_sapi5 = bool(getattr(tts_cfg, "allow_sapi5_fallback", False))
 
     if provider in _INWORLD_ALIASES:

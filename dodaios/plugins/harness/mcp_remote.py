@@ -92,11 +92,22 @@ class MCPRemoteHarness:
                     is_final=False,
                 )
             elif chosen_tool:
-                result = await client.call_tool(chosen_tool, args)
-                yield HarnessResult(
-                    stdout=str(result)[:4000] + "\n",
-                    is_final=False,
-                )
+                # No approver exists on this path: the owner's STOP and the process-wide tool
+                # gate (ADR-0044) still apply; anything but "allow" refuses (block 7).
+                from dodaios.safety.preflight import unattended_refusal
+
+                held = await unattended_refusal(f"{server_name}/{chosen_tool}", args)
+                if held is not None:
+                    yield HarnessResult(
+                        stdout=f"[mcp:{server_name}] {chosen_tool} not run: {held}\n",
+                        is_final=False,
+                    )
+                else:
+                    result = await client.call_tool(chosen_tool, args)
+                    yield HarnessResult(
+                        stdout=str(result)[:4000] + "\n",
+                        is_final=False,
+                    )
         finally:
             try:
                 await client.close()

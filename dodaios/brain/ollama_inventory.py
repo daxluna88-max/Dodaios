@@ -634,6 +634,9 @@ async def embed_probe(
     :class:`OllamaServerError` when the server refused or is unreachable.
     """
     root = normalize_server_root(root)
+    from dodaios.brain.engine_policy import check_endpoint_url
+
+    check_endpoint_url(root, "Ollama embedding probe")  # Work (ADR-0049): local endpoint only
     async with _client(transport) as client:
         try:
             resp = await client.post(f"{root}/api/embed", json={"model": model, "input": "ping"})

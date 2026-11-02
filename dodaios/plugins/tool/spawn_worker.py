@@ -698,6 +698,14 @@ class SpawnWorkerTool:
         # the gate for the whole dispatch decision. The matching decrement is
         # owned by _background_dispatch's finally; if we never reach
         # create_task we roll the increment back so the gate can't wedge.
+        # After the owner's STOP nothing new starts (ADR-0058); the ticket is taken here, when the
+        # background work is created, and re-verified when it starts and before it runs.
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
+        stop_controller = get_stop_controller()
+        if not stop_controller.admit().allowed:
+            return ToolResult(success=False, output="", error="stopped_by_owner")
+        stop_ticket = stop_controller.ticket()
         self._last_spawn_at = now
         self._active_dispatches += 1
         self._last_spawn_turn = order_turn
@@ -726,6 +734,7 @@ class SpawnWorkerTool:
                     # must be in the same language the pipeline will wrap it
                     # in.
                     readback_language=ack_language,
+                    stop_ticket=stop_ticket,
                 ),
                 # NOTE: prefix "jarvis-agent-" is a live matching key, not a
                 # cosmetic label — dodaios/brain/manager.py
@@ -769,6 +778,7 @@ class SpawnWorkerTool:
         *,
         mission_language: str = "en",
         readback_language: str | None = None,
+        stop_ticket: int | None = None,
     ) -> None:
         """Laeuft im Background. Dispatched + executes eine Mission.
 
@@ -807,12 +817,23 @@ class SpawnWorkerTool:
         unbehandelter Exception sonst im Event-Loop als unhandled-exception
         enden wuerde.
         """
+        from dodaios.control.stop import get_stop_controller  # noqa: PLC0415
+
+        controller = get_stop_controller()
+        ticket = stop_ticket if stop_ticket is not None else controller.ticket()
         try:
+            if not controller.admit(ticket).allowed:
+                log.info("spawn_worker: a dispatch created before STOP was not started")
+                return
             mission_id = await manager.dispatch(
                 prompt=prompt,
                 language=mission_language,
                 source_actor="hauptjarvis",
             )
+            if not controller.admit(ticket).allowed:
+                # STOP landed while the mission was being persisted: it must not run.
+                await self._cancel_stopped_mission(manager, mission_id)
+                return
             if kontrollierer is None:
                 log.warning(
                     "spawn_worker: mission %s dispatched but no Kontrollierer "
@@ -848,6 +869,18 @@ class SpawnWorkerTool:
             # is not falsely suppressed as "already running" (#3). Floor at 0
             # defends against any unpaired decrement.
             self._active_dispatches = max(0, self._active_dispatches - 1)
+
+    @staticmethod
+    async def _cancel_stopped_mission(manager: Any, mission_id: str) -> None:
+        from dodaios.missions.state_machine import MissionState  # noqa: PLC0415
+
+        try:
+            await manager.transition_state(
+                mission_id, MissionState.CANCELLED,
+                reason="stopped_by_owner", source_actor="hauptjarvis",
+            )
+        except Exception:  # noqa: BLE001 - already terminal or gone: nothing left to cancel
+            log.debug("spawn_worker: mission %s was not cancellable after STOP", mission_id)
 
     async def _publish_dispatch_failure(self, utterance: str, error: str) -> None:
         """Tell the user a promised background task will not deliver.

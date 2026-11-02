@@ -337,6 +337,9 @@ def _failure_message(label: str, kind: str, code: int, runtime: str) -> str:
 
 
 async def _run(current: RuntimeJob, argv: list[str], env: dict[str, str] | None = None) -> None:
+    from dodaios.core import egress_guard
+
+    egress_guard.require_child("an agent runtime installer", argv, env)
     from dodaios.core.process_tree import make_process_tree
     from dodaios.core.process_utils import NO_WINDOW_CREATIONFLAGS
 

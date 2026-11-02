@@ -403,6 +403,9 @@ class WarmPool:
         return warm
 
     async def _spawn(self, key: str, spec: WarmSpec) -> _WarmProcess | None:
+        from dodaios.core import egress_guard
+
+        egress_guard.require_child("an agent runtime process", spec.argv, spec.env)
         from dodaios.core.process_tree import (
             TURN_MARKER_ENV,
             DescendantTracker,

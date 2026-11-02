@@ -240,6 +240,10 @@ class _RealGeminiCUClient:
     """
 
     def __init__(self, *, api_key: str | None = None) -> None:
+        # Product policy (ADR-0049): hosted vision/computer-use, refused under Work before any key.
+        from dodaios.brain.engine_policy import require_local_inference  # noqa: PLC0415
+
+        require_local_inference("Gemini native computer use")
         if api_key is None:
             from dodaios.core.config import get_secret  # noqa: PLC0415
 

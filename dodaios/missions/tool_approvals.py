@@ -32,6 +32,8 @@ class PendingMissionToolApproval:
     args_preview: str
     requested_at_ns: int
     expires_at_ns: int
+    #: Digest of the exact tool + arguments that were asked about; the decision echoes it.
+    call_fingerprint: str = ""
 
     def to_dict(self) -> dict[str, str | int | None]:
         payload = asdict(self)
@@ -89,6 +91,7 @@ class MissionToolApprovalCoordinator:
             args_preview=event.args_preview,
             requested_at_ns=event.timestamp_ns,
             expires_at_ns=event.expires_at_ns,
+            call_fingerprint=event.call_fingerprint,
         )
         async with self._lock:
             self._pending[event.trace_id] = pending
@@ -151,6 +154,7 @@ class MissionToolApprovalCoordinator:
                 trace_id=trace_id,
                 tool_name=pending.tool_name,
                 approved_by=approved_by,
+                call_fingerprint=pending.call_fingerprint,
             )
         )
         return pending
@@ -308,6 +312,7 @@ class MissionToolAutoApprover:
                 trace_id=event.trace_id,
                 tool_name=tool_name,
                 approved_by=approved_by,
+                call_fingerprint=event.call_fingerprint,
             )
         )
 

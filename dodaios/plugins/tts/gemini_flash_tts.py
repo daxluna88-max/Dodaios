@@ -219,6 +219,10 @@ class GeminiFlashTTS:
     def _ensure_client(self) -> None:
         if self._client is not None:
             return
+        # Product policy (ADR-0049): a hosted TTS, refused under Work before any key is read.
+        from dodaios.brain.engine_policy import require_local_inference
+
+        require_local_inference("Gemini text-to-speech")
         from google import genai
         if self._use_vertex:
             # Service-account JSON via GOOGLE_APPLICATION_CREDENTIALS env. The
