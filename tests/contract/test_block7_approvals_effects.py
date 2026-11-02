@@ -97,7 +97,7 @@ async def test_bypass_does_not_approve_a_duplicate() -> None:
     await ex.execute(tool, {"to": "a"}, trace_id=tid, effect_key="call_1")
     pending = asyncio.create_task(
         ex.execute(tool, {"to": "a"}, trace_id=tid, effect_key="call_2",
-                   config_snapshot={"approval_timeout_s": 1})
+                   config_snapshot={"approval_timeout_s": 1, "approval_surface": "interactive"})
     )
     await asyncio.sleep(0.05)
     assert asked and asked[-1].reason == "duplicate_effect"

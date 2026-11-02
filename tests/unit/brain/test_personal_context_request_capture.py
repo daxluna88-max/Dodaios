@@ -77,6 +77,12 @@ class _TurnMemory:
     async def recall(self, user_text: str) -> str:
         return f"Note: {_MEMORY_MARK}"
 
+    async def recall_notes(self, user_text: str):
+        # Block 7: only notes the provider labels as shareable reach a remote engine.
+        from dodaios.brain.turn_memory import MemoryNote
+
+        return [MemoryNote(f"Note: {_MEMORY_MARK}", local_only=False)]
+
 
 class _Contacts:
     def render_for_prompt(self, max_chars: int = 0) -> str:

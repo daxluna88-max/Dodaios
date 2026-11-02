@@ -274,7 +274,7 @@ elif [ "$RC" -eq 2 ]; then
     exit 2
 elif [ "$RC" -eq 3 ]; then
     # Refused (unsure, or a product still uses this install). It printed why; nothing was
-    # changed and the folder must stay: no "rm -rf" advice here.
+    # changed and the folder must stay: no removal advice here.
     err 'Refused - nothing was changed.'
     exit 3
 elif [ "$RC" -ne 0 ]; then
