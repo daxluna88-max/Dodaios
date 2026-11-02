@@ -1,4 +1,4 @@
-sha=e64a38a8ee8373d59e9a3cb8dc151baec6ea3d47 started=2026-11-02T07:35:02Z
+sha=bb46212e89aa4433cdfc531bd55f39fbb501a7f2 started=2026-11-02T08:20:01Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -76,13 +76,13 @@ sha=e64a38a8ee8373d59e9a3cb8dc151baec6ea3d47 started=2026-11-02T07:35:02Z
 = env JARVIS_BROWSER_VOICE_ENGINE (already switched: voice-cartesia-5)
 = env JARVIS__BRAIN__REPLY_LANGUAGE (already switched: voice-lang-it-1)
 = env JARVIS__TTS__CARTESIA__CHUNK_BY_SENTENCE (already switched: voice-cartesia-6)
-+ env JARVIS_BROWSER_VOICE_SILENCE_MS switched (voice-silence-1)
-RESTARTED: jarvis running
+= env JARVIS_BROWSER_VOICE_SILENCE_MS (already switched: voice-silence-1)
+Nothing to apply; server not restarted (use --restart to force).
 update_exit=0
-PASS     CHK-TIME: real_rome_time=08:35 status=done secs=2 tool_errors=0 reply='Sono le otto e trentacinque di mattina, ora italiana.'
-PASS     CHK-STOP: first=cancelled second=done second_len=75 resumed=False leaked_internal_text=False reply='Sono le otto e trentacinque del mattino, ora italiana, lunedì due novembre.'
+PASS     CHK-TIME: real_rome_time=09:20 status=done secs=2 tool_errors=0 reply='Sono le nove e venti, Davide.'
+FAIL     CHK-STOP: first=cancelled second=done second_len=162 resumed=True leaked_internal_text=False reply='Sono le nove e venti di mattina, lunedì due novembre.\n\nIl racconto sul pane rosso è rimasto a metà quando hai interrotto: se vuoi lo riprendo, dimmi solo da dove.'
 SKIPPED  CHK-WIKI-HONEST: live memory check is off: it writes to the real profile
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
-SUMMARY: 3 PASS, 0 FAIL, 0 BLOCKED, 1 SKIPPED
-check_exit=0
-finished=2026-11-02T07:35:39Z
+SUMMARY: 2 PASS, 1 FAIL, 0 BLOCKED, 1 SKIPPED
+check_exit=1
+finished=2026-11-02T08:20:27Z
