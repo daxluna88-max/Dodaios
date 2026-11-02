@@ -42,6 +42,7 @@ import { FilesSection } from "@/views/assistant/FilesSection";
 import { InitiativeSection } from "@/views/assistant/InitiativeSection";
 import { Intro } from "@/views/assistant/Intro";
 import { MemorySection } from "@/views/assistant/MemorySection";
+import { PersonalitySection } from "@/views/assistant/PersonalitySection";
 import { RecentSection } from "@/views/assistant/RecentSection";
 import { TextAction } from "@/views/assistant/Section";
 
@@ -113,6 +114,7 @@ export function AssistantProfileView() {
             <FilesSection files={data.files} onOpen={setOpen} />
             <CharacterSection soul={fileOf(data, "soul")} onEdit={() => setOpen("soul")} />
             {data.initiative && <InitiativeSection initiative={data.initiative} />}
+            <PersonalitySection />
             <MemorySection profile={data} />
             <RecentSection activity={data.activity} lastReview={data.last_review} />
           </div>

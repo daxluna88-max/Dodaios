@@ -61,6 +61,7 @@
     },
     "mid_answer_error": "Ich habe die Zwischenschritte ausgeführt, aber beim Formulieren der Antwort gab es einen Fehler. Frag mich bitte gleich noch einmal.",
     "action_failed": "Ich habe die Aktion erkannt, konnte sie aber nicht ausführen.",
+    "stopped_waiting_resume": "Ich bin angehalten. Nimm mich über die Steuerleiste wieder in Betrieb, dann mache ich weiter.",
     "lang_switch_confirm": "Erledigt — ich antworte ab jetzt auf Deutsch.",
     "lang_switch_confirm_auto": "Erledigt — ich passe meine Sprache ab jetzt automatisch deiner an.",
     "ack": {

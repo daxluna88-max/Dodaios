@@ -69,6 +69,13 @@ DEFAULT_INSTANCE_NAME = "default"
 DEV_INSTANCE_NAME = "dev"
 #: The dev instance listens this many ports above every configured port.
 DEV_PORT_OFFSET = 100
+#: ``--product work|consumer`` (ADR-0054) listens this many ports above every configured port, so
+#: the two products and the shared default app never contend for one port. Chosen so that no sum
+#: with ``DEV_PORT_OFFSET`` equals another combination (1000, 1100, 2000, 2100, 100, 0).
+PRODUCT_PORT_OFFSETS = {"work": 1000, "consumer": 2000}
+#: Set by the launch that selected the product (``dodaios.core.product_profile.ACTIVE_ENV``);
+#: repeated here because this module is stdlib-only and read before the config module loads.
+_PRODUCT_ACTIVE_ENV = "JARVIS_PRODUCT_ACTIVE"
 #: Icon file (in ``assets/icons``) each instance shows on taskbar, dock and tray.
 DEFAULT_ICON_FILE_NAME = "dodaios.ico"
 DEV_ICON_FILE_NAME = "dodaios-dev.ico"
@@ -78,6 +85,15 @@ DEV_LABEL = "Dev"
 KNOWN_INSTANCE_NAMES = (DEFAULT_INSTANCE_NAME, DEV_INSTANCE_NAME)
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,23}$")
+
+
+def product_port_offset(env: Mapping[str, str] | None = None) -> int:
+    """Port offset of the product this process runs as; 0 when none is announced.
+
+    Read from the environment on every call (like :func:`current_instance`), so a child process
+    that inherited ``JARVIS_PRODUCT_ACTIVE`` binds the same ports as its parent."""
+    source = os.environ if env is None else env
+    return PRODUCT_PORT_OFFSETS.get((source.get(_PRODUCT_ACTIVE_ENV) or "").strip().lower(), 0)
 
 
 class InstanceNameError(ValueError):
@@ -180,7 +196,9 @@ class InstanceIdentity:
 
     @property
     def port_offset(self) -> int:
-        return 0 if self.is_default else DEV_PORT_OFFSET
+        """Ports above the configured base: the dev instance's offset plus the active product's."""
+        dev = 0 if self.is_default else DEV_PORT_OFFSET
+        return dev + product_port_offset()
 
     def port(self, base: int) -> int:
         """The port this instance binds for a configured base port."""

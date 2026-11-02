@@ -222,6 +222,10 @@ _ONBOARDING_KEYS = (
     # The guided tour of the real app, shown once after the completion
     # restart. Reset with the rest so a replayed first run tours again.
     "tour_completed_at",
+    # The guided first-run choices (owner name, interaction, tone...) and the moment they
+    # were applied to the config. A reset clears both so a replay starts from nothing.
+    "first_run",
+    "first_run_applied_at",
 )
 
 

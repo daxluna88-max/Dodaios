@@ -69,6 +69,9 @@ WEB_DIR = Path(__file__).resolve().parent
 DIST_DIR = WEB_DIR / "dist"
 INDEX_FILE = DIST_DIR / "index.html"
 ASSETS_DIR = DIST_DIR / "assets"
+#: The phone panel (``/m/``): plain static files, no build step. No secret is in them;
+#: every call they make carries the Control Key as a Bearer token.
+MOBILE_DIR = WEB_DIR / "mobile"
 
 # The Verse ships pre-rendered plates and 3D models; Windows' MIME registry
 # does not know these types, and a wrong type makes the WebView refuse them.
@@ -527,6 +530,7 @@ class WebServer:
         from .consumer_fanout_routes import router as consumer_fanout_router
         from .contacts_routes import router as contacts_router
         from .control_routes import router as control_router
+        from .control_strip_routes import router as control_strip_router
         from .costs_routes import router as costs_router
         from .custom_api_routes import router as custom_api_router
         from .deck_routes import router as deck_router
@@ -569,6 +573,7 @@ class WebServer:
         from .onboarding_routes import router as onboarding_router
         from .outputs_routes import router as outputs_router
         from .permissions_routes import router as permissions_router
+        from .personality_routes import router as personality_router
         from .pets_routes import router as pets_router
         from .preview_routes import router as preview_router
         from .profile_routes import router as profile_router
@@ -637,6 +642,8 @@ class WebServer:
         app.include_router(local_voice_router)
         app.include_router(consumer_fanout_router)
         app.include_router(network_policy_router)
+        app.include_router(personality_router)
+        app.include_router(control_strip_router)
         app.include_router(live_router)
         from dodaios.agent_chat.tasks import run_subscription_task
         from dodaios.core.task_agent import register_runner
@@ -799,6 +806,11 @@ class WebServer:
         app.state.agent_chat = None
         app.state.agent_chat_factory = self._build_agent_chat_service
         app.include_router(agent_chat_router)
+        from .phone_routes import admin_router as phone_admin_router
+        from .phone_routes import router as phone_router
+
+        app.include_router(phone_router)
+        app.include_router(phone_admin_router)
         from .agent_server_routes import router as agent_server_router
 
         app.include_router(agent_server_router)
@@ -2403,6 +2415,8 @@ class WebServer:
     # ------------------------------------------------------------------
 
     def _register_static_or_spa(self, app: FastAPI) -> None:
+        if MOBILE_DIR.is_dir():
+            app.mount("/m", StaticFiles(directory=str(MOBILE_DIR), html=True), name="mobile")
         if self.cfg.ui.dev_mode:
             return
 

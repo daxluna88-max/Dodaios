@@ -15,6 +15,7 @@ go through the getters defined here.
 
 from __future__ import annotations
 
+import os
 import sys
 import sysconfig
 from pathlib import Path
@@ -39,8 +40,23 @@ def user_data_dir() -> Path:
     yet. Resolved with a few ``stat`` calls and cached per process
     (``dodaios.core.identity_boot.resolve_pair``).
 
+    A product launch (``--product work|consumer``, ADR-0054) has a directory of its own,
+    named by ``JARVIS_DATA_DIR`` and announced by ``JARVIS_PRODUCT_ACTIVE``: this process and its
+    children use THAT directory, so memory, skills, logs and usage stores never land in the
+    shared one. An announced product with no directory is an error, never a fallback to the
+    shared directory.
+
     Does NOT create the directory — use ``ensure_user_dirs()`` for that.
     """
+    active = (os.environ.get("JARVIS_PRODUCT_ACTIVE") or "").strip().lower()
+    if active:
+        scoped = (os.environ.get("JARVIS_DATA_DIR") or "").strip()
+        if active not in ("work", "consumer") or not scoped:
+            raise RuntimeError(
+                f"the {active or 'announced'} product has no data directory "
+                "(JARVIS_DATA_DIR): refusing to fall back to the shared one"
+            )
+        return Path(scoped)
     return resolve_pair(user_data_dir_pair())
 
 
