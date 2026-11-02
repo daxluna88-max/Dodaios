@@ -159,6 +159,21 @@ def acquire_launch_lock(paths: ProductPaths) -> FileLock:
     return lock
 
 
+#: Per-user state of tools Jarvis reads or launches, by the variable that relocates it.
+#: Left alone for Consumer (the person's normal setup; nothing moves). Work gets its own
+#: copy under its data directory, so it never reads conversation histories, setup choices
+#: or logins the Consumer side produced, and Consumer never reads Work's. Forced, not
+#: defaulted: a value inherited from the shell points at the shared location. Cost: a CLI
+#: or the local voice engine used under Work is set up again there (voice models too).
+WORK_TOOL_HOMES: dict[str, str] = {
+    "CLAUDE_CONFIG_DIR": "claude",
+    "CODEX_HOME": "codex",
+    "GROK_HOME": "grok",
+    "GEMINI_HOME": "gemini",
+    "JARVIS_VOICE_ENGINE_HOME": "voice-engine",
+}
+
+
 def environment(paths: ProductPaths, base: Mapping[str, str] | None = None) -> dict[str, str]:
     """The environment of a product process (children inherit it, so they stay in the product)."""
     env = dict(os.environ if base is None else base)
@@ -168,6 +183,9 @@ def environment(paths: ProductPaths, base: Mapping[str, str] | None = None) -> d
         CONFIG_ENV: str(paths.config_file),
         KEYRING_SERVICE_ENV: paths.keyring_service,
     })
+    if paths.product == "work":
+        for variable, name in WORK_TOOL_HOMES.items():
+            env[variable] = str(paths.data_dir / "tools" / name)
     return env
 
 
@@ -289,6 +307,7 @@ def scoped_service(env: Mapping[str, str] | None = None) -> str | None:
 
 
 __all__ = [
+    "WORK_TOOL_HOMES",
     "ACTIVE_ENV",
     "AlreadyRunning",
     "PRODUCTS",
