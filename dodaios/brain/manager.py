@@ -4161,7 +4161,8 @@ class BrainManager:
             _proactivity.directive(_proactivity.current_level(getattr(self, "_config", None)))
         )
         if not self._cache_optimized():
-            upcoming = self._upcoming_block()
+            # Dated plans are read from the notebooks: with the privacy switch off they stay home.
+            upcoming = self._upcoming_block() if _personal_ok else ""
             if upcoming:
                 parts.append(upcoming)
 
