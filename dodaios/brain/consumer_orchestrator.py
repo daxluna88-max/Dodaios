@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import re
 import threading
 import time
@@ -151,12 +152,19 @@ class PrivacyGate:
 # -- aggregate budget ------------------------------------------------------------------------------
 
 
+def _finite(value: Any, *, minimum: float = 0.0, strict: bool = False) -> bool:
+    """A real, finite number (not bool, NaN or infinity) at or above ``minimum``."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return False
+    return value > minimum if strict else value >= minimum
+
+
 class Budget:
     """One ceiling for the whole fan-out. Amounts are in the caller's unit (e.g. USD)."""
 
     def __init__(self, limit: float) -> None:
-        if not isinstance(limit, (int, float)) or isinstance(limit, bool) or not limit >= 0:
-            raise ValueError("budget limit must be a number >= 0")
+        if not _finite(limit):
+            raise ValueError("budget limit must be a finite number >= 0")
         self.limit = float(limit)
         self._reserved = 0.0
         self._lock = threading.Lock()
@@ -164,13 +172,20 @@ class Budget:
     def reserve(self, amount: float | None, *, allow_unknown: bool = False) -> bool:
         if amount is None:
             return allow_unknown  # unknown price is not zero: refused unless explicitly allowed
-        if not isinstance(amount, (int, float)) or isinstance(amount, bool) or not amount >= 0:
+        if not _finite(amount):
             return False
         with self._lock:
             if self._reserved + amount > self.limit:
                 return False
             self._reserved += float(amount)
             return True
+
+    def release(self, amount: float | None) -> None:
+        """Give back a reservation whose request never started (never below zero)."""
+        if amount is None or not _finite(amount):
+            return
+        with self._lock:
+            self._reserved = max(0.0, self._reserved - float(amount))
 
     @property
     def reserved(self) -> float:
@@ -242,6 +257,8 @@ class Orchestrator:
     def _refusal(self, b: Branch) -> str | None:
         if b.kind not in KINDS:
             return f"unknown connection kind {b.kind!r}"
+        if not _finite(b.timeout_s, strict=True):
+            return "the branch timeout must be a finite number of seconds > 0"
         if not b.authenticated:
             return f"{b.provider} is not authenticated"
         if b.needs_api and b.kind == "subscription":
@@ -267,15 +284,27 @@ class Orchestrator:
         *,
         first_success: bool = False,
     ) -> list[BranchResult]:
+        ids = [b.branch_id for b in branches]
+        if len(set(ids)) != len(ids):  # results and tasks are keyed by id: a duplicate hides one
+            raise ValueError("branch ids must be unique within one fan-out")
         gen = self.begin_turn(turn_id)
         sem = asyncio.Semaphore(self.max_concurrent)
         results: dict[str, BranchResult] = {}
         tasks: dict[str, asyncio.Task[BranchResult]] = {}
 
         async def one(b: Branch) -> BranchResult:
-            refusal = self._refusal(b)
+            refusal = self._refusal(b)  # a None here means the budget slot is reserved
             if refusal:
                 return BranchResult(b.branch_id, b.provider, "refused", reason=refusal)
+            state = {"began": False}
+            try:
+                return await serve(b, state)
+            finally:
+                if not state["began"]:  # cancelled, stale or refused before any request started
+                    unpriced_local = b.kind == "local" and b.est_cost is None
+                    self.budget.release(0.0 if unpriced_local else b.est_cost)
+
+        async def serve(b: Branch, state: dict[str, bool]) -> BranchResult:
             # Locality is the REAL destination, never the provider name or the caller's ``kind``
             # (``kind`` only says how the engine is billed). Anything unproven is remote.
             dest = engine_policy.destination_of(b.provider, b.brain)
@@ -303,15 +332,22 @@ class Orchestrator:
                 )
 
             async with sem:
+                # A turn cancelled or superseded while this branch waited for a slot must not
+                # start a request now (it would be a late, unowned provider call).
+                if self._current.get(turn_id) != gen:
+                    return done("stale")
                 # Bind the approved destination to the call: if the endpoint moved since the
                 # prompt was prepared, do not send it (it was cleared for a different host).
                 again = engine_policy.destination_of(b.provider, b.brain)
                 if (again.local, again.host) != (dest.local, dest.host):
                     return done("refused", reason="the engine endpoint changed before the call")
                 started = timing["start"] = time.perf_counter()
+                state["began"] = True
+                stream: Any = None
                 try:
                     async with asyncio.timeout(b.timeout_s):
-                        async for delta in b.brain.complete(req):
+                        stream = b.brain.complete(req)
+                        async for delta in stream:
                             if self._current.get(turn_id) != gen:
                                 return done("stale")
                             if delta.tool_call is not None:
@@ -330,6 +366,13 @@ class Orchestrator:
                         "branch %s (%s) failed: %s", b.branch_id, b.provider, type(exc).__name__
                     )
                     return done("failed", reason=type(exc).__name__)
+                finally:
+                    close = getattr(stream, "aclose", None)
+                    if close is not None:  # never leave a provider stream or connection open
+                        try:
+                            await close()
+                        except Exception as exc:  # noqa: BLE001 - cleanup must not mask the result
+                            log.debug("closing %s stream raised %s", b.provider, type(exc).__name__)
             if self._current.get(turn_id) != gen:
                 return done("stale")
             return done("ok", text="".join(out), usage=usage)

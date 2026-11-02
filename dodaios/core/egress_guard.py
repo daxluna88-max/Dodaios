@@ -220,12 +220,19 @@ def install_from_settings(path: Any = None, env: dict[str, str] | None = None) -
     return _source
 
 
+#: What the guard does not stop, shown with its status so "offline" is never claimed beyond it.
+NOT_COVERED = (
+    "native extensions that open sockets without Python's socket module",
+    "child processes that do not install the guard themselves (other programs, CLIs, browsers)",
+)
+
+
 def status() -> dict[str, Any]:
     """What this process enforces, for the settings screen. Targets only, never any payload."""
     count, targets = blocked_attempts()
     active = _installed is not None
     return {"active": active, "source": _source if active else "none",
-            "blocked": count, "recent": list(targets)[-5:]}
+            "blocked": count, "recent": list(targets)[-5:], "not_covered": list(NOT_COVERED)}
 
 
 def install_from_env(env: dict[str, str] | None = None) -> bool:
