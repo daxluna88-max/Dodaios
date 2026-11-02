@@ -1,0 +1,49 @@
+diff --git a/dodaios/plugins/brain/_openai_base.py b/dodaios/plugins/brain/_openai_base.py
+index 19fdce53e..c7776ff6e 100644
+--- a/dodaios/plugins/brain/_openai_base.py
++++ b/dodaios/plugins/brain/_openai_base.py
+@@ -517,6 +517,36 @@ async def _stream_via_responses(
+         yield BrainDelta(usage=usage_payload)
+ 
+ 
++def request_shape(req: BrainRequest) -> str:
++    """Sizes of one request, in characters — never its content.
++
++    A turn that sends tens of thousands of tokens for a one-line question needs a
++    breakdown before anyone can trim it: how much is the system prompt, how much
++    the history, how much the tool declarations and which tools weigh most.
++    """
++
++    def size(value: Any) -> int:
++        if isinstance(value, str):
++            return len(value)
++        try:
++            return len(json.dumps(value, default=str, ensure_ascii=False))
++        except (TypeError, ValueError):
++            return len(str(value))
++
++    by_role: dict[str, int] = {}
++    for message in req.messages:
++        by_role[message.role] = by_role.get(message.role, 0) + size(message.content)
++    tools = list(req.tools or ())
++    weights = sorted(((size(t), t.get("name") or (t.get("function") or {}).get("name") or "?")
++                      for t in tools), reverse=True)
++    heaviest = ", ".join(f"{name}:{chars}" for chars, name in weights[:5])
++    roles = ", ".join(f"{role}={chars}" for role, chars in sorted(by_role.items()))
++    return (
++        f"system={size(req.system or '')} chars; messages={len(req.messages)} ({roles}); "
++        f"tools={len(tools)} ({sum(w for w, _ in weights)} chars; heaviest {heaviest or '-'})"
++    )
++
++
+ async def stream_complete(
+     client: Any,
+     model: str,
+@@ -544,6 +574,7 @@ async def stream_complete(
+     # tool history. Otherwise an MCP name such as ``github/search`` succeeds in
+     # the first round, then makes the provider reject the second-round history.
+     # (Token-limit param note: see _create_with_token_param_retry below.)
++    log.info("Request shape for %s: %s", model, request_shape(req))
+     name_map = _openai_tool_name_map(req.tools) if req.tools else {}
+     messages = _to_openai_messages(
+         req.messages,

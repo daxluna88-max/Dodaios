@@ -73,6 +73,9 @@ _LIST_FIELDS: frozenset[tuple[str, str]] = frozenset({
     ("values", "motivations"),
 })
 
+# Strings a model sends when it means "nothing": never stored as a fact.
+_EMPTY_LITERALS: frozenset[str] = frozenset({"[]", "{}", "null", "none", "nil", "undefined"})
+
 # Boolean fields — coerce the truthy/falsey spellings the model may emit.
 _BOOL_FIELDS: frozenset[tuple[str, str]] = frozenset({
     ("communication", "emoji_ok"),
@@ -153,15 +156,23 @@ class UpdateProfileTool:
                     "The value to store: a string/number/boolean for scalar "
                     "fields; for list fields (languages, devices, humor_types, "
                     "top_values, pet_peeves, motivations) pass a SINGLE item to "
-                    "append."
+                    "append. Store free-text values in the user's own words and "
+                    "language: never translate them (keep \"rosso\", not "
+                    "\"red\"). Only primary_language and languages use the "
+                    "English language name."
                 ),
             },
             "operation": {
                 "type": "string",
-                "enum": ["set", "append"],
+                "enum": ["set", "append", "remove"],
                 "description": (
                     "Optional hint. List fields are always appended (deduped); "
-                    "scalar fields are always set. The field type decides."
+                    "scalar fields are always set. The field type decides. Use "
+                    "\"remove\" when the user asks you to forget something: for a "
+                    "list field pass the single item to remove as 'value', for a "
+                    "scalar field the value is ignored and the field is cleared. "
+                    "Never claim something was forgotten unless this call reports "
+                    "it removed it."
                 ),
             },
             "evidence": {
@@ -187,6 +198,59 @@ class UpdateProfileTool:
         self._resolve_profile = profile_resolver
         self._bus = bus
 
+    async def _remove(
+        self, cluster: str, field: str, value: Any, evidence: str, is_list: bool
+    ) -> ToolResult:
+        """Forget a fact. Reports exactly what was (not) removed."""
+        profile = self._resolve_profile()
+        if profile is None:
+            return ToolResult(success=False, output="", error="user profile not available")
+        item: Any = None
+        if is_list:
+            item = value if not isinstance(value, (list, tuple)) else (value[0] if value else None)
+            if item is None or (isinstance(item, str) and not item.strip()):
+                return ToolResult(
+                    success=False, output="",
+                    error=f"name the item to remove from {cluster}.{field}",
+                )
+        try:
+            # Same forget as the Profile UI: the field AND the note lines that carry
+            # the value. Nothing below repeats the value or the person's words.
+            changed, _dropped = profile.forget(cluster, field, item)
+            if changed:
+                profile.save()
+        except ValueError as exc:
+            return ToolResult(success=False, output="", error=str(exc))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("update_profile: remove not persisted: %s", exc)
+            return ToolResult(success=False, output="", error=f"could not persist profile: {exc}")
+
+        if not changed:
+            return ToolResult(
+                success=True,
+                output=f"Not found — {cluster}.{field} did not contain it. "
+                       "Nothing was removed; do not tell the user it was forgotten.",
+            )
+        if self._bus is not None:
+            try:
+                from dodaios.core.events import ProfileUpdated
+
+                await self._bus.publish(
+                    ProfileUpdated(
+                        subject="user", cluster=cluster, field=field,
+                        operation="remove", confidence=1.0, evidence="forget request",
+                    )
+                )
+            except Exception:  # noqa: BLE001
+                log.debug("update_profile: ProfileUpdated publish failed", exc_info=True)
+        log.info("update_profile: remove %s.%s", cluster, field)
+        return ToolResult(
+            success=True,
+            output=f"Removed from {cluster}.{field} and from the note lines about it. "
+                   "It may still exist elsewhere (chat history, wiki pages, backups): "
+                   "do not say it is erased everywhere.",
+        )
+
     async def execute(self, args: dict[str, Any], ctx: Any) -> ToolResult:
         cluster = str(args.get("cluster", "")).strip().lower()
         field = str(args.get("field", "")).strip().lower()
@@ -205,8 +269,20 @@ class UpdateProfileTool:
                 error=f"unknown field {field!r} for cluster {cluster!r}; expected "
                       f"one of {sorted(_CANONICAL_FIELDS[cluster])}",
             )
+        operation = str(args.get("operation") or "").strip().lower()
+        is_list = (cluster, field) in _LIST_FIELDS
+        if operation == "remove":
+            return await self._remove(cluster, field, value, evidence, is_list)
         if value is None or (isinstance(value, str) and not value.strip()):
             return ToolResult(success=False, output="", error="missing 'value'")
+        if isinstance(value, str) and value.strip().lower() in _EMPTY_LITERALS:
+            # "[]" / "null" is an attempt to forget, not a value to store: it used
+            # to be appended to the list as a literal string and reported as done.
+            return ToolResult(
+                success=False, output="",
+                error="nothing to store; to forget a fact call this tool with "
+                      "operation='remove'",
+            )
 
         # Privacy gate — never persist do-not-record categories. Return success
         # (not an error) so the brain does not retry or claim a failure.
@@ -234,7 +310,6 @@ class UpdateProfileTool:
                 )
             value = coerced
 
-        is_list = (cluster, field) in _LIST_FIELDS
         try:
             if is_list:
                 op = "append"

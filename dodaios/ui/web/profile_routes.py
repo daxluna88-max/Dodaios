@@ -583,28 +583,25 @@ async def patch_field(request: Request, body: FieldEditBody) -> dict[str, Any]:
     try:
         if op == "set":
             changed = profile.set(cluster, field, value)
-        elif op == "clear":
-            changed = profile.clear(cluster, field)
         elif op == "append":
             changed = profile.append_list(cluster, field, value)
-        else:  # remove
-            changed = profile.remove_list_item(cluster, field, value)
+        else:  # clear / remove: the same real forget the update_profile tool uses
+            changed, _dropped = profile.forget(
+                cluster, field, value if op == "remove" else None
+            )
     except ValueError as exc:  # defensive — allow-list already guards this
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if changed:
-        # Audit trail (best-effort — never block the write) mirroring update_profile.
-        try:
-            label = f"{cluster}.{field}"
-            if op == "clear":
-                obs_value = "(cleared)"
-            elif op == "remove":
-                obs_value = f"(removed {value})"
-            else:
-                obs_value = str(value)
-            profile.append_observation(label, obs_value, "manual edit via profile UI")
-        except Exception:  # noqa: BLE001
-            log.debug("profile field edit: append_observation failed", exc_info=True)
+        if op in ("set", "append"):
+            # Audit trail (best-effort — never block the write) mirroring update_profile.
+            # Never for a forget: that already left one neutral line without the value.
+            try:
+                profile.append_observation(
+                    f"{cluster}.{field}", str(value), "manual edit via profile UI"
+                )
+            except Exception:  # noqa: BLE001
+                log.debug("profile field edit: append_observation failed", exc_info=True)
 
         try:
             profile.save()

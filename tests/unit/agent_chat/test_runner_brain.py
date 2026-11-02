@@ -238,6 +238,45 @@ async def test_cancel_ends_a_running_brain_turn(
     assert not svc.is_running(session.session_id)
 
 
+async def test_words_already_on_screen_survive_a_stop_and_a_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_cli
+):
+    hold = asyncio.Event()
+    fake = FakeBrainManager(hold=hold, stream_before_hold=True)
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: fake)
+    svc = _service(None)
+    session = _jarvis_session(svc, tmp_path)
+    q = svc.subscribe(session.session_id)
+    await svc.send(session.session_id, "tell a long story")
+    await _drain(q, "reasoning_started")
+    await asyncio.sleep(0.05)  # the streamed words reach the screen
+    assert await svc.cancel(session.session_id)
+    events = await _drain(q, "turn_finished")
+    assert events[-1]["payload"]["status"] == "cancelled"
+    # A reload reads the stored log, where text_delta never is.
+    stored = svc.store.list_events(session.session_id)
+    texts = [e for e in stored if e["kind"] == "assistant_text"]
+    assert [e["payload"]["text"] for e in texts] == ["Hello from Jarvis"]
+    assert texts[0]["payload"]["partial"] is True
+
+
+async def test_a_stop_before_any_words_stores_no_empty_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_cli
+):
+    hold = asyncio.Event()
+    fake = FakeBrainManager(hold=hold)
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: fake)
+    svc = _service(None)
+    session = _jarvis_session(svc, tmp_path)
+    q = svc.subscribe(session.session_id)
+    await svc.send(session.session_id, "take your time")
+    await _drain(q, "reasoning_started")
+    assert await svc.cancel(session.session_id)
+    await _drain(q, "turn_finished")
+    stored = svc.store.list_events(session.session_id)
+    assert not [e for e in stored if e["kind"] == "assistant_text"]
+
+
 async def test_a_brain_error_ends_the_turn_honestly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_cli
 ):
@@ -458,3 +497,61 @@ async def test_a_turn_is_briefed_on_requests_still_running_behind_it(
     assert text == "What is the weather tomorrow?"  # the person's words, nothing added
     briefing = kw["turn_override"].system_extra
     assert "Tell Kai to fix the login bug." in briefing and "do not wait for it" in briefing
+
+
+def test_history_marks_a_stopped_turn_as_abandoned() -> None:
+    """After Stop the model must not resume the interrupted request."""
+    events = [
+        {"kind": "user_message", "payload": {"text": "write the report"}},
+        {"kind": "turn_finished", "payload": {"status": "cancelled"}},
+        {"kind": "user_message", "payload": {"text": "what time is it?"}},
+    ]
+    history = runner_brain.brain_history_from_events(events)
+    assert [m.role for m in history] == ["user", "assistant", "user"]
+    assert "pressed Stop" in history[1].content
+    assert history[2].content == "what time is it?"
+
+
+def test_history_leaves_finished_turns_unmarked() -> None:
+    events = [
+        {"kind": "user_message", "payload": {"text": "hi"}},
+        {"kind": "assistant_text", "payload": {"text": "hello"}},
+        {"kind": "turn_finished", "payload": {"status": "done"}},
+    ]
+    history = runner_brain.brain_history_from_events(events)
+    assert [m.content for m in history] == ["hi", "hello"]
+
+
+async def test_a_short_italian_turn_is_forced_to_the_ui_language(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_cli
+):
+    """Live 2026-10-30: "Ricorda" has no detectable language and the chat had
+    no history, so the brain only got the soft mirror line and answered in
+    English in an Italian-only UI. The configured ui.language is the fallback."""
+    fake = FakeBrainManager()
+    fake._config = SimpleNamespace(ui=SimpleNamespace(language="it"))
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: fake)
+    svc = _service(None)
+    session = _jarvis_session(svc, tmp_path)
+    q = svc.subscribe(session.session_id)
+
+    await svc.send(session.session_id, "Ricorda")
+    await _drain(q, "turn_finished")
+
+    assert fake.calls[0][1]["force_output_language"] == "it"
+
+
+async def test_ui_language_does_not_override_a_detected_turn_language(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_cli
+):
+    fake = FakeBrainManager()
+    fake._config = SimpleNamespace(ui=SimpleNamespace(language="it"))
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: fake)
+    svc = _service(None)
+    session = _jarvis_session(svc, tmp_path)
+    q = svc.subscribe(session.session_id)
+
+    await svc.send(session.session_id, "What is the weather like today?")
+    await _drain(q, "turn_finished")
+
+    assert fake.calls[0][1]["force_output_language"] == "en"

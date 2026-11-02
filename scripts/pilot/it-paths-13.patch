@@ -1,0 +1,50 @@
+diff --git a/dodaios/agent_chat/folder_tools.py b/dodaios/agent_chat/folder_tools.py
+index 6c350f84d..cdf955b58 100644
+--- a/dodaios/agent_chat/folder_tools.py
++++ b/dodaios/agent_chat/folder_tools.py
+@@ -26,6 +26,8 @@ the tool-use loop resolves exact names first.
+ 
+ from __future__ import annotations
+ 
++import os
++import re
+ from pathlib import Path
+ from typing import Any, Final
+ 
+@@ -46,6 +48,20 @@ FOLDER_RISK_TIERS: Final[dict[str, RiskTier]] = {
+ }
+ 
+ 
++_DRIVE_PATH: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z]:[\\/]")
++
++
++def _foreign_drive_path(args: dict[str, Any] | None) -> str | None:
++    """The first ``C:\\...`` style path argument, when this is not Windows."""
++    if os.name == "nt":
++        return None
++    for key in ("file_path", "path"):
++        value = (args or {}).get(key)
++        if isinstance(value, str) and _DRIVE_PATH.match(value.strip()):
++            return value
++    return None
++
++
+ class FolderTool:
+     """One folder tool as a Jarvis ``Tool``: the spec from ``tools.py``, a cwd, a tier."""
+ 
+@@ -62,6 +78,15 @@ class FolderTool:
+         return self._cwd
+ 
+     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:
++        foreign = _foreign_drive_path(args)
++        if foreign is not None:
++            # A model that invents "C:\\Users\\..." would otherwise create a file
++            # literally named that, here, and report success.
++            message = (
++                f"{foreign!r} is a Windows path and this machine is not Windows. "
++                "Use a path relative to the working folder, e.g. 'notes.md'."
++            )
++            return ToolResult(success=False, output=message, error=message)
+         output, is_error = await folder.execute_tool(self.name, dict(args or {}), cwd=self._cwd)
+         return ToolResult(
+             success=not is_error,

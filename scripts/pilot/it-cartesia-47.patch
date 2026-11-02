@@ -1,0 +1,46 @@
+diff --git a/dodaios/plugins/tts/cartesia_tts.py b/dodaios/plugins/tts/cartesia_tts.py
+index 97b772d78..77dd7cb18 100644
+--- a/dodaios/plugins/tts/cartesia_tts.py
++++ b/dodaios/plugins/tts/cartesia_tts.py
+@@ -28,6 +28,8 @@ CARTESIA_VERSION = "2026-03-01"
+ _HTTP_TIMEOUT_S = 30.0
+ _QUOTA_COOLDOWN_S = 900.0
+ _MAX_CHARS_PER_REQUEST = 8_000
++_TRUNCATION_MIN_CHARS = 120  # shorter pieces are not checked for cut-off audio
++_TRUNCATION_MAX_CPS = 28.0  # chars per second above which the audio is treated as cut off
+ 
+ DEFAULT_MODEL_ID = "sonic-3.5"
+ 
+@@ -336,6 +338,7 @@ class CartesiaTTS:
+         assert self._client is not None
+         # One retry on a transient failure (transport error, 5xx/408, empty body): a piece that
+         # silently returns no audio is skipped mid-reply, which the listener hears as a jump.
++        best = b""
+         for attempt in (1, 2):
+             retry = attempt == 1
+             try:
+@@ -368,9 +371,21 @@ class CartesiaTTS:
+                 )
+                 if retry:
+                     continue
+-                return b""
+-            return data
+-        return b""
++                return best
++            seconds = len(data) / 2 / CARTESIA_TTS_SAMPLE_RATE
++            log.warning(
++                "Cartesia piece: %d chars -> %.1f s of audio (attempt %d/2)",
++                len(text), seconds, attempt,
++            )
++            if len(data) > len(best):
++                best = data
++            # Speech runs at ~13 chars/s; a long piece that comes back far shorter was cut off
++            # by the service (200 OK, no error), which sounds like a skipped passage.
++            if retry and len(text) >= _TRUNCATION_MIN_CHARS and len(text) / max(seconds, 0.1) > _TRUNCATION_MAX_CPS:
++                log.warning("Cartesia audio looks truncated -- retrying once.")
++                continue
++            return best
++        return best
+ 
+     async def _fallback(
+         self, text: str, language_code: str | None

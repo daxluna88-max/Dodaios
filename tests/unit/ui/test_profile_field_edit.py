@@ -216,3 +216,27 @@ def test_invalid_operation_rejected(ctx) -> None:
     res = _patch(ctx.client, cluster="identity", field="name",
                  operation="frobnicate", value="x")
     assert res.status_code == 422  # Pydantic Literal rejects it before the handler
+
+
+def test_forget_from_the_ui_leaves_no_trace_of_the_value(ctx):
+    """The chip 'x' is the same real forget as the tool: no 'removed <value>' note."""
+    ctx.profile.append_observation("values.top_values", "Pizza", "il mio cibo preferito e la pizza")
+    ctx.profile.save()
+    assert "Pizza" in ctx.path.read_text(encoding="utf-8")
+    res = _patch(ctx.client, cluster="values", field="top_values", operation="remove", value="Pizza")
+    assert res.status_code == 200, res.text
+    text = ctx.path.read_text(encoding="utf-8")
+    assert "pizza" not in text.casefold()
+    assert "(removed" not in text
+    assert "values.top_values: an item was removed" in text
+    assert UserProfile.load(ctx.path).get("values", "top_values") == []
+
+
+def test_clearing_a_scalar_from_the_ui_purges_its_notes(ctx):
+    ctx.profile.append_observation("identity.preferred_address", "Boss", "chiamami Boss")
+    ctx.profile.save()
+    res = _patch(ctx.client, cluster="identity", field="preferred_address", operation="clear")
+    assert res.status_code == 200, res.text
+    text = ctx.path.read_text(encoding="utf-8")
+    assert "Boss" not in text and "(cleared)" not in text
+    assert "identity.preferred_address: cleared" in text

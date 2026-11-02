@@ -238,3 +238,136 @@ async def test_list_field_ignores_set_operation_and_appends(tmp_path):
     )
     assert res.success
     assert profile.get("identity", "languages") == ["English", "German"]
+
+
+@pytest.mark.asyncio
+async def test_remove_list_item_forgets_it_case_insensitively(tmp_path):
+    path, profile = _load(tmp_path)
+    bus, events = _capturing_bus()
+    result = await _tool(profile, bus).execute(
+        {"cluster": "values", "field": "top_values", "value": "pizza", "operation": "remove",
+         "evidence": "Forget my favourite food."},
+        ctx=None,
+    )
+    assert result.success
+    assert "Removed" in result.output
+    assert profile.get("values", "top_values") == []
+    assert UserProfile.load(path).get("values", "top_values") == []
+    assert [e.operation for e in events] == ["remove"]
+
+
+@pytest.mark.asyncio
+async def test_remove_missing_item_does_not_claim_success(tmp_path):
+    _path, profile = _load(tmp_path)
+    result = await _tool(profile).execute(
+        {"cluster": "values", "field": "top_values", "value": "sushi", "operation": "remove"},
+        ctx=None,
+    )
+    assert result.success
+    assert "Not found" in result.output and "do not tell the user" in result.output
+    assert profile.get("values", "top_values") == ["Pizza"]
+
+
+@pytest.mark.asyncio
+async def test_remove_scalar_clears_the_field(tmp_path):
+    path, profile = _load(tmp_path)
+    result = await _tool(profile).execute(
+        {"cluster": "identity", "field": "preferred_address", "value": "x", "operation": "remove"},
+        ctx=None,
+    )
+    assert result.success and "Removed" in result.output
+    assert profile.get("identity", "preferred_address") is None
+    assert UserProfile.load(path).get("identity", "preferred_address") is None
+
+
+@pytest.mark.asyncio
+async def test_remove_list_without_an_item_is_an_error(tmp_path):
+    _path, profile = _load(tmp_path)
+    result = await _tool(profile).execute(
+        {"cluster": "values", "field": "top_values", "value": "", "operation": "remove"},
+        ctx=None,
+    )
+    assert not result.success
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("junk", ["[]", "{}", "null", "None"])
+async def test_empty_literals_are_never_stored_as_facts(tmp_path, junk):
+    _path, profile = _load(tmp_path)
+    result = await _tool(profile).execute(
+        {"cluster": "values", "field": "top_values", "value": junk}, ctx=None,
+    )
+    assert not result.success
+    assert profile.get("values", "top_values") == ["Pizza"]
+
+
+@pytest.mark.asyncio
+async def test_forget_purges_the_value_from_the_history_lines(tmp_path):
+    path, profile = _load(tmp_path)
+    tool = _tool(profile)
+    await tool.execute(
+        {"cluster": "values", "field": "top_values", "value": "Azzurro",
+         "evidence": "Ricorda il mio colore preferito e l'azzurro"}, ctx=None)
+    assert "Azzurro" in path.read_text(encoding="utf-8")
+    result = await tool.execute(
+        {"cluster": "values", "field": "top_values", "value": "azzurro", "operation": "remove",
+         "evidence": "Dimentica che il mio colore preferito e l'azzurro"}, ctx=None)
+    assert result.success and "Removed" in result.output
+    text = path.read_text(encoding="utf-8")
+    assert "azzurro" not in text.casefold()
+    assert "Pizza" in text  # unrelated facts stay
+    assert "an item was removed" in text
+    assert UserProfile.load(path).get("values", "top_values") == ["Pizza"]
+
+
+@pytest.mark.asyncio
+async def test_forget_scalar_purges_that_fields_history(tmp_path):
+    path, profile = _load(tmp_path)
+    tool = _tool(profile)
+    await tool.execute(
+        {"cluster": "identity", "field": "preferred_address", "value": "Boss",
+         "evidence": "Call me Boss"}, ctx=None)
+    await tool.execute(
+        {"cluster": "identity", "field": "preferred_address", "value": "x", "operation": "remove"},
+        ctx=None)
+    text = path.read_text(encoding="utf-8")
+    assert "Boss" not in text
+    assert "identity.preferred_address: cleared" in text
+
+
+def test_value_schema_forbids_translating_free_text():
+    """Free-text values stay in the user's language ("rosso", not "red")."""
+    desc = UpdateProfileTool.schema["properties"]["value"]["description"]
+    assert "never translate" in desc
+
+
+@pytest.mark.asyncio
+async def test_forget_result_and_event_do_not_repeat_the_value_or_the_words(tmp_path):
+    """The result, the log line and the event carry no copy of what was forgotten."""
+    _path, profile = _load(tmp_path)
+    bus, events = _capturing_bus()
+    tool = _tool(profile, bus)
+    await tool.execute(
+        {"cluster": "values", "field": "top_values", "value": "Azzurro",
+         "evidence": "il mio colore preferito e l'azzurro"}, ctx=None)
+    events.clear()
+    result = await tool.execute(
+        {"cluster": "values", "field": "top_values", "value": "azzurro", "operation": "remove",
+         "evidence": "dimentica che amo l'azzurro"}, ctx=None)
+    assert result.success
+    assert "azzurro" not in result.output.casefold()
+    assert "erased everywhere" in result.output  # the promise is bounded
+    assert events and all("azzurro" not in (e.evidence or "").casefold() for e in events)
+
+
+@pytest.mark.asyncio
+async def test_forget_removes_a_value_that_only_lives_in_the_note_lines(tmp_path):
+    """A value gone from the field (an older UI forget) but still in the notes is purged."""
+    path, profile = _load(tmp_path)
+    profile.append_observation("values.top_values", "Azzurro", "il cielo")
+    profile.save()
+    result = await _tool(profile).execute(
+        {"cluster": "values", "field": "top_values", "value": "azzurro", "operation": "remove"},
+        ctx=None)
+    assert result.success and "Removed" in result.output
+    assert "azzurro" not in path.read_text(encoding="utf-8").casefold()

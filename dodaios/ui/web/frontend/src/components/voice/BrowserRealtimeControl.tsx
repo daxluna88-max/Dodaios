@@ -21,6 +21,9 @@ import {
 } from "@/lib/realtimeAudio";
 import { useEventStore, type VoiceState } from "@/store/events";
 import { setReloadHold } from "@/lib/reloadHold";
+import {
+  closeMicGateAfterUserTurn, refreshMicDevices, resetMicGate, useMicSettings,
+} from "@/lib/micSettings";
 import { registerRealtimeAudioPreparation } from "@/lib/realtimeAudioPreparation";
 import { cn } from "@/lib/utils";
 import {
@@ -141,6 +144,8 @@ export function BrowserRealtimeControl({ controlOnly = false }: { controlOnly?: 
   // repaint a five-segment meter.
   const levelRef = useRef(0);
   const clientRef = useRef<RealtimeAudioClient | null>(null);
+  // Microphone choice and gate live in lib/micSettings; the controls are in the voice composer.
+  const { deviceId: micDeviceId, open: micOpen } = useMicSettings();
   const events = useEventStore((store) => store.events);
   const solo = useEventStore((store) => store.solo);
   const activeSection = useEventStore((store) => store.activeSection);
@@ -196,6 +201,19 @@ export function BrowserRealtimeControl({ controlOnly = false }: { controlOnly?: 
       ),
     [t],
   );
+
+  // Apply the local gate and device to the live client.
+  useEffect(() => {
+    clientRef.current?.setMicDevice?.(micDeviceId);
+  }, [micDeviceId, state]);
+  useEffect(() => {
+    clientRef.current?.setMicOpen?.(micOpen);
+  }, [micOpen, state]);
+  // A new call starts with the gate where the mode wants it; labels appear once permission is granted.
+  useEffect(() => {
+    if (state === "connecting") resetMicGate();
+    if (state === "connected") void refreshMicDevices();
+  }, [state]);
 
   const stop = useCallback(async () => {
     connectionGenerationRef.current += 1;
@@ -280,6 +298,10 @@ export function BrowserRealtimeControl({ controlOnly = false }: { controlOnly?: 
       {
         onTranscript: (text, isFinal, role) => {
           if (!isCurrent()) return;
+          // Auto mode: the person's turn is over, close the gate until they tap.
+          if (role === "user" && isFinal) {
+            closeMicGateAfterUserTurn();
+          }
           // Live adapters project all speaker snapshots onto the shared bus.
           // Keeping a second local caption would overwrite the conversation.
           if (callBrowserAudio) return;

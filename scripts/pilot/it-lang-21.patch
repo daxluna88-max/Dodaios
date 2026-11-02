@@ -1,0 +1,158 @@
+diff --git a/dodaios/agent_chat/runner_brain.py b/dodaios/agent_chat/runner_brain.py
+index 187e47b36..f359bb20b 100644
+--- a/dodaios/agent_chat/runner_brain.py
++++ b/dodaios/agent_chat/runner_brain.py
+@@ -621,6 +621,39 @@ async def run_brain_turn(
+     await finish(status, override.receipt.usage(), error)
+ 
+ 
++def _ui_language_fallback(brain: Any, text: str, history: list[BrainMessage]) -> str:
++    """The language to force for a turn whose own text names none, else ``""``.
++
++    A short message ("Ricorda", "Salvalo") has no detectable language, and the
++    first turn of a chat has no history to inherit one from, so the model got
++    only the soft "mirror the user" line and answered in English even in an
++    Italian-only UI. Same resolver as the brain's own, with the configured
++    ``ui.language`` as the last resort; detected text and history still win,
++    and a ``brain.reply_language`` pin is left to the brain.
++    """
++    from dodaios.core.turn_language import (
++        conversation_language_from_history,
++        resolve_conversation_language,
++    )
++
++    from dodaios.agent_chat.delegation_wait import CONTINUE_TURN
++
++    if text == CONTINUE_TURN:  # neutral English line, not the person's words
++        return ""
++    ui_language = getattr(getattr(getattr(brain, "_config", None), "ui", None), "language", "")
++    if not isinstance(ui_language, str) or not is_known_language(ui_language):
++        return ""
++    pin = getattr(brain, "reply_language", "auto") or "auto"
++    language = resolve_conversation_language(
++        pin,
++        "unknown",
++        text,
++        conversation_language=conversation_language_from_history(history, reply_language=pin),
++        fallback_language=ui_language,
++    )
++    return language if is_known_language(language) else ""
++
++
+ async def _generate(
+     brain: Any,
+     text: str,
+@@ -646,6 +679,8 @@ async def _generate(
+         output_language = await resolve_agent_reply_language(
+             session.session_id, text, output_language
+         )
++    if not output_language and session.surface != "society" and not handle.continuation:
++        output_language = _ui_language_fallback(brain, text, history)
+     handle.output_language = output_language
+     kwargs: dict[str, Any] = {
+         "use_history": False,
+diff --git a/dodaios/agent_chat/surface_kits.py b/dodaios/agent_chat/surface_kits.py
+index 4ed9f6f03..a5d6fe03c 100644
+--- a/dodaios/agent_chat/surface_kits.py
++++ b/dodaios/agent_chat/surface_kits.py
+@@ -144,6 +144,15 @@ def _local_models_tools(cfg: Any, _brain: Any) -> dict[str, Tool]:
+     return build_tools(cfg, root=server_root(cfg))
+ 
+ 
++async def _jarvis_chat_extra(_cfg: Any, _brain: Any) -> str:
++    """The front chat answers in the chat; files are for when a person asks for one."""
++    return (
++        "Answer writing, explaining and brainstorming requests directly in the chat. "
++        "Use Write, Edit or RunCommand only when the person asks for a file, a "
++        "command or a change on disk."
++    )
++
++
+ async def _local_models_extra(cfg: Any, _brain: Any) -> str:
+     """What the assistant can already see: machine, inventory, roles, catalogue.
+ 
+@@ -266,6 +275,7 @@ _KITS: Final[dict[str, SurfaceKit]] = {
+         ladder=_JARVIS_LADDER,
+         uses_stance=True,
+         session_tools=_jarvis_tools,
++        system_extra=_jarvis_chat_extra,
+         # Typed turns teach Jarvis the same way spoken ones do.
+         turn_completed=_jarvis_completed,
+         # Not the home directory: this surface hands out the folder tools, and
+diff --git a/dodaios/core/turn_language.py b/dodaios/core/turn_language.py
+index 9f05b949a..219c72c39 100644
+--- a/dodaios/core/turn_language.py
++++ b/dodaios/core/turn_language.py
+@@ -770,6 +770,7 @@ def resolve_conversation_language(
+     text: str,
+     *,
+     conversation_language: object = "",
++    fallback_language: object = "",
+ ) -> str:
+     """The language the person is speaking in this turn: any code, or ``unknown``.
+ 
+@@ -789,7 +790,10 @@ def resolve_conversation_language(
+        cannot replace an established language;
+     4. else the detected language of the turn (text first, the STT tag breaks
+        ties), an ambiguous substantive turn inheriting ``conversation_language``;
+-    5. else ``"unknown"``.
++    5. else ``fallback_language`` (the app's configured UI language) when it
++       names a known language: a short Italian message such as "Ricorda" has no
++       detectable language and no history yet, and the pilot's UI is Italian;
++    6. else ``"unknown"``.
+     """
+     pin = str(reply_language or "").strip().lower()
+     if pin in _REPLY_PINS:
+@@ -813,7 +817,10 @@ def resolve_conversation_language(
+         return detected
+     if detected != "unknown":
+         return detected
+-    return normalize_any_language_tag(stt_language)
++    tagged = normalize_any_language_tag(stt_language)
++    if tagged != "unknown":
++        return tagged
++    return _known_language(fallback_language) or "unknown"
+ 
+ 
+ def resolve_output_language(
+@@ -823,6 +830,7 @@ def resolve_output_language(
+     *,
+     default: str = DEFAULT_LOCALE,
+     conversation_language: object = "",
++    fallback_language: object = "",
+ ) -> str:
+     """The SINGLE authoritative output language for one turn (de/en/es/pt).
+ 
+@@ -842,12 +850,15 @@ def resolve_output_language(
+     that is not a pin (``"auto"``, ``""``, ``None``, a typo) means "no pin —
+     mirror the input". ``conversation_language`` is the language of the
+     conversation so far (any code); pass ``""`` when none is established yet.
++    ``fallback_language`` is the configured UI language, used before ``default``
++    when neither the text, the history nor the STT tag name a language.
+     """
+     language = resolve_conversation_language(
+         reply_language,
+         stt_language,
+         text,
+         conversation_language=conversation_language,
++        fallback_language=fallback_language,
+     )
+     if language in _REPLY_PINS:
+         return language
+diff --git a/dodaios/ui/web/agent_chat_routes.py b/dodaios/ui/web/agent_chat_routes.py
+index b5cada7bb..41c78da87 100644
+--- a/dodaios/ui/web/agent_chat_routes.py
++++ b/dodaios/ui/web/agent_chat_routes.py
+@@ -1694,7 +1694,11 @@ async def session_stream(ws: WebSocket, session_id: str) -> None:
+                 # Persisted events carry seq; transient deltas carry 0. Skip
+                 # persisted ones the snapshot already had.
+                 seq = int(ev.get("seq") or 0)
+-                if seq and seq <= last_seq:
++                # A turn that ends is always forwarded: if the chat's rows were
++                # deleted mid-turn (a script wiping the history), seq restarts at
++                # 1 and the end of the turn would be dropped as "already sent",
++                # leaving the UI on "Working" forever.
++                if seq and seq <= last_seq and ev.get("kind") != "turn_finished":
+                     continue
+                 if seq:
+                     last_seq = seq

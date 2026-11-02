@@ -1694,7 +1694,11 @@ async def session_stream(ws: WebSocket, session_id: str) -> None:
                 # Persisted events carry seq; transient deltas carry 0. Skip
                 # persisted ones the snapshot already had.
                 seq = int(ev.get("seq") or 0)
-                if seq and seq <= last_seq:
+                # A turn that ends is always forwarded: if the chat's rows were
+                # deleted mid-turn (a script wiping the history), seq restarts at
+                # 1 and the end of the turn would be dropped as "already sent",
+                # leaving the UI on "Working" forever.
+                if seq and seq <= last_seq and ev.get("kind") != "turn_finished":
                     continue
                 if seq:
                     last_seq = seq

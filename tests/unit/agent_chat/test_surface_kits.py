@@ -110,7 +110,9 @@ async def test_kit_payload_builds_the_kit_tools_and_the_briefing(
     assert extra == "BRIEFING"
 
     jarvis_tools, jarvis_extra = await kit_payload(_session("jarvis"), _Brain())
-    assert jarvis_tools is not None and "Read" in jarvis_tools and jarvis_extra == ""
+    assert jarvis_tools is not None and "Read" in jarvis_tools
+    # The front chat carries one briefing line: answer in the chat, files only on request.
+    assert "directly in the chat" in jarvis_extra
     none_tools, none_extra = await kit_payload(_session("agent"), _Brain())
     assert none_tools is None and none_extra == ""
 
@@ -126,3 +128,12 @@ def test_a_kit_filter_keeps_only_its_own_hands(monkeypatch: pytest.MonkeyPatch) 
     assert kit.tool_filter is not None
     assert sorted(kit.tool_filter(tools)) == ["probe_read"]  # type: ignore[arg-type]
     assert kit_for("jarvis").tool_filter is None
+
+
+async def test_the_jarvis_chat_is_told_to_answer_in_the_chat() -> None:
+    """A writing request is answered in the chat; files only when asked for."""
+    kit = kit_for("jarvis")
+    assert kit.system_extra is not None
+    briefing = await kit.system_extra(None, None)
+    assert "directly in the chat" in briefing
+    assert "only when the person asks for a file" in briefing

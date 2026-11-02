@@ -951,7 +951,18 @@
     "resize_hint": "Ziehen, um die Seitenleiste anzupassen — Doppelklick setzt sie zurück",
     "ide_navigation": "IDE-Navigation",
     "workspace_options": "Workspace-Optionen",
-    "open_conversation_failed": "Unterhaltung konnte nicht geöffnet werden"
+    "open_conversation_failed": "Unterhaltung konnte nicht geöffnet werden",
+    "mic_mode_label": "Microphone mode",
+    "mic_mode_auto": "Automatic (speak, then tap)",
+    "mic_mode_push": "Hold to talk",
+    "mic_mode_always": "Always on",
+    "mic_device_label": "Microphone",
+    "mic_device_default": "System default",
+    "mic_auto_listening": "Listening… tap to pause",
+    "mic_auto_tap": "Tap to speak",
+    "mic_push_hold": "Hold to talk",
+    "mic_push_active": "Speak… release to send",
+    "mic_always_on": "Microphone always on"
   },
   "provider_billing": {
     "api": "API, nutzungsabhängige Abrechnung",
@@ -1020,7 +1031,9 @@
     "prompt_mode_failed": "Der Prompt-Modus konnte nicht umgeschaltet werden.",
     "theme_to_light": "Zum hellen Modus wechseln",
     "theme_to_dark": "Zum dunklen Modus wechseln",
-    "back_to_assistant": "Zurück zu {name}"
+    "back_to_assistant": "Zurück zu {name}",
+    "call_end": "Anruf beenden",
+    "call_end_hint": "Beendet den Anruf. Das Gespräch bleibt im Verlauf."
   },
   "assistant_chat": {
     "voice_enter": "Sprachmodus",
@@ -2665,6 +2678,12 @@
     "file_open": "Datei ansehen",
     "never_title": "Wird nie gespeichert",
     "never_body": "{name} speichert das grundsätzlich nicht, egal was im Gespräch vorkommt.",
+    "never_cat": {
+      "political": "Politik",
+      "health": "Gesundheit",
+      "relationship": "Beziehungskonflikte",
+      "mbti": "MBTI-Typ"
+    },
     "back_to_profile": "Zurück zum Profil",
     "fields": {
       "name": "Name",
@@ -3321,6 +3340,10 @@
       "self_build": "Selbstbau"
     },
     "languages_group_title": "Sprachen",
+    "privacy_group_title": "Datenschutz",
+    "personal_context_title": "Mein Profil und Gedächtnis an Cloud-Modelle senden",
+    "personal_context_description": "An: Dein Profil, Gedächtnis, Personen und Kontakte werden an den Modellanbieter mitgesendet. Aus: Sie bleiben auf diesem Gerät und der Assistent weiß weniger über dich. Deine Nachrichten und alles, was er lesen soll, werden weiterhin gesendet. Gilt ab der nächsten Nachricht.",
+    "personal_context_error": "Die Einstellung konnte nicht gespeichert werden. Versuche es erneut.",
     "sections": {
       "voice": "Stimme"
     },
@@ -4111,6 +4134,9 @@
       "pt": {
         "label": "Português (Portugal)",
         "description": "Europäisches Portugiesisch für jede Beschriftung und Schaltfläche."
+      },
+      "it": {
+        "label": "Italiano (Italienisch)"
       }
     },
     "reply_options": {
@@ -4118,7 +4144,8 @@
       "en": "{name} antwortet auf Englisch.",
       "de": "{name} antwortet auf Deutsch.",
       "es": "{name} antwortet auf Spanisch.",
-      "pt": "{name} antwortet auf Portugiesisch."
+      "pt": "{name} antwortet auf Portugiesisch.",
+      "it": "{name} antwortet auf Italienisch."
     },
     "stt_options": {
       "auto": "Erkennt automatisch, welche Sprache du sprichst.",
@@ -4399,7 +4426,8 @@
     "active_vault_label": "{name} schreibt nach",
     "restart_required_hint": "Starte {name} neu, damit der neue Speicherort verwendet wird.",
     "restart_now": "Jetzt neu starten",
-    "restarting": "Starte neu…"
+    "restarting": "Starte neu…",
+    "remote_note": "Obsidian is optional. It is installed on the computer where Jarvis runs, not on your phone or in the browser: if you use Jarvis remotely you can close this guide. The wiki can also be read inside Jarvis."
   },
   "docs_sidebar": {
     "title": "Dokumentation",
@@ -7558,7 +7586,8 @@
       "plan_mode": "im Planmodus ist nur Lesen erlaubt",
       "cancelled": "es wurde abgebrochen",
       "timeout": "niemand hat es rechtzeitig freigegeben",
-      "no_approver": "es brauchte eine Freigabe und niemand war da, um sie zu geben"
+      "no_approver": "es brauchte eine Freigabe und niemand war da, um sie zu geben",
+      "declined": "du hast sie abgelehnt"
     },
     "family": {
       "wiki": "im Wiki gesucht",

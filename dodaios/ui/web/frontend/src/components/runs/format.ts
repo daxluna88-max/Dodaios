@@ -15,6 +15,7 @@ export function localeForUiLanguage(language: string): string {
   if (language === "es") return "es-ES";
   if (language === "zh") return "zh-CN";
   if (language === "pt") return "pt-PT";
+  if (language === "it") return "it-IT";
   return "en-US";
 }
 

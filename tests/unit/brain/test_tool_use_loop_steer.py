@@ -100,3 +100,27 @@ async def test_a_broken_steer_inbox_never_breaks_the_turn():
         [BrainMessage(role="user", content="check my mail")]
     )
     assert out.text == "Two unread mails."
+
+
+class _NarrateThenAnswer:
+    """Text before the tool call, then an answer after it (the run-on case)."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def complete(self, req: BrainRequest) -> AsyncIterator[BrainDelta]:
+        self.calls += 1
+        if self.calls == 1:
+            yield BrainDelta(content="Ho salvato la nota.")
+            yield BrainDelta(tool_call={"id": "c1", "name": "gmail", "input": {}})
+            yield BrainDelta(finish_reason="tool_use")
+            return
+        yield BrainDelta(content="Ciao Davide!")
+        yield BrainDelta(finish_reason="stop")
+
+
+async def test_text_before_and_after_a_tool_call_is_two_paragraphs():
+    out = await _loop(_NarrateThenAnswer(), None).run(
+        [BrainMessage(role="user", content="hi")]
+    )
+    assert out.text == "Ho salvato la nota.\n\nCiao Davide!"

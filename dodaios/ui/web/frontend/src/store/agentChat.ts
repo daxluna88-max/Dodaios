@@ -37,7 +37,7 @@ import {
   type PatchSessionInput,
   type ProviderHealth,
 } from "@/lib/agentChatApi";
-import { EMPTY_TIMELINE, reduceEvent, reduceEvents, settleApproval, type Timeline } from "@/components/agentchat/reduce";
+import { EMPTY_TIMELINE, reduceEvent, reduceEvents, runningTurn, settleApproval, type Timeline } from "@/components/agentchat/reduce";
 import { jitteredDelay, requestConnect } from "../lib/connectBudget";
 import { reuseHistoryRows } from "@/lib/historyRequests";
 
@@ -356,6 +356,26 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
     });
   };
 
+  // The chat on stage survives a reload (front page only): its id is kept per
+  // browser and reopened once, when the first session list arrives and shows it
+  // still exists. Starting a new chat by hand always wins over the restore.
+  const ACTIVE_KEY = `jarvis.agentChat.active.${surface}.v1` + (draftNamespace ? `:${draftNamespace}` : "");
+  let restoreArmed = surface === "jarvis";
+  // Bumped by every deliberate act (new chat, open, send, draft edit,
+  // disconnect): a session list that was already in flight when one happened
+  // must not restore the stored chat over it.
+  let interactionEpoch = 0;
+  const rememberActive = (sessionId: string | null) => {
+    if (surface !== "jarvis") return;
+    try {
+      if (sessionId) window.localStorage.setItem(ACTIVE_KEY, sessionId);
+      else window.localStorage.removeItem(ACTIVE_KEY);
+    } catch { /* storage blocked — the chat just opens blank after a reload */ }
+  };
+  const storedActive = (): string | null => {
+    try { return window.localStorage.getItem(ACTIVE_KEY); } catch { return null; }
+  };
+
   let catalogRequest = 0;
   const patchQueues = new Map<string, Promise<void>>();
   const patchRevisions = new Map<string, number>();
@@ -391,7 +411,61 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
     }
   }
 
+  // A phone puts a backgrounded tab's socket to sleep without telling the page:
+  // the socket can read "open" and never deliver another event. While a chat's
+  // socket exists, coming back to the foreground after a while (or the network
+  // returning) re-opens it from the last seq — the backend replays what was
+  // missed, so a reply that finished while the screen was locked appears
+  // without a reload. The listeners live only as long as the socket.
+  const AWAY_RESYNC_MS = 10_000;
+  const FORCED_RESYNC_GAP_MS = 2_000;
+  let wakeDispose: (() => void) | null = null;
+  let reconnectFrom: ((sessionId: string, afterSeq: number) => void) | null = null;
+
+  function detachWake(): void {
+    wakeDispose?.();
+    wakeDispose = null;
+  }
+
+  function attachWake(): void {
+    if (wakeDispose || typeof document === "undefined" || typeof window === "undefined") return;
+    let hiddenAt = 0;
+    let lastForcedAt = 0;
+    const resync = (forced: boolean) => {
+      const st = chatStore.getState();
+      const sid = st.activeSessionId;
+      if (!sid || !reconnectFrom) return;
+      const alive = socket !== null && socket.readyState === WebSocket.OPEN;
+      if (forced || !alive) {
+        // A flapping network fires `online` in bursts; one socket in flight
+        // (or just opened by a forced resync) already covers the rest.
+        const now = Date.now();
+        if (socket !== null && socket.readyState === WebSocket.CONNECTING) return;
+        if (forced && now - lastForcedAt < FORCED_RESYNC_GAP_MS) return;
+        if (forced) lastForcedAt = now;
+        reconnectFrom(sid, st.timeline.lastSeq);
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        hiddenAt = Date.now();
+        return;
+      }
+      const away = hiddenAt > 0 && Date.now() - hiddenAt >= AWAY_RESYNC_MS;
+      hiddenAt = 0;
+      resync(away);
+    };
+    const onOnline = () => resync(true);
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("online", onOnline);
+    wakeDispose = () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("online", onOnline);
+    };
+  }
+
   function closeSocket(): void {
+    detachWake();
     cancelReconnect?.();
     cancelReconnect = null;
     const s = socket;
@@ -418,6 +492,8 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
       set({ socketState: "connecting" });
       const ws = new WebSocket(agentChatSocketUrl(sessionId, afterSeq));
       socket = ws;
+      reconnectFrom = connect;
+      attachWake();
       ws.onopen = () => {
         if (socket !== ws) return;
         // A socket that opened is proof the backend is back: the next outage
@@ -434,11 +510,28 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
           return;
         }
         if (frame.type === "snapshot" && frame.session) {
+          // Only the open chat's own snapshot may replace its state: a frame
+          // for another session or surface must not overwrite it.
+          if (frame.session.session_id !== sessionId || get().activeSessionId !== sessionId) return;
+          if (frame.session.surface !== undefined && frame.session.surface !== surface) return;
           const prev = get();
           // A snapshot after a reconnect only carries events past `after`;
           // fold them onto what is already there, else start fresh.
           const base = afterSeq > 0 && prev.activeSessionId === sessionId ? prev.timeline : EMPTY_TIMELINE;
-          const tl = reduceEvents(base, frame.events ?? []);
+          let tl = reduceEvents(base, frame.events ?? []);
+          // The session is the authority on whether a turn is live: if it says
+          // idle while the timeline still shows one running (its terminal event
+          // was lost or replayed out of order), settle it so the composer never
+          // sticks on "working".
+          const stuck = frame.session.running === false ? runningTurn(tl) : null;
+          if (stuck) {
+            tl = reduceEvent(tl, {
+              seq: 0,
+              ts_ms: Date.now(),
+              kind: "turn_finished",
+              payload: { turn_id: stuck.id, status: "done" },
+            });
+          }
           set({
             activeSession: frame.session,
             timeline: { ...tl, sessionPatch: null },
@@ -604,6 +697,7 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
 
       loadSessions: async () => {
         try {
+          const epoch = interactionEpoch;
           const rows = await fetchAgentChatSessions(SESSION_LIST_LIMIT, surface);
           // The backend filters by surface; a row that names another surface
           // anyway is dropped here too. A row with no surface at all comes
@@ -614,6 +708,13 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
             const shared = reuseHistoryRows(state.sessions, sessions, (row) => row.session_id);
             return shared === state.sessions ? state : { sessions: shared };
           });
+          if (restoreArmed && epoch === interactionEpoch && interactionEpoch === 0) {
+            restoreArmed = false;
+            const wanted = storedActive();
+            if (wanted && get().activeSessionId === null && sessions.some((row) => row.session_id === wanted)) {
+              get().openSession(wanted);
+            }
+          }
         } catch {
           /* offline / headless — keep the list as-is */
         }
@@ -654,6 +755,7 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
       providerById: (id) => get().providerOptions().find((p) => p.id === id) ?? null,
 
       setDraft: async (patch) => {
+        interactionEpoch += 1;
         const st = get();
         const changesSelection = patch.provider !== undefined || patch.model !== undefined || patch.effort !== undefined;
         if (changesSelection) ++selectionRevision;
@@ -747,8 +849,11 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
       },
 
       newChat: (opts) => {
+        interactionEpoch += 1;
         closeSocket();
         newChatLane = emptySendLane();
+        restoreArmed = false;
+        rememberActive(null);
         resetBlankComposerDraftTarget(chatStore);
         discardHeldFiles(chatStore, "");
         ++catalogRequest;
@@ -775,6 +880,9 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
         if (prev.activeSessionId && prev.activeSessionId !== sessionId) {
           rememberTimeline(prev.activeSessionId, prev.timeline);
         }
+        restoreArmed = false;
+        interactionEpoch += 1;
+        rememberActive(sessionId);
         set({
           activeSessionId: sessionId,
           activeSession: prev.sessions.find((s) => s.session_id === sessionId) ?? null,
@@ -802,6 +910,7 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
       },
 
       send: async (text, attachments = [], toolChoices = [], onSessionCreated) => {
+        interactionEpoch += 1;
         const content = text.trim();
         // A message may be files alone — dropping a screenshot and pressing
         // Enter is a complete gesture — but never nothing at all.
@@ -843,6 +952,8 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
             set({ sessions: [session, ...get().sessions] });
             onSessionCreated?.(session);
             if (visible) {
+              restoreArmed = false;
+              rememberActive(session.session_id);
               set({ activeSessionId: session.session_id, activeSession: session, timeline: EMPTY_TIMELINE });
               bindVoice(session.session_id);
               connect(session.session_id, 0);
@@ -934,6 +1045,7 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
       },
 
       disconnect: () => {
+        interactionEpoch += 1;
         closeSocket();
         set({ socketState: "idle" });
       },

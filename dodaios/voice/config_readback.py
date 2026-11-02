@@ -7,7 +7,7 @@ brain must never freely phrase "done" for a change that was refused or rolled
 back (the maintainer's original ask: "don't confirm something that wasn't done").
 
 This renders that line directly from the ``set_config_value`` tool result, in
-de/en/es/pt (every supported language — AGENTS.md "Runtime Output Language"). It is
+de/en/es/pt/it. It is
 separate from ``echo_confirmation.format_outcome`` (the two-turn confirm flow)
 because the failure results here carry no ``PendingMutation``, only an
 ``error_kind``.
@@ -22,7 +22,7 @@ from dodaios.i18n import catalog as i18n_catalog
 
 from .echo_confirmation import is_sensitive_path
 
-_SUPPORTED = ("de", "en", "es", "pt")
+_SUPPORTED = ("de", "en", "es", "pt", "it")
 _DEFAULT = "en"
 
 # outcome key -> {lang -> template}. ``{label}`` / ``{value}`` are filled for the
@@ -47,22 +47,22 @@ def _lang(language: str | None) -> str:
 def _value_for_speech(value: Any, lang: str) -> str:
     """Render a setting value for speech (bool localized, else stringified)."""
     if isinstance(value, bool):  # before int — bool is an int subtype
-        on = {"de": "an", "en": "on", "es": "activado", "pt": "ativado"}[lang]
-        off = {"de": "aus", "en": "off", "es": "desactivado", "pt": "desativado"}[lang]
+        on = {"de": "an", "en": "on", "es": "activado", "pt": "ativado", "it": "attivato"}[lang]
+        off = {"de": "aus", "en": "off", "es": "desactivado", "pt": "desativado", "it": "disattivato"}[lang]
         return on if value else off
     if value is None:
-        return {"de": "leer", "en": "empty", "es": "vacío", "pt": "vazio"}[lang]
+        return {"de": "leer", "en": "empty", "es": "vacío", "pt": "vazio", "it": "vuoto"}[lang]
     return str(value)
 
 
-def _label(description: str) -> str:
+def _label(description: str, lang: str) -> str:
     """A short spoken label from the setting description (first clause)."""
     head = (description or "").split("(")[0].split("—")[0].strip(" .")
-    return head or "the setting"
+    return head or ("l’impostazione" if lang == "it" else "the setting")
 
 
 def config_readback(
-    *, success: bool, output: Any, language: str | Literal["de", "en", "es", "pt"] = "de"
+    *, success: bool, output: Any, language: str | Literal["de", "en", "es", "pt", "it"] = "de"
 ) -> str | None:
     """The honest spoken line for a ``set_config_value`` result, or ``None``.
 
@@ -78,11 +78,11 @@ def config_readback(
         sens = is_sensitive_path(str(output.get("path", "")))
         if sens:
             value = {"de": "der neue Wert", "en": "the new value",
-                     "es": "el nuevo valor", "pt": "o novo valor"}[lang]
+                     "es": "el nuevo valor", "pt": "o novo valor", "it": "il nuovo valore"}[lang]
         else:
             value = _value_for_speech(output.get("new_value"), lang)
         key = "applied_restart" if output.get("requires_restart") else "applied"
-        return _PHRASES[key][lang].format(label=_label(str(output.get("description", ""))),
+        return _PHRASES[key][lang].format(label=_label(str(output.get("description", "")), lang),
                                           value=value)
 
     # Failure: ``output`` carries ``error_kind``.

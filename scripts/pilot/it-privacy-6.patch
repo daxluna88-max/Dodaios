@@ -1,0 +1,195 @@
+diff --git a/dodaios/brain/manager.py b/dodaios/brain/manager.py
+index 8eb2c4d09..783923161 100644
+--- a/dodaios/brain/manager.py
++++ b/dodaios/brain/manager.py
+@@ -2346,6 +2346,18 @@ def _current_time_label(now: Any) -> str:
+     )
+ 
+ 
++def _personal_context_allowed(config: Any) -> bool:
++    """Whether the personal blocks may go into the system prompt.
++
++    ``[brain] personal_context_to_cloud = false`` keeps the profile, learned
++    notebook, people, contacts, identity card, core memory, the per-turn wiki
++    snippets and the dated plans out of every request. It does not look at the provider: a fallback may hand the same
++    prompt to a cloud model, so the switch is applied before the chain starts.
++    """
++    brain = getattr(config, "brain", None)
++    return bool(getattr(brain, "personal_context_to_cloud", True))
++
++
+ class BrainManager:
+     """Top-level orchestrator with intent router and smart fallback."""
+ 
+@@ -3926,7 +3938,8 @@ class BrainManager:
+         except Exception:  # noqa: BLE001
+             pass
+ 
+-        if self._user_profile is not None:
++        _personal_ok = _personal_context_allowed(getattr(self, "_config", None))
++        if _personal_ok and self._user_profile is not None:
+             try:
+                 parts.append(self._user_profile.render_for_prompt())
+             except Exception:  # noqa: BLE001
+@@ -3938,13 +3951,13 @@ class BrainManager:
+         try:
+             from dodaios.memory.learning.notebook import snapshot_block
+ 
+-            learned_block = snapshot_block()
++            learned_block = snapshot_block() if _personal_ok else ""
+             if learned_block:
+                 parts.append(learned_block)
+         except Exception:  # noqa: BLE001 — a notebook fault never breaks a prompt build
+             log.debug("learned notebook block unavailable", exc_info=True)
+ 
+-        if self._people is not None:
++        if _personal_ok and self._people is not None:
+             try:
+                 people_block = self._people.render_for_prompt()
+                 if people_block:
+@@ -3958,7 +3971,7 @@ class BrainManager:
+         # book is empty — either way no block is injected. Defensive try/except
+         # so a store error never crashes the system-prompt build (AP-9-adjacent);
+         # ``getattr`` guard tolerates __init__-bypassing tests (see _tools above).
+-        _contacts = getattr(self, "_contacts", None)
++        _contacts = getattr(self, "_contacts", None) if _personal_ok else None
+         if _contacts is not None:
+             try:
+                 contacts_block = _contacts.render_for_prompt(max_chars=8_000)
+@@ -3978,13 +3991,15 @@ class BrainManager:
+         try:
+             from dodaios.brain.identity_card import identity_card_block
+ 
+-            _identity_block = identity_card_block(getattr(self, "_config", None))
++            _identity_block = (
++                identity_card_block(getattr(self, "_config", None)) if _personal_ok else ""
++            )
+             if _identity_block:
+                 parts.append(_identity_block)
+         except Exception:  # noqa: BLE001
+             pass
+ 
+-        if self._core_memory is not None:
++        if _personal_ok and self._core_memory is not None:
+             # Mandatory: re-read BEFORE rendering. Otherwise the LLM only sees
+             # facts that existed at init time — UI additions and remember-tool
+             # writes from this process are in the file but not in the cache.
+@@ -4105,7 +4120,11 @@ class BrainManager:
+         # = no injection (no-op path, search returned nothing, or timed out).
+         # Wave 2 (omni-latency): wiki context also moves to the per-turn user
+         # message in cache-optimized mode (keeps the cached system prefix stable).
+-        if self._wiki_context_suffix and not self._cache_optimized():
++        if (
++            self._wiki_context_suffix
++            and not self._cache_optimized()
++            and _personal_context_allowed(getattr(self, "_config", None))
++        ):
+             parts.append(self._wiki_context_suffix)
+ 
+         # Agentic IDE: while the user has the focused coding mode ON, this turn
+@@ -4236,9 +4255,10 @@ class BrainManager:
+         private = _TURN_OVERRIDE.get()
+         if private is not None and private.tool_context.get("tool_origin") == "society":
+             return "\n\n".join(parts)
+-        if self._wiki_context_suffix:
++        _personal_ok = _personal_context_allowed(getattr(self, "_config", None))
++        if self._wiki_context_suffix and _personal_ok:
+             parts.append(self._wiki_context_suffix)
+-        upcoming = self._upcoming_block()
++        upcoming = self._upcoming_block() if _personal_ok else ""
+         if upcoming:
+             parts.append(upcoming)
+         agentic_block = self._agentic_focus_block()
+diff --git a/dodaios/core/config.py b/dodaios/core/config.py
+index 81bbe5c8c..fdf7b8d8c 100644
+--- a/dodaios/core/config.py
++++ b/dodaios/core/config.py
+@@ -1612,6 +1612,12 @@ class BrainConfig(BaseModel):
+     model_config = ConfigDict(populate_by_name=True)
+ 
+     primary: str = "claude-api"
++    # Privacy switch (``[brain] personal_context_to_cloud``). When False the
++    # system prompt omits the personal blocks — user profile, learned notebook,
++    # people, contacts, identity card, core memory, per-turn wiki snippets and
++    # dated plans — so none of them leave the machine inside a request to a model
++    # provider. Turn text, history and tool results are not affected. Default True keeps today's behaviour.
++    personal_context_to_cloud: bool = True
+     # For deep/code intents an API-key provider can be preferred.
+     deep_brain: str | None = None
+     routing_provider: str = "claude-api"
+diff --git a/dodaios/core/config_writer.py b/dodaios/core/config_writer.py
+index b8eccb9e7..250326ed6 100644
+--- a/dodaios/core/config_writer.py
++++ b/dodaios/core/config_writer.py
+@@ -1133,6 +1133,11 @@ def set_reply_language(name: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
+     _patch_table(path, "brain", "reply_language", name)
+ 
+ 
++def set_personal_context_to_cloud(allowed: bool, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
++    """Persist the privacy switch in ``[brain] personal_context_to_cloud``."""
++    _patch_table(path, "brain", "personal_context_to_cloud", bool(allowed))
++
++
+ def set_proactivity(level: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
+     """Persist the assistant's initiative level in ``[brain] proactivity``.
+ 
+diff --git a/dodaios/ui/web/settings_routes.py b/dodaios/ui/web/settings_routes.py
+index 366f294ee..9f20acfa2 100644
+--- a/dodaios/ui/web/settings_routes.py
++++ b/dodaios/ui/web/settings_routes.py
+@@ -537,6 +537,55 @@ def put_team_proxy(body: TeamProxyBody, request: Request) -> dict[str, object]:
+ # over /ws). Key-free same-origin route, like reply-language.
+ # ----------------------------------------------------------------------
+ 
++# ----------------------------------------------------------------------
++# Privacy switch: personal context (profile, memory, people, contacts, wiki
++# snippets) in the model prompt. Off = none of it leaves the machine inside a
++# request to a model provider. Applies on the next turn, no restart.
++# ----------------------------------------------------------------------
++
++
++class PersonalContextBody(BaseModel):
++    allowed: bool
++    persist: bool = Field(default=True, description="Persist as boot default in jarvis.toml")
++
++
++def _personal_context_allowed_now(request: Request) -> bool:
++    cfg = getattr(request.app.state, "config", None)
++    return bool(getattr(getattr(cfg, "brain", None), "personal_context_to_cloud", True))
++
++
++@router.get("/personal-context")
++def get_personal_context(request: Request) -> dict[str, object]:
++    return {"allowed": _personal_context_allowed_now(request)}
++
++
++@router.put("/personal-context")
++def put_personal_context(body: PersonalContextBody, request: Request) -> dict[str, object]:
++    persisted = False
++    if body.persist:
++        try:
++            from dodaios.core import config_writer
++            from dodaios.core.config import resolve_config_path
++
++            config_writer.set_personal_context_to_cloud(
++                body.allowed, path=resolve_config_path()
++            )
++            persisted = True
++        except Exception as exc:  # noqa: BLE001 — persist is best-effort
++            log.warning("personal-context persist failed: %s", exc)
++
++    cfg = getattr(request.app.state, "config", None)
++    brain_cfg = getattr(cfg, "brain", None)
++    applied = False
++    if brain_cfg is not None:
++        try:
++            brain_cfg.personal_context_to_cloud = body.allowed
++            applied = True
++        except Exception as exc:  # noqa: BLE001 — frozen model is not an error
++            log.debug("in-memory personal_context_to_cloud update skipped: %s", exc)
++    return {"allowed": body.allowed, "persisted": persisted, "applied": applied}
++
++
+ _UI_LANGUAGES: tuple[str, ...] = ("en", "de", "es", "pt", "zh", "it")
+ 
+ 

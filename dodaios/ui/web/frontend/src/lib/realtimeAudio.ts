@@ -61,6 +61,9 @@ export type RealtimeAudioOptions = {
  */
 const OUTPUT_TAP_TTL_MS = 600;
 
+/** Silence streamed after the microphone gate closes (the server waits ~2.2 s of it to end a turn). */
+const MIC_TAIL_MS = 3200;
+
 /** Historical fixed budget for one realtime start attempt. */
 const DEFAULT_START_BUDGET_MS = 20_000;
 // This starts only AFTER microphone permission is granted. A suspended audio
@@ -548,6 +551,10 @@ export class RealtimeAudioClient {
   // the backend cannot drop its audio; a disabled track sends silence.
   private inputMuted = false;
   private inputStopped = false;
+  private localMuted = false;
+  private tailUntil = 0;
+  private tailTimer: ReturnType<typeof setTimeout> | null = null;
+  private micDeviceId = "";
   private outputMuted = true;
   private outputVolume = 1;
   private outputRevision = -1;
@@ -713,21 +720,67 @@ export class RealtimeAudioClient {
   }
 
   private syncInputTracks(): void {
-    const enabled = !this.inputMuted && !this.inputStopped;
+    const enabled = !this.micOff && !this.inputStopped;
     this.stream?.getAudioTracks().forEach(track => { track.enabled = enabled; });
+  }
+
+  /** Backend mute OR the person's local gate (push-to-talk / tap-to-continue). */
+  private get micOff(): boolean {
+    return this.inputMuted || this.localMuted;
   }
 
   private applyInputMute(muted: unknown): void {
     if (typeof muted !== "boolean") return;
-    const changed = this.inputMuted !== muted;
+    const before = this.micOff;
     this.inputMuted = muted;
+    this.applyMicState(before);
+  }
+
+  /**
+   * Local microphone gate, owned by the surface. Closed = no audio leaves the
+   * browser; the track is disabled exactly like a backend mute.
+   */
+  setMicOpen(open: boolean): void {
+    const before = this.micOff;
+    const closing = !open && !this.localMuted;
+    this.localMuted = !open;
+    this.applyMicState(before, closing);
+  }
+
+  /** Device used by the NEXT microphone open (empty = system default). */
+  setMicDevice(deviceId: string): void {
+    this.micDeviceId = deviceId;
+  }
+
+  private applyMicState(before: boolean, tail = false): void {
+    const muted = this.micOff;
     this.syncInputTracks();
+    if (this.tailTimer !== null) {
+      clearTimeout(this.tailTimer);
+      this.tailTimer = null;
+    }
+    this.tailUntil = 0;
+    if (muted && tail && !this.inputMuted && !this.inputStopped) {
+      // The server ends a turn only after it HEARS silence. Closing the gate must not cut the
+      // stream at once, or hold-to-talk never gets an answer: send silent frames for a while.
+      this.tailUntil = performance.now() + MIC_TAIL_MS;
+      this.tailTimer = setTimeout(() => {
+        this.tailTimer = null;
+        this.tailUntil = 0;
+        if (!this.micOff) return;
+        this.stopListeningCue?.();
+        this.startupNode?.port.postMessage({ type: "suspend" });
+        this.startupPreroll = [];
+        this.startupPrerollBytes = 0;
+      }, MIC_TAIL_MS);
+      return;
+    }
     if (muted) {
       this.stopListeningCue?.();
       this.startupNode?.port.postMessage({ type: "suspend" });
       this.startupPreroll = [];
       this.startupPrerollBytes = 0;
-    } else if (changed && !this.inputStopped) {
+    } else if (before !== muted && !this.inputStopped) {
       this.startupNode?.port.postMessage({ type: this.ready ? "start" : "resume" });
     }
   }
@@ -795,6 +848,7 @@ export class RealtimeAudioClient {
       void workletReady.catch(() => undefined);
       const micReady = navigator.mediaDevices.getUserMedia({
         audio: {
+          ...(this.micDeviceId ? { deviceId: { ideal: this.micDeviceId } } : {}),
           channelCount: { ideal: 1 },
           echoCancellation: true,
           noiseSuppression: true,
@@ -939,7 +993,12 @@ export class RealtimeAudioClient {
     const data = event.data as ArrayBuffer | { type?: string; rms?: number };
     if (data instanceof ArrayBuffer) {
       this.markStartup("first_capture_frame");
-      if (this.inputMuted || this.inputStopped) return;
+      if (this.micOff && !this.inputMuted && !this.inputStopped && performance.now() < this.tailUntil) {
+        // Silent tail after the gate closed: lets the server's endpointer finish the turn.
+        if (this.ready && this.ws?.readyState === WebSocket.OPEN) this.ws.send(new ArrayBuffer(data.byteLength));
+        return;
+      }
+      if (this.micOff || this.inputStopped) return;
       if (this.options.browserAudio && this.options.requiresWebRtcOffer) return;
       if (this.ready && this.ws?.readyState === WebSocket.OPEN) {
         this.ws.send(data);
@@ -1145,7 +1204,7 @@ export class RealtimeAudioClient {
                 throw new Error("Voice start cancelled");
               }
               this.ready = true;
-              if (!this.inputMuted && !this.inputStopped) {
+              if (!this.micOff && !this.inputStopped) {
                 this.startupNode?.port.postMessage({ type: "start" });
                 this.markStartup("input_released");
               }
@@ -1155,7 +1214,7 @@ export class RealtimeAudioClient {
               if (!this.listeningCueConsumed) {
                 this.listeningCueConsumed = true;
                 // An older backend cannot confirm the sound preference yet.
-                if (this.ctx && message.sound_effects === true && !this.inputMuted &&
+                if (this.ctx && message.sound_effects === true && !this.micOff &&
                     !this.inputStopped && !this.outputMuted) {
                   this.stopListeningCue = playListeningCue(this.ctx, this.outputVolume);
                 }
@@ -1224,7 +1283,7 @@ export class RealtimeAudioClient {
     const resampler = new StreamingPcm16Resampler(rate, this.ctx.sampleRate);
     const pcm = resampler.process(bytes.buffer);
     this.receivedPrefix = true;
-    if (this.inputMuted || this.inputStopped) return;
+    if (this.micOff || this.inputStopped) return;
     if (this.startupNode) {
       const samples = Float32Array.from(new Int16Array(pcm), value => value / 32768);
       this.startupNode.port.postMessage({ type: "prefix", samples }, [samples.buffer]);
@@ -1242,7 +1301,7 @@ export class RealtimeAudioClient {
     const retained = this.startupPreroll;
     this.startupPreroll = [];
     this.startupPrerollBytes = 0;
-    if (this.ws?.readyState !== WebSocket.OPEN || this.inputMuted || this.inputStopped) return;
+    if (this.ws?.readyState !== WebSocket.OPEN || this.micOff || this.inputStopped) return;
     for (const frame of retained) {
       this.ws.send(frame);
     }

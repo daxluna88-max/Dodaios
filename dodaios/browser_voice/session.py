@@ -27,13 +27,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import re
 import time
+from collections.abc import AsyncIterator
 from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import uuid4
 
-from dodaios.brain.output_filter import scrub_for_voice
+from dodaios.brain.output_filter import FALLBACK_PHRASES, scrub_for_voice
 from dodaios.brain.scrub_verdict import is_harmless_scrub_residue
+
+# Same classifier the realtime scrub gate uses, so a hard leak means the same thing on both voice paths.
+from dodaios.realtime.scrub_gate import _is_hard_scrub_result
 from dodaios.browser_voice.audio import (
     STT_SAMPLE_RATE,
     TTS_SAMPLE_RATE,
@@ -62,6 +68,207 @@ SendJson = Callable[[dict[str, Any]], Awaitable[None]]
 # detector while its own voice is still audible through the microphone.
 _BROWSER_TTS_ACK_TIMEOUT_S = 120.0
 
+
+
+_CUT = object()  # piece-stream marker: drop the audio still queued in the browser
+
+_SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
+_TTS_MIN_CHARS = 80  # first piece: short, so the voice starts early
+_TTS_NEXT_MIN_CHARS = 240  # later pieces: longer, so the intonation resets less often
+_TTS_MAX_CHARS = 450
+_MAX_LEAD_S = 6.0
+_PLAYBACK_TAIL_S = 1.0  # margin for device latency and room reverb after the last sample
+_SLICE_BYTES = TTS_SAMPLE_RATE * 2  # 1 s of 16-bit mono PCM, always sample-aligned
+
+
+class _ReplyState:
+    """What one streamed reply produced: raw chunks, spoken pieces, leak verdict."""
+
+    def __init__(self) -> None:
+        self.chunks: list[str] = []
+        self.spoken: list[str] = []
+        self.cut = False  # a hard leak was found: nothing more is spoken
+        self.leak_actions: list[str] = []
+        self.published = False  # ResponseGenerated already sent (text shows while speech plays)
+        self.turn_id: str | None = None
+        self.user_text = ""
+        self.completed = False  # the record turn was closed early, so the chat shows the text during speech
+
+
+def _browser_engine() -> bool:
+    """``JARVIS_BROWSER_VOICE_ENGINE=browser``: speak with the phone's own voice instead of cloud TTS."""
+    return os.environ.get("JARVIS_BROWSER_VOICE_ENGINE", "").strip().lower() == "browser"
+
+
+def _end_of_turn_silence_ms() -> int:
+    """Trailing quiet that closes a turn. 700 ms (the telephony default) split one spoken question into
+    three turns when the speaker paused to think; ``JARVIS_BROWSER_VOICE_SILENCE_MS`` overrides 1400."""
+    try:
+        return max(300, min(5000, int(os.environ.get("JARVIS_BROWSER_VOICE_SILENCE_MS", "1400"))))
+    except ValueError:
+        return 1400
+
+
+_WORD = re.compile(r"\w+", re.UNICODE)
+
+
+def _is_echo(heard: str, spoken: str) -> bool:
+    """True when most of ``heard`` is words Jarvis itself is saying (speaker bleed)."""
+    words = [w.lower() for w in _WORD.findall(heard)]
+    if not words:
+        return True
+    ours = {w.lower() for w in _WORD.findall(spoken)}
+    return sum(1 for w in words if w in ours) / len(words) >= 0.6
+
+
+# Whisper invents these on silence or speaker bleed. A bare one is never taken as an interruption.
+_PHANTOM_PHRASES = frozenset(
+    {
+        "grazie",
+        "grazie a tutti",
+        "ciao",
+        "ok",
+        "thank you",
+        "thanks",
+        "thanks for watching",
+        # The same video-outro inventions in Italian ("l'attenzione" is split at the apostrophe by _WORD).
+        "grazie per la visione",
+        "grazie a tutti per la visione",
+        "grazie per aver guardato il video",
+        "grazie per l attenzione",
+        "alla prossima",
+        "ci vediamo al prossimo video",
+        "iscriviti al canale",
+        "buona visione",
+        "you",
+        "bye",
+        # Hesitation sounds ("mmm", "ehm"): thinking aloud is not a turn and must not interrupt Jarvis.
+        "mm",
+        "mmm",
+        "mmmm",
+        "hm",
+        "hmm",
+        "mh",
+        "mhm",
+        "ehm",
+        "em",
+        "emm",
+        "uhm",
+        "uh",
+        "um",
+        "eeh",
+        "ehh",
+    }
+)
+
+
+# Whisper writes sounds as stage directions: "*sospiro*", "[musica]", "(rumore)". They are not speech.
+_ANNOTATION = re.compile(r"\*[^*]*\*|\[[^\]]*\]|\([^)]*\)")
+
+
+def _without_annotations(heard: str) -> str:
+    return _ANNOTATION.sub(" ", heard)
+
+
+# Sounds a room makes that Whisper writes down as words: a dog, laughter, a tut, a sigh.
+_INTERJECTIONS = frozenset(
+    {
+        "ah", "oh", "uh", "ahah", "ahaha", "haha", "hahaha", "hihi", "bau", "woof", "pff", "tsk",
+        "ssh", "psst", "brr", "ops", "oops",
+    }
+)
+
+# One word that does mean "stop talking". Any other single word heard WHILE Jarvis speaks is more
+# likely the room than the person, so it does not interrupt.
+_STOP_WORDS = frozenset(
+    {
+        "stop", "basta", "aspetta", "aspetti", "ferma", "fermati", "fermo", "no", "pausa",
+        "silenzio", "zitto", "ascolta", "scusa", "wait", "hold",
+    }
+)
+
+
+def _is_interjection(heard: str) -> bool:
+    words = [w.lower() for w in _WORD.findall(_without_annotations(heard))]
+    return bool(words) and all(w in _INTERJECTIONS for w in words)
+
+
+def _is_weak_barge_in(heard: str) -> bool:
+    """A lone word that is not a stop word: not enough to cut Jarvis off."""
+    words = [w.lower() for w in _WORD.findall(_without_annotations(heard))]
+    return len(words) == 1 and words[0] not in _STOP_WORDS
+
+
+def _is_phantom(heard: str) -> bool:
+    if heard.strip() and not _without_annotations(heard).strip():
+        return True  # only a sound annotation, e.g. "*sospiro*"
+    if _is_interjection(heard):
+        return True
+    return " ".join(w.lower() for w in _WORD.findall(_without_annotations(heard))) in _PHANTOM_PHRASES
+
+
+# What Whisper writes for silence or room noise. Unlike ``_PHANTOM_PHRASES`` this list leaves out "ciao" and "ok",
+# which are real one-word turns; a bare "grazie" stays in because it is the most common invention.
+_SILENCE_HALLUCINATIONS = _PHANTOM_PHRASES - {"ciao", "ok"}
+
+
+def _is_silence_hallucination(heard: str) -> bool:
+    """True when every sentence is an invented one (so "Grazie. Grazie." counts too)."""
+    if heard.strip() and not _without_annotations(heard).strip():
+        return True  # only sound annotations: no speech at all
+    sentences = [
+        " ".join(w.lower() for w in _WORD.findall(part))
+        for part in re.split(r"[.!?…]+", _without_annotations(heard))
+        if part.strip() and _WORD.findall(part)
+    ]
+    if not sentences:
+        return False
+    if sentences[0].startswith(("sottotitoli", "sottotitolato", "subtitles by")):
+        return True  # "Sottotitoli creati dalla comunità Amara.org" splits at the dot
+    return all(
+        sentence in _SILENCE_HALLUCINATIONS
+        or sentence.startswith(("sottotitoli", "sottotitolato", "subtitles by"))
+        for sentence in sentences
+    )
+
+
+def split_for_tts(text: str) -> list[str]:
+    """Split a reply into pieces so the first audio starts after one sentence.
+
+    One long request made the cloud TTS model synthesize the whole reply before
+    answering (about 14 s on five sentences, with distorted or skipped speech
+    on the phone). Every join restarts the model's intonation, so only the first
+    piece is short (``_TTS_MIN_CHARS``); later ones are grouped to at least
+    ``_TTS_NEXT_MIN_CHARS`` and never exceed ``_TTS_MAX_CHARS`` unless a single
+    word is longer. Later pieces are synthesized while earlier ones play.
+    """
+    pieces: list[str] = []
+    current = ""
+    for sentence in _SENTENCE_END.split(text.strip()):
+        for part in _wrap(sentence):
+            current = f"{current} {part}".strip()
+            if len(current) >= (_TTS_MIN_CHARS if not pieces else _TTS_NEXT_MIN_CHARS):
+                pieces.append(current)
+                current = ""
+    if current:
+        if pieces and len(current) < _TTS_NEXT_MIN_CHARS // 2 and len(pieces[-1]) + len(current) < _TTS_MAX_CHARS:
+            pieces[-1] = f"{pieces[-1]} {current}"
+        else:
+            pieces.append(current)
+    return pieces or [text]
+
+
+def _wrap(sentence: str) -> list[str]:
+    words, parts, line = sentence.split(), [], ""
+    for word in words:
+        if line and len(line) + 1 + len(word) > _TTS_MAX_CHARS:
+            parts.append(line)
+            line = word
+        else:
+            line = f"{line} {word}".strip()
+    if line:
+        parts.append(line)
+    return parts
 
 class BrowserVoiceSession:
     """One browser microphone/speaker session over a ``/ws/audio`` socket.
@@ -110,7 +317,9 @@ class BrowserVoiceSession:
         self._bus = bus
 
         self._in_resampler = Resampler(self.browser_sample_rate, STT_SAMPLE_RATE)
-        self._endpointer = EnergyEndpointer(sample_rate=STT_SAMPLE_RATE)
+        self._endpointer = EnergyEndpointer(
+            sample_rate=STT_SAMPLE_RATE, silence_ms=_end_of_turn_silence_ms()
+        )
 
         self._started_at = time.time()
         self._turns = 0
@@ -128,8 +337,15 @@ class BrowserVoiceSession:
         # instead of restarting its gain ramp at every frame boundary.
         self._out_limiter: Any | None = None
         self._speaking = False
+        # When the audio already sent should finish playing in the browser (monotonic seconds). The server
+        # stops "speaking" up to _MAX_LEAD_S before the phone does; the microphone still hears that tail.
+        self._playback_until = 0.0
         self._processing = False
         self._tts_task: asyncio.Task[None] | None = None
+        self._reply_state: _ReplyState | None = None
+        self._audio_seconds_total = 0.0
+        self._last_stt_confidence: float | None = None
+        self._barge_task: asyncio.Task[None] | None = None
         self._turn_task: asyncio.Task[None] | None = None
         self._browser_tts_done: asyncio.Event | None = None
         self._browser_tts_id: str | None = None
@@ -169,6 +385,16 @@ class BrowserVoiceSession:
                 self._run_turn(utterance), name=f"bv-turn-{self.session_id}"
             )
             self._turn_task.add_done_callback(self._on_turn_done)
+        elif utterance is not None and self._playing() and (
+            self._barge_task is None or self._barge_task.done()
+        ):
+            self._barge_task = asyncio.create_task(
+                self._maybe_barge_in(utterance), name=f"bv-barge-{self.session_id}"
+            )
+
+    def _playing(self) -> bool:
+        """Jarvis is audible: still sending audio, or the browser is still playing what was sent."""
+        return self._speaking or time.monotonic() < self._playback_until
 
     async def handle_control(self, msg: dict[str, Any]) -> None:
         """Process a JSON control frame from the browser."""
@@ -239,7 +465,7 @@ class BrowserVoiceSession:
 
     # -- turn loop ---------------------------------------------------------
 
-    async def _run_turn(self, utterance_pcm16: bytes) -> None:
+    async def _run_turn(self, utterance_pcm16: bytes, transcript: str | None = None) -> None:
         if self._ended:
             return
         self._processing = True
@@ -247,13 +473,45 @@ class BrowserVoiceSession:
         user_text = ""
         full_reply = ""
         try:
-            transcript = await self._transcribe(utterance_pcm16)
+            if transcript is None:
+                transcript = await self._transcribe(utterance_pcm16)
             text = (transcript or "").strip()
             if not text:
                 # End-of-turn fired but nothing transcribable — let the browser
                 # reset any "thinking" affordance (AD-OE6: never a silent drop).
                 await self._send_json({"type": "vad_silence"})
                 return
+            confidence = self._last_stt_confidence
+            log.warning(
+                "browser_voice[%s] heard %.1f s, confidence %s, speaking=%s playing=%s: %r",
+                self.session_id,
+                len(utterance_pcm16) / 2 / STT_SAMPLE_RATE,
+                f"{confidence:.2f}" if isinstance(confidence, (int, float)) else "n/a",
+                self._speaking,
+                self._playing(),
+                text,
+            )
+            if _is_silence_hallucination(text):
+                log.warning(
+                    "browser_voice[%s] ignored a transcript that looks invented from silence: %r",
+                    self.session_id,
+                    text,
+                )
+                await self._send_json({"type": "vad_silence"})
+                return
+            if self._playing():
+                # The server may be done sending while the phone still plays the tail; the microphone
+                # hears it. Words that are Jarvis's own, or a bare invented phrase, are not a new turn.
+                previous = self._reply_state
+                heard_back = " ".join(previous.spoken) if previous is not None else ""
+                if _is_echo(text, heard_back) or _is_phantom(text):
+                    log.warning(
+                        "browser_voice[%s] ignored during playback (echo/phantom): %r", self.session_id, text
+                    )
+                    await self._send_json({"type": "vad_silence"})
+                    return
+                # A real new turn while the old tail still plays: flush it so the two never overlap.
+                await self._barge_in()
             log.info("browser_voice[%s] user: %s", self.session_id, text)
             await self._send_json({"type": "transcript", "text": text, "is_final": True})
             user_text = text
@@ -272,33 +530,47 @@ class BrowserVoiceSession:
                 TranscriptionUpdate(text=text, is_final=True, source_layer="browser_voice")
             )
 
-            response = await self._think(text)
-            full_reply = response or ""
-            scrubbed = scrub_for_voice(response, language=self._lang_short())
-            if is_harmless_scrub_residue(scrubbed):
-                # The whole reply was filler / an honorific, so the residue
-                # guard emptied it and returned the generic error phrase.
-                # Nothing failed — say nothing rather than claim an error.
-                log.info(
-                    "browser_voice[%s] reply carried no substance (%s) — "
-                    "staying silent instead of speaking the error phrase: %r",
-                    self.session_id,
-                    scrubbed.actions,
-                    response[:80],
-                )
-                await self._complete_bus_turn(turn_id, user_text, "")
-                return
-            spoken = scrubbed.cleaned
-            if not spoken.strip():
-                await self._complete_bus_turn(turn_id, user_text, "")
-                return
-            await self._publish(
-                ResponseGenerated(
-                    text=full_reply,
-                    language=self._lang_short(),
-                    source_layer="browser_voice",
-                )
+            state = _ReplyState()
+            self._reply_state = state
+            state.turn_id, state.user_text = turn_id, user_text
+            pieces = self._reply_pieces(text, state)
+            self._tts_task = asyncio.create_task(self._speak_pieces(pieces))
+            try:
+                await self._tts_task
+            except asyncio.CancelledError:
+                pass  # barge-in cancelled playback mid-stream — normal
+            finally:
+                await pieces.aclose()
+            full_reply = "".join(state.chunks)
+            spoken = " ".join(state.spoken)
+            log.warning(
+                "browser_voice[%s] turn summary %s: %d pieces, %d chars spoken, %.1f s of audio sent, reply %d chars, cut=%s",
+                self.session_id,
+                (turn_id or "")[:8],
+                len(state.spoken),
+                len(spoken),
+                self._audio_seconds_total,
+                len(full_reply),
+                state.cut,
             )
+            if not spoken.strip():
+                # Empty reply, or the whole reply was filler / an honorific: nothing
+                # failed, so say nothing rather than claim an error.
+                log.info(
+                    "browser_voice[%s] reply carried no substance — staying silent: %r",
+                    self.session_id,
+                    full_reply[:80],
+                )
+                await self._complete_bus_turn(turn_id, user_text, "")
+                return
+            if not state.published:  # a barge-in cut the stream before it was published
+                await self._publish(
+                    ResponseGenerated(
+                        text=full_reply,
+                        language=self._lang_short(),
+                        source_layer="browser_voice",
+                    )
+                )
             await self._publish(
                 SpeechSpoken(
                     text=spoken,
@@ -307,15 +579,11 @@ class BrowserVoiceSession:
                     source_layer="browser_voice",
                 )
             )
-            self._tts_task = asyncio.create_task(self._speak(spoken))
-            try:
-                await self._tts_task
-            except asyncio.CancelledError:
-                pass  # barge-in cancelled playback mid-stream — normal
             # A turn is "complete" once the response was (at least partly) spoken,
             # mirroring the telephony session's count semantics.
             self._turns += 1
-            await self._complete_bus_turn(turn_id, user_text, full_reply)
+            if not state.completed:
+                await self._complete_bus_turn(turn_id, user_text, full_reply)
         except Exception:  # noqa: BLE001 — a turn failure must never kill the session
             log.warning("browser_voice[%s] turn failed", self.session_id, exc_info=True)
             if turn_id is not None:
@@ -343,17 +611,115 @@ class BrowserVoiceSession:
 
     async def _transcribe(self, pcm16: bytes) -> str:
         result = await self._stt.transcribe_pcm(pcm16, sample_rate=STT_SAMPLE_RATE)
+        self._last_stt_confidence = getattr(result, "confidence", None)
         return getattr(result, "text", "") or ""
 
-    async def _think(self, text: str) -> str:
-        chunks: list[str] = []
-        async for chunk in self._brain.generate_stream(text):
-            if chunk:
-                chunks.append(chunk)
-        return "".join(chunks)
+    async def _reply_pieces(self, user_text: str, state: _ReplyState) -> AsyncIterator[object]:
+        """Stream the brain reply as vetted pieces so speech starts at the first sentence.
+
+        Each piece goes through ``scrub_for_voice`` on its own. A hard leak (tool JSON,
+        stacktrace, raw repr, shell command, wrong language) cuts the reply: the audio
+        still queued in the browser is dropped and only the standard fallback phrase is
+        spoken. Harmless residue (filler, honorific) is skipped in silence. Once the whole
+        reply is in, it is scrubbed again as a trailing kill switch, because a leak that
+        spans two pieces only shows up in the aggregate.
+        """
+        lang = self._lang_short()
+        pending = ""  # complete sentences waiting to reach the minimum piece length
+        tail = ""  # text after the last sentence break, possibly incomplete
+        emitted = 0
+
+        def _vet(piece: str) -> list[object]:
+            nonlocal emitted
+            result = scrub_for_voice(piece, language=lang)
+            if _is_hard_scrub_result(result):
+                state.cut = True
+                state.leak_actions = list(result.actions)
+                log.warning(
+                    "browser_voice[%s] hard leak in streamed reply (%s) — cutting speech",
+                    self.session_id,
+                    state.leak_actions,
+                )
+                fallback = FALLBACK_PHRASES.get(lang, FALLBACK_PHRASES["en"])
+                state.spoken.clear()
+                state.spoken.append(fallback)
+                return [_CUT, fallback]
+            cleaned = result.cleaned.strip()
+            if not cleaned or is_harmless_scrub_residue(result):
+                return []
+            state.spoken.append(cleaned)
+            emitted += 1
+            return [cleaned]
+
+        def _minimum() -> int:
+            return _TTS_MIN_CHARS if emitted == 0 else _TTS_NEXT_MIN_CHARS
+
+        async for chunk in self._brain.generate_stream(user_text):
+            if not chunk:
+                continue
+            state.chunks.append(chunk)
+            if state.cut:
+                continue  # keep draining so the record holds the whole reply
+            tail += chunk
+            sentences = _SENTENCE_END.split(tail)
+            tail = sentences.pop()
+            for sentence in sentences:
+                pending = f"{pending} {sentence}".strip()
+                # An unclosed code fence is held until it closes, so scrub sees it whole.
+                if pending.count("```") % 2 or len(pending) < _minimum():
+                    continue
+                piece, pending = pending, ""
+                for item in _vet(piece):
+                    yield item
+                if state.cut:
+                    break
+        if state.chunks:
+            state.published = True
+            await self._publish(
+                ResponseGenerated(
+                    text="".join(state.chunks),
+                    language=lang,
+                    source_layer="browser_voice",
+                )
+            )
+        remainder_items: list[object] = []
+        if not state.cut:
+            rest = f"{pending} {tail}".strip()
+            if rest:
+                remainder_items = _vet(rest)
+        if state.spoken and not state.completed:
+            # Close the record turn now, not after the audio: the chat files the text on this event.
+            state.completed = True
+            await self._complete_bus_turn(state.turn_id, state.user_text, "".join(state.chunks))
+        for item in remainder_items:
+            yield item
+        if not state.cut:
+            whole = scrub_for_voice("".join(state.chunks), language=lang)
+            if _is_hard_scrub_result(whole):
+                state.cut = True
+                state.leak_actions = list(whole.actions)
+                log.warning(
+                    "browser_voice[%s] hard leak across pieces (%s) — cutting speech",
+                    self.session_id,
+                    state.leak_actions,
+                )
+                fallback = FALLBACK_PHRASES.get(lang, FALLBACK_PHRASES["en"])
+                state.spoken.clear()
+                state.spoken.append(fallback)
+                yield _CUT
+                yield fallback
 
     async def _speak(self, text: str) -> int:
-        """Synthesize ``text`` and stream the raw PCM straight back as binary WS
+        """Speak an already vetted ``text`` (split into pieces); see ``_speak_pieces``."""
+
+        async def _pieces() -> AsyncIterator[object]:
+            for piece in split_for_tts(text):
+                yield piece
+
+        return await self._speak_pieces(_pieces())
+
+    async def _speak_pieces(self, pieces: AsyncIterator[object]) -> int:
+        """Synthesize ``pieces`` one by one and stream the raw PCM straight back as binary WS
         frames. The browser plays them via Web Audio at ``TTS_SAMPLE_RATE`` — no
         server resample (off-rate chunks are normalized to that rate). Returns
         the number of binary frames sent. Cancellable: a barge-in cancels the
@@ -372,60 +738,111 @@ class BrowserVoiceSession:
         if self._out_limiter is None:
             self._out_limiter = PeakLimiter()
 
+        if _browser_engine():
+            # Free engine: the phone speaks with its built-in voice (no cloud TTS call).
+            self._speaking = True
+            try:
+                spoken = 0
+                async for piece in pieces:
+                    if piece is _CUT:
+                        if spoken:
+                            await self._send_json({"type": "tts_cancel"})
+                        continue
+                    assert isinstance(piece, str)
+                    await self._speak_in_browser(piece, volume=vol)
+                    spoken += 1
+                return spoken
+            finally:
+                self._speaking = False
+
         self._speaking = True
         sent = 0
+        spoken_pieces: list[str] = []
+        clock_start: float | None = None
+        audio_seconds = 0.0
+        self._audio_seconds_total = 0.0
         try:
-            stream = self._tts.synthesize(text, language_code=self.language_code)
-            iterator = stream.__aiter__()
-            while True:
-                try:
-                    chunk = await anext(iterator)
-                except StopAsyncIteration:
-                    break
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:  # noqa: BLE001 - cross output family once
+            async for piece in pieces:
+                if piece is _CUT:
+                    # A hard leak was found after audio started: flush what the browser
+                    # still holds and restart the clock; the next piece is the fallback.
                     if sent:
-                        log.warning(
-                            "browser_voice[%s] server TTS failed after audio started",
-                            self.session_id,
-                            exc_info=True,
-                        )
-                        await self._send_json({"type": "tts_end", "partial": True})
-                        raise
-                    log.warning(
-                        "browser_voice[%s] server TTS unavailable; using browser speech: %s",
-                        self.session_id,
-                        exc,
-                    )
-                    await self._speak_in_browser(text, volume=vol)
-                    return 0
-
-                pcm = getattr(chunk, "pcm", b"")
-                rate = int(getattr(chunk, "sample_rate", TTS_SAMPLE_RATE) or TTS_SAMPLE_RATE)
-                if not pcm:
+                        await self._send_json({"type": "tts_cancel"})
+                        self._out_limiter.reset()
+                        sent = 0
+                        clock_start, audio_seconds = None, 0.0
+                        self._playback_until = 0.0
                     continue
-                if sent == 0:
-                    await self._send_json(
-                        {"type": "tts_start", "sample_rate": TTS_SAMPLE_RATE}
-                    )
-                if rate != TTS_SAMPLE_RATE:
-                    pcm = resample_pcm16(pcm, rate, TTS_SAMPLE_RATE)
-                pcm = apply_output_gain_pcm16(
-                    pcm,
-                    vol,
-                    sample_rate=TTS_SAMPLE_RATE,
-                    limiter=self._out_limiter,
-                )
-                await self._send_binary(pcm)
-                sent += 1
+                assert isinstance(piece, str)
+                spoken_pieces.append(piece)
+                stream = self._tts.synthesize(piece, language_code=self.language_code)
+                iterator = stream.__aiter__()
+                while True:
+                    try:
+                        chunk = await anext(iterator)
+                    except StopAsyncIteration:
+                        break
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 - cross output family once
+                        if sent:
+                            log.warning(
+                                "browser_voice[%s] server TTS failed after audio started",
+                                self.session_id,
+                                exc_info=True,
+                            )
+                            await self._send_json({"type": "tts_end", "partial": True})
+                            raise
+                        log.warning(
+                            "browser_voice[%s] server TTS unavailable; using browser speech: %s",
+                            self.session_id,
+                            exc,
+                        )
+                        rest = [q async for q in pieces if isinstance(q, str)]
+                        await self._speak_in_browser(" ".join([piece, *rest]), volume=vol)
+                        return 0
 
+                    pcm = getattr(chunk, "pcm", b"")
+                    rate = int(getattr(chunk, "sample_rate", TTS_SAMPLE_RATE) or TTS_SAMPLE_RATE)
+                    if not pcm:
+                        continue
+                    if sent == 0:
+                        await self._send_json(
+                            {"type": "tts_start", "sample_rate": TTS_SAMPLE_RATE}
+                        )
+                    if rate != TTS_SAMPLE_RATE:
+                        pcm = resample_pcm16(pcm, rate, TTS_SAMPLE_RATE)
+                    # Cloud engines (Cartesia) return a whole piece as ONE chunk, tens of seconds long.
+                    # Send it in ~1 s slices so the pacing below can hold the lead: the browser's
+                    # playback ring keeps ~10 s and drops the OLDEST audio on overrun, which skips
+                    # the start of the piece and jumps to its end.
+                    for offset in range(0, len(pcm), _SLICE_BYTES):
+                        part = apply_output_gain_pcm16(
+                            pcm[offset : offset + _SLICE_BYTES],
+                            vol,
+                            sample_rate=TTS_SAMPLE_RATE,
+                            limiter=self._out_limiter,
+                        )
+                        # Never run more than _MAX_LEAD_S ahead of real time.
+                        if clock_start is None:
+                            clock_start = time.monotonic()
+                        lead = audio_seconds - (time.monotonic() - clock_start)
+                        if lead > _MAX_LEAD_S:
+                            await asyncio.sleep(lead - _MAX_LEAD_S)
+                        audio_seconds += len(part) / 2 / TTS_SAMPLE_RATE
+                        self._playback_until = clock_start + audio_seconds + _PLAYBACK_TAIL_S
+                        self._audio_seconds_total += len(part) / 2 / TTS_SAMPLE_RATE
+                        await self._send_binary(part)
+                        sent += 1
+
+            if not spoken_pieces:
+                return 0  # nothing to say (reply was empty or only filler): stay silent
             if sent == 0:
                 log.warning(
                     "browser_voice[%s] server TTS produced no audio; using browser speech",
                     self.session_id,
                 )
-                await self._speak_in_browser(text, volume=vol)
+                await self._speak_in_browser(" ".join(spoken_pieces), volume=vol)
                 return 0
             await self._send_json({"type": "tts_end"})
         finally:
@@ -463,6 +880,36 @@ class BrowserVoiceSession:
 
     # -- barge-in / lifecycle ---------------------------------------------
 
+    async def _maybe_barge_in(self, utterance_pcm16: bytes) -> None:
+        """The person spoke while Jarvis was talking: stop and answer them instead.
+
+        The microphone also hears Jarvis through the phone speaker, so the utterance
+        is transcribed first and ignored when its words are Jarvis's own (echo).
+        """
+        try:
+            text = ((await self._transcribe(utterance_pcm16)) or "").strip()
+        except Exception:  # noqa: BLE001 — a failed check must never break the session
+            log.debug("browser_voice[%s] barge-in transcription failed", self.session_id, exc_info=True)
+            return
+        state = self._reply_state
+        spoken = " ".join(state.spoken) if state is not None else ""
+        if not text or not self._playing() or self._ended:
+            return
+        if _is_echo(text, spoken) or _is_phantom(text) or _is_weak_barge_in(text):
+            log.warning("browser_voice[%s] barge-in ignored (echo/noise): %r", self.session_id, text)
+            return
+        log.info("browser_voice[%s] barge-in: %s", self.session_id, text)
+        turn = self._turn_task
+        await self._barge_in()
+        if turn is not None and not turn.done():
+            await asyncio.wait({turn})
+        if self._ended:
+            return
+        self._turn_task = asyncio.create_task(
+            self._run_turn(utterance_pcm16, text), name=f"bv-turn-{self.session_id}"
+        )
+        self._turn_task.add_done_callback(self._on_turn_done)
+
     async def _barge_in(self) -> None:
         """Cancel in-flight TTS playback and tell the browser to flush its queue.
 
@@ -480,6 +927,7 @@ class BrowserVoiceSession:
             # that follows, or it would open quiet and audibly swell.
             self._out_limiter.reset()
         self._speaking = False
+        self._playback_until = 0.0
         try:
             await self._send_json({"type": "tts_cancel"})
         except Exception:  # noqa: BLE001, S110 — best-effort on a closing socket
@@ -515,7 +963,7 @@ class BrowserVoiceSession:
             )
 
     def _lang_short(self) -> str:
-        # scrub_for_voice only knows the runtime locales de/en/es/pt (AP-11, regex
+        # scrub_for_voice only knows the runtime locales de/en/es/pt/it (AP-11, regex
         # only); an unknown tag would silently apply the wrong blacklist.
         tag = (self.language_code or "de-DE").split("-", 1)[0].lower()
-        return tag if tag in {"de", "en", "es", "pt"} else "en"
+        return tag if tag in {"de", "en", "es", "pt", "it"} else "en"

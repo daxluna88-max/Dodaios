@@ -951,7 +951,18 @@
     "resize_hint": "Drag to resize the sidebar — double-click to reset",
     "ide_navigation": "IDE navigation",
     "workspace_options": "Workspace options",
-    "open_conversation_failed": "Could not open conversation"
+    "open_conversation_failed": "Could not open conversation",
+    "mic_mode_label": "Microphone mode",
+    "mic_mode_auto": "Automatic (speak, then tap)",
+    "mic_mode_push": "Hold to talk",
+    "mic_mode_always": "Always on",
+    "mic_device_label": "Microphone",
+    "mic_device_default": "System default",
+    "mic_auto_listening": "Listening… tap to pause",
+    "mic_auto_tap": "Tap to speak",
+    "mic_push_hold": "Hold to talk",
+    "mic_push_active": "Speak… release to send",
+    "mic_always_on": "Microphone always on"
   },
   "provider_billing": {
     "api": "API, usage-based billing",
@@ -1020,7 +1031,9 @@
     "prompt_mode_failed": "Prompt Mode could not be switched.",
     "theme_to_light": "Switch to light mode",
     "theme_to_dark": "Switch to dark mode",
-    "back_to_assistant": "Back to {name}"
+    "back_to_assistant": "Back to {name}",
+    "call_end": "End call",
+    "call_end_hint": "Ends the call. The conversation stays in your history."
   },
   "assistant_chat": {
     "voice_enter": "Voice mode",
@@ -2665,6 +2678,12 @@
     "file_open": "View file",
     "never_title": "Never recorded",
     "never_body": "{name} refuses to store these, whatever a conversation contains.",
+    "never_cat": {
+      "political": "Political",
+      "health": "Health",
+      "relationship": "Relationship conflicts",
+      "mbti": "MBTI type"
+    },
     "back_to_profile": "Back to profile",
     "fields": {
       "name": "Name",
@@ -3321,6 +3340,10 @@
       "self_build": "Self-building"
     },
     "languages_group_title": "Languages",
+    "privacy_group_title": "Privacy",
+    "personal_context_title": "Send my profile and memory to cloud models",
+    "personal_context_description": "On: your profile, memory, people and contacts are included in what is sent to the model provider. Off: this data is not added to requests and the assistant knows less about you. Still sent: your messages, the history of this chat, what you ask it to read and the results of tools; what was already sent cannot be taken back. Applies from the next message.",
+    "personal_context_error": "Could not save the setting. Try again.",
     "sections": {
       "voice": "Voice"
     },
@@ -4111,6 +4134,9 @@
       "pt": {
         "label": "Português (Portugal)",
         "description": "Use European Portuguese for every label and button."
+      },
+      "it": {
+        "label": "Italiano (Italian)"
       }
     },
     "reply_options": {
@@ -4118,7 +4144,8 @@
       "en": "{name} answers in English.",
       "de": "{name} antwortet auf Deutsch.",
       "es": "{name} responde en español.",
-      "pt": "{name} responde em português."
+      "pt": "{name} responde em português.",
+      "it": "{name} answers in Italian."
     },
     "stt_options": {
       "auto": "Detect the language you speak automatically.",
@@ -4399,7 +4426,8 @@
     "active_vault_label": "{name} writes to",
     "restart_required_hint": "Restart {name} to start writing to the new location.",
     "restart_now": "Restart now",
-    "restarting": "Restarting…"
+    "restarting": "Restarting…",
+    "remote_note": "Obsidian is optional. It is installed on the computer where Jarvis runs, not on your phone or in the browser: if you use Jarvis remotely you can close this guide. The wiki can also be read inside Jarvis."
   },
   "docs_sidebar": {
     "title": "Documentation",
@@ -7558,7 +7586,8 @@
       "plan_mode": "plan mode only allows reading",
       "cancelled": "it was cancelled",
       "timeout": "nobody approved it in time",
-      "no_approver": "it needed an approval and nobody was there to give it"
+      "no_approver": "it needed an approval and nobody was there to give it",
+      "declined": "you declined it"
     },
     "family": {
       "wiki": "searched the wiki",
