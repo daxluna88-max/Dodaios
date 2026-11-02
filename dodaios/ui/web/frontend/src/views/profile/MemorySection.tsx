@@ -22,7 +22,7 @@ import { localeForUiLanguage } from "@/components/runs/format";
 import { useEventStore } from "@/store/events";
 import { ProfileGroup, SettingRow } from "@/views/profile/ProfileGroup";
 import { SemanticSearchRow } from "@/views/profile/SemanticSearchRow";
-import { parseDoNotRecord, shortenCategory } from "@/views/profile/provenance";
+import { neverCategoryKey, parseDoNotRecord, shortenCategory } from "@/views/profile/provenance";
 
 interface WikiPage {
   ok: boolean;
@@ -207,15 +207,18 @@ export function MemorySection({
           hint={<span className={HINT_INDENT}>{t("profile_view.never_body")}</span>}
         >
           <ul data-testid="never-stored" className={`mt-3 flex flex-wrap gap-1.5 ${HINT_INDENT}`}>
-            {categories.map((c) => (
-              <li
-                key={c}
-                title={c}
-                className="rounded-md border border-border bg-secondary px-2 py-0.5 text-sm text-foreground"
-              >
-                {shortenCategory(c)}
-              </li>
-            ))}
+            {categories.map((c) => {
+              const known = neverCategoryKey(c);
+              return (
+                <li
+                  key={c}
+                  title={c}
+                  className="rounded-md border border-border bg-secondary px-2 py-0.5 text-sm text-foreground"
+                >
+                  {known ? t(`profile_view.never_cat.${known}`) : shortenCategory(c)}
+                </li>
+              );
+            })}
           </ul>
         </SettingRow>
       )}

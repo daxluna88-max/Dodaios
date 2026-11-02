@@ -187,6 +187,65 @@ class UserProfile:
         line = f'- [{date}] {field_label}: {value} — "{quote}"'
         self._body = append_to_section(self._body, "observations", line)
 
+    def purge_observations(self, field_label: str, needle: str | None = None) -> int:
+        """Deletes observation lines about one field (a real "forget").
+
+        With ``needle``, only lines whose value or quoted evidence contains it
+        (case-insensitive) go; without, every line of that field. Returns how many
+        lines were dropped. The audit trail must not keep what the user asked to
+        forget: the model reads these lines back on later turns.
+        """
+        start = "<!-- curator:observations:start -->"
+        end = "<!-- curator:observations:end -->"
+        i = self._body.find(start)
+        j = self._body.find(end)
+        if i == -1 or j == -1 or j < i:
+            return 0
+        block = self._body[i + len(start) : j]
+        key = f"] {field_label}:"
+        needle_cf = needle.strip().casefold() if needle and needle.strip() else None
+        kept: list[str] = []
+        dropped = 0
+        for line in block.splitlines():
+            stripped = line.strip()
+            about_field = stripped.startswith("- [") and key in stripped
+            if about_field and (needle_cf is None or needle_cf in stripped.casefold()):
+                dropped += 1
+                continue
+            if stripped:
+                kept.append(line.rstrip())
+        if dropped:
+            new_block = "\n" + "\n".join(kept) + "\n" if kept else "\n"
+            self._body = self._body[: i + len(start)] + new_block + self._body[j:]
+        return dropped
+
+    def forget(self, cluster: str, field_name: str, value: Any = None) -> tuple[bool, int]:
+        """One real forget, shared by the Profile UI and the ``update_profile`` tool.
+
+        A list field forgets ``value`` (case-insensitive); a scalar field, or a list with
+        no value named, is cleared whole.
+        Either way the observation lines that carry the forgotten value go too, and
+        the audit trail gets one neutral line that never repeats the value or the
+        person's words: the model reads those lines back on later turns. Returns
+        ``(changed, observation_lines_dropped)``; the caller saves.
+        """
+        label = f"{cluster}.{field_name}"
+        current = self.get(cluster, field_name)
+        needle = str(value).strip() if value is not None else ""
+        if isinstance(current, list) and needle:
+            match = next((c for c in current if str(c).strip().casefold() == needle.casefold()), None)
+            removed = match is not None and self.remove_list_item(cluster, field_name, match)
+            dropped = self.purge_observations(label, str(match) if match is not None else needle)
+            neutral = "an item was removed"
+        else:  # a scalar field, or no value named: the whole field goes
+            removed = self.clear(cluster, field_name)
+            dropped = self.purge_observations(label)
+            neutral = "cleared"
+        changed = bool(removed) or dropped > 0
+        if changed:
+            self.append_observation(label, neutral, "forget request")
+        return changed, dropped
+
     def set_section(self, marker: str, content: str) -> None:
         """Replaces the context/projects/calibration section entirely."""
         self._body = replace_section(self._body, marker, content)

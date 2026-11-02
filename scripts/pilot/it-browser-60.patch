@@ -1,0 +1,22 @@
+diff --git a/dodaios/society/browser/bridge.py b/dodaios/society/browser/bridge.py
+index b4a15a6b0..6a7dd2ecb 100644
+--- a/dodaios/society/browser/bridge.py
++++ b/dodaios/society/browser/bridge.py
+@@ -182,6 +182,17 @@ async def execute_live(
+                     text = ""
+                     continue
+                 raise
++        if schema and not text.strip():
++            # An empty reply (a reasoning model that spent its turn thinking) reaches the agent as
++            # "EOF while parsing". Ask once more, then say plainly what happened.
++            text = ""
++            with override_provider_secrets(overrides):
++                async for delta in brain.complete(request):
++                    text += delta.content or ""
++                    if delta.usage:
++                        usage = delta.usage
++            if not text.strip():
++                return {"ok": False, "error": "The model returned an empty reply twice"}
+         for field in usage_total:
+             usage_total[field] += int(usage.get(field, 0))
+         return {"ok": True, "text": text, "usage": usage, "vision_available": vision_available}

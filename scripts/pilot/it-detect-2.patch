@@ -1,0 +1,36 @@
+diff --git a/dodaios/core/turn_language.py b/dodaios/core/turn_language.py
+index 3ffd41745..9f05b949a 100644
+--- a/dodaios/core/turn_language.py
++++ b/dodaios/core/turn_language.py
+@@ -231,14 +231,15 @@ _EN_TOKENS: frozenset[str] = frozenset({
+     "yesterday",
+ })
+ # Spanish words also common in Portuguese ("que", "como", "por", "favor",
+-# "para", "está", "estás", "abre", "clima") are excluded.
++# "para", "está", "estás", "abre", "clima") or Italian ("la", "lo", "un", "una",
++# "con", "del", "al") are excluded.
+ _ES_TOKENS: frozenset[str] = frozenset({
+-    "el", "la", "los", "las", "un", "una", "unos", "unas", "qué",
++    "el", "los", "las", "unos", "unas", "qué",
+     "cómo", "cuándo", "cuando", "dónde", "donde", "quién", "quien",
+     "hace", "hacer", "hoy", "mañana", "ahora", "estoy", "tiempo", "gracias",
+     "hola", "sí", "puedes", "puedo", "puede", "quiero", "necesito", "dime",
+-    "dame", "muestra", "lee", "escribe", "y", "pero", "con", "del", "al",
+-    "muy", "bien", "hay", "yo", "tú", "lo", "eso", "esto", "también",
++    "dame", "muestra", "lee", "escribe", "y", "pero",
++    "muy", "bien", "hay", "yo", "tú", "eso", "esto", "también",
+     "entonces", "tengo",
+ })
+ # Portuguese words also common in Spanish, German or English ("que", "para",
+@@ -269,6 +270,11 @@ _IT_TOKENS: frozenset[str] = frozenset({
+     "io", "lui", "lei", "noi", "voi", "loro", "devo", "deve", "faccio", "fai",
+     "fatto", "poi", "però", "quindi", "inizierò", "lavorare", "scrivere",
+     "aiutare", "aiuto", "capo", "perfetto", "mostrami", "dimmelo", "vorrei",
++    "presto", "lavoro", "lavoriamo", "lavoreremo", "insieme", "subito", "ecco",
++    "dai", "senti", "salve", "allora", "davvero", "niente", "nulla", "qualcosa",
++    "qualche", "ogni", "mai", "buon", "notte", "sera", "mattina", "siamo",
++    "vediamo", "vado", "andiamo", "iniziamo", "cominciamo", "scusa", "scusami",
++    "prego", "arrivederci", "alla", "sulla", "nello", "negli", "dalla", "dallo",
+ })
+ 
+ _SETS: tuple[tuple[str, frozenset[str]], ...] = (

@@ -951,7 +951,18 @@
     "resize_hint": "Arrasta para redimensionar a barra lateral — duplo clique para repor",
     "ide_navigation": "Navegação do IDE",
     "workspace_options": "Opções do espaço de trabalho",
-    "open_conversation_failed": "Não foi possível abrir a conversa"
+    "open_conversation_failed": "Não foi possível abrir a conversa",
+    "mic_mode_label": "Microphone mode",
+    "mic_mode_auto": "Automatic (speak, then tap)",
+    "mic_mode_push": "Hold to talk",
+    "mic_mode_always": "Always on",
+    "mic_device_label": "Microphone",
+    "mic_device_default": "System default",
+    "mic_auto_listening": "Listening… tap to pause",
+    "mic_auto_tap": "Tap to speak",
+    "mic_push_hold": "Hold to talk",
+    "mic_push_active": "Speak… release to send",
+    "mic_always_on": "Microphone always on"
   },
   "provider_billing": {
     "api": "API, faturação por utilização",
@@ -1020,7 +1031,9 @@
     "prompt_mode_failed": "Não foi possível alternar o Modo Prompt.",
     "theme_to_light": "Mudar para modo claro",
     "theme_to_dark": "Mudar para modo escuro",
-    "back_to_assistant": "Voltar a {name}"
+    "back_to_assistant": "Voltar a {name}",
+    "call_end": "Encerrar chamada",
+    "call_end_hint": "Encerra a chamada. A conversa fica no histórico."
   },
   "assistant_chat": {
     "voice_enter": "Modo de voz",
@@ -2665,6 +2678,12 @@
     "file_open": "Ver ficheiro",
     "never_title": "Nunca registado",
     "never_body": "O {name} recusa-se a guardar isto, seja qual for o conteúdo de uma conversa.",
+    "never_cat": {
+      "political": "Política",
+      "health": "Saúde",
+      "relationship": "Conflitos de relacionamento",
+      "mbti": "Tipo MBTI"
+    },
     "back_to_profile": "Voltar ao perfil",
     "fields": {
       "name": "Nome",
@@ -3321,6 +3340,10 @@
       "self_build": "Autoconstrução"
     },
     "languages_group_title": "Idiomas",
+    "privacy_group_title": "Privacidade",
+    "personal_context_title": "Enviar o meu perfil e a minha memória para modelos na nuvem",
+    "personal_context_description": "Ativado: o teu perfil, memória, pessoas e contactos são incluídos no que é enviado ao fornecedor do modelo. Desativado: ficam neste computador e o assistente sabe menos sobre ti. As tuas mensagens e o que lhe pedes para ler continuam a ser enviados. Aplica-se a partir da mensagem seguinte.",
+    "personal_context_error": "Não foi possível guardar a definição. Tenta novamente.",
     "sections": {
       "voice": "Voz"
     },
@@ -4111,6 +4134,9 @@
       "pt": {
         "label": "Português (Portugal)",
         "description": "Português europeu em todas as etiquetas e botões."
+      },
+      "it": {
+        "label": "Italiano (italiano)"
       }
     },
     "reply_options": {
@@ -4118,7 +4144,8 @@
       "en": "{name} answers in English.",
       "de": "{name} antwortet auf Deutsch.",
       "es": "{name} responde en español.",
-      "pt": "{name} responde em português."
+      "pt": "{name} responde em português.",
+      "it": "{name} responde em italiano."
     },
     "stt_options": {
       "auto": "Deteta automaticamente o idioma que falas.",
@@ -4399,7 +4426,8 @@
     "active_vault_label": "O {name} escreve em",
     "restart_required_hint": "Reinicia o {name} para começar a escrever na nova localização.",
     "restart_now": "Reiniciar agora",
-    "restarting": "A reiniciar…"
+    "restarting": "A reiniciar…",
+    "remote_note": "Obsidian is optional. It is installed on the computer where Jarvis runs, not on your phone or in the browser: if you use Jarvis remotely you can close this guide. The wiki can also be read inside Jarvis."
   },
   "docs_sidebar": {
     "title": "Documentação",
@@ -7558,7 +7586,8 @@
       "plan_mode": "o modo de plano só permite leitura",
       "cancelled": "foi cancelado",
       "timeout": "ninguém o aprovou a tempo",
-      "no_approver": "precisava de aprovação e não estava ninguém para a dar"
+      "no_approver": "precisava de aprovação e não estava ninguém para a dar",
+      "declined": "recusaste-a"
     },
     "family": {
       "wiki": "pesquisou a wiki",

@@ -951,7 +951,18 @@
     "resize_hint": "拖动以调整侧边栏大小——双击恢复默认",
     "ide_navigation": "IDE 导航",
     "workspace_options": "工作区选项",
-    "open_conversation_failed": "无法打开对话"
+    "open_conversation_failed": "无法打开对话",
+    "mic_mode_label": "Microphone mode",
+    "mic_mode_auto": "Automatic (speak, then tap)",
+    "mic_mode_push": "Hold to talk",
+    "mic_mode_always": "Always on",
+    "mic_device_label": "Microphone",
+    "mic_device_default": "System default",
+    "mic_auto_listening": "Listening… tap to pause",
+    "mic_auto_tap": "Tap to speak",
+    "mic_push_hold": "Hold to talk",
+    "mic_push_active": "Speak… release to send",
+    "mic_always_on": "Microphone always on"
   },
   "provider_billing": {
     "api": "API，按用量计费",
@@ -1020,7 +1031,9 @@
     "prompt_mode_failed": "无法切换提示词模式。",
     "theme_to_light": "切换到浅色模式",
     "theme_to_dark": "切换到深色模式",
-    "back_to_assistant": "返回 {name}"
+    "back_to_assistant": "返回 {name}",
+    "call_end": "结束通话",
+    "call_end_hint": "结束通话。对话会保留在历史记录中。"
   },
   "assistant_chat": {
     "voice_enter": "语音模式",
@@ -2665,6 +2678,12 @@
     "file_open": "查看文件",
     "never_title": "绝不记录",
     "never_body": "无论对话中出现什么，{name} 都不会保存这些内容。",
+    "never_cat": {
+      "political": "政治",
+      "health": "健康",
+      "relationship": "情感冲突",
+      "mbti": "MBTI 类型"
+    },
     "back_to_profile": "返回个人资料",
     "fields": {
       "name": "名字",
@@ -3321,6 +3340,10 @@
       "self_build": "自主构建"
     },
     "languages_group_title": "语言",
+    "privacy_group_title": "隐私",
+    "personal_context_title": "将我的个人资料和记忆发送给云端模型",
+    "personal_context_description": "开启：你的个人资料、记忆、人物和联系人会包含在发送给模型提供商的内容中。关闭：它们保留在本机，助手对你的了解会减少。你的消息以及你让它读取的内容仍会发送。从下一条消息起生效。",
+    "personal_context_error": "无法保存该设置，请重试。",
     "sections": {
       "voice": "语音"
     },
@@ -4111,6 +4134,9 @@
       "pt": {
         "label": "Português (Portugal)",
         "description": "所有标签和按钮都使用欧洲葡萄牙语。"
+      },
+      "it": {
+        "label": "Italiano（意大利语）"
       }
     },
     "reply_options": {
@@ -4118,7 +4144,8 @@
       "en": "{name} answers in English.",
       "de": "{name} antwortet auf Deutsch.",
       "es": "{name} responde en español.",
-      "pt": "{name} responde em português."
+      "pt": "{name} responde em português.",
+      "it": "{name} 用意大利语回答。"
     },
     "stt_options": {
       "auto": "自动检测你说的语言。",
@@ -4399,7 +4426,8 @@
     "active_vault_label": "{name}写入位置",
     "restart_required_hint": "重启{name}后才会开始写入新位置。",
     "restart_now": "立即重启",
-    "restarting": "正在重启…"
+    "restarting": "正在重启…",
+    "remote_note": "Obsidian is optional. It is installed on the computer where Jarvis runs, not on your phone or in the browser: if you use Jarvis remotely you can close this guide. The wiki can also be read inside Jarvis."
   },
   "docs_sidebar": {
     "title": "文档",
@@ -7558,7 +7586,8 @@
       "plan_mode": "计划模式只允许读取",
       "cancelled": "它被取消了",
       "timeout": "没有人及时批准",
-      "no_approver": "它需要审批，但当时没人能批准"
+      "no_approver": "它需要审批，但当时没人能批准",
+      "declined": "你拒绝了它"
     },
     "family": {
       "wiki": "搜索了知识库",

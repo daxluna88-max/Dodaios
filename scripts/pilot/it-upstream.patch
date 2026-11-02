@@ -1,0 +1,3425 @@
+diff --git a/dodaios/agent_chat/control.py b/dodaios/agent_chat/control.py
+index 95d644663..ba5f4d14e 100644
+--- a/dodaios/agent_chat/control.py
++++ b/dodaios/agent_chat/control.py
+@@ -13,6 +13,7 @@ import uuid
+ from contextvars import ContextVar
+ from typing import Any
+ 
++from .control_locale import ControlError, control_message
+ from .control_store import ControlStore
+ from .control_types import (
+     COMMANDS,
+@@ -28,6 +29,12 @@ log = logging.getLogger(__name__)
+ _command_origin: ContextVar[CommandRequest | None] = ContextVar("chat_command_origin", default=None)
+ 
+ 
++def _control_text(message: str, **fields: object) -> str:
++    """Use the explicit command locale; never change the conversation language."""
++    origin = _command_origin.get()
++    return control_message(message, origin.locale if origin else "en", **fields)
++
++
+ def supports_restricted_turn(session: Any) -> bool:
+     from .service import session_runner
+ 
+@@ -69,7 +76,7 @@ class ChatControls:
+     def state(self, sid: str) -> ChatControlState:
+         session = self.service.store.get_session(sid)
+         if session is None:
+-            raise ValueError("Session not found")
++            raise ControlError("Session not found")
+         state = self.store.get(sid)
+         if state.revision == 0 and not state.last_request:
+             events = self.service.store.list_events(sid)
+@@ -126,7 +133,9 @@ class ChatControls:
+     async def execute(self, sid: str, request: CommandRequest) -> CommandResult:
+         session = self.service.store.get_session(sid)
+         if session is None or session.surface not in ("jarvis", "society"):
+-            raise ValueError("Commands are available in Dodaios and agent chats only")
++            raise ValueError(control_message(
++                "Commands are available in Dodaios and agent chats only", request.locale
++            ))
+         # Stop must remain usable while another command waits for a turn or an approval.
+         if request.command == "stop":
+             return await self._execute(sid, request)
+@@ -155,7 +164,7 @@ class ChatControls:
+             from dodaios.memory.wiki.secret_guard import contains_secret
+ 
+             if contains_secret(request.arguments):
+-                raise ValueError("Configure credentials in app settings, not in chat commands")
++                raise ControlError("Configure credentials in app settings, not in chat commands")
+             state = self.state(sid)
+             state.output_language = _chat_language(
+                 state.output_language, request.arguments or state.last_request
+@@ -168,7 +177,9 @@ class ChatControls:
+             result.status = "started" if data.get("turn_id") or data.get("started") else "done"
+         except Exception as exc:
+             log.warning("Chat command %s failed in %s: %s", request.command, sid, exc)
+-            result.status, result.error = "failed", str(exc)
++            result.status, result.error = "failed", (
++                exc.localized(request.locale) if isinstance(exc, ControlError) else str(exc)
++            )
+         finally:
+             _command_origin.reset(origin_token)
+         result.state = self.state(sid)
+@@ -183,7 +194,7 @@ class ChatControls:
+         session = self.service.store.get_session(sid)
+         if command in ("plan", "review", "recap", "goal") and not supports_restricted_turn(session):
+             if command != "goal" or arguments not in ("", "clear"):
+-                raise ValueError(
++                raise ControlError(
+                     "This runner cannot enforce read-only verification; choose an API model"
+                 )
+         if command in ("help", "clear", "history", "model", "routines"):
+@@ -191,12 +202,12 @@ class ChatControls:
+         if command == "status" or command == "goal" and not arguments:
+             return {"running": self.service.is_running(sid)}
+         if command == "stop":
+-            await self.pause(sid, "Stopped by the user")
++            await self.pause(sid, _control_text("Stopped by the user"))
+             return {"stopped": True}
+         if command == "goal":
+             if arguments == "clear":
+                 if state.goal and state.goal.status == "active":
+-                    await self.pause(sid, "Goal cleared by the user")
++                    await self.pause(sid, _control_text("Goal cleared by the user"))
+                 await self._clear_saved_native(sid)
+                 state = self.state(sid)
+                 if state.goal:
+@@ -206,10 +217,10 @@ class ChatControls:
+                     await self.publish(state)
+                 return {}
+             if state.mode == "plan":
+-                raise ValueError("Leave plan mode with /build before starting a goal")
++                raise ControlError("Leave plan mode with /build before starting a goal")
+             if len(arguments) > 4000:
+-                raise ValueError("Goal must be at most 4000 characters")
+-            await self.pause(sid, "Replaced by a new goal")
++                raise ControlError("Goal must be at most 4000 characters")
++            await self.pause(sid, _control_text("Replaced by a new goal"))
+             state = self.state(sid)
+             now = int(time.time() * 1000)
+             state.goal = GoalState(
+@@ -227,7 +238,7 @@ class ChatControls:
+             self.start(sid)
+             return {"started": True}
+         if command == "plan":
+-            await self.pause(sid, "Plan mode activated")
++            await self.pause(sid, _control_text("Plan mode activated"))
+             state = self.state(sid)
+             if state.mode != "plan":
+                 state.previous_permission = session.permission_mode
+@@ -249,7 +260,7 @@ class ChatControls:
+             self._idle(sid)
+             permission = state.previous_permission or session.permission_mode
+             if permission in ("plan", "read-only"):
+-                raise ValueError(
++                raise ControlError(
+                     "No writable mode was selected before planning; "
+                     "update the agent permissions first"
+                 )
+@@ -266,7 +277,7 @@ class ChatControls:
+         if command == "continue":
+             self._idle(sid)
+             if state.mode == "plan" and state.goal:
+-                raise ValueError("Leave plan mode with /build before resuming a goal")
++                raise ControlError("Leave plan mode with /build before resuming a goal")
+             if state.goal and state.goal.status in ("paused", "blocked"):
+                 state.goal.status = "active"
+                 state.last_status = "running"
+@@ -279,12 +290,12 @@ class ChatControls:
+                 return {"started": sid in self.jobs}
+             if not state.last_request or state.last_status not in ("interrupted", "failed"):
+                 if self._last_failure_was_not_yours(sid):
+-                    raise ValueError(
++                    raise ControlError(
+                         "The task that failed last came from Dodaios, a teammate or a "
+                         "routine, not from you, so /continue cannot resume it. Ask the "
+                         "agent yourself, or let the sender try again."
+                     )
+-                raise ValueError("There is no interrupted task to continue")
++                raise ControlError("There is no interrupted task to continue")
+             return {
+                 "turn_id": await self._send(
+                     sid,
+@@ -295,7 +306,7 @@ class ChatControls:
+             }
+         if command == "find":
+             if not arguments:
+-                raise ValueError("Use /find followed by search text")
++                raise ControlError("Use /find followed by search text")
+             hits = []
+             for event in self.service.store.list_events(sid):
+                 payload = event.get("payload") or {}
+@@ -320,12 +331,12 @@ class ChatControls:
+             return {"hits": hits}
+         if command in ("remember", "message"):
+             if attachments:
+-                raise ValueError("This command accepts text; send files as a separate chat message")
++                raise ControlError("This command accepts text; send files as a separate chat message")
+             self._idle(sid)
+             if state.mode == "plan":
+-                raise ValueError("Plan mode permits reads only; leave it with /build")
++                raise ControlError("Plan mode permits reads only; leave it with /build")
+             if not arguments:
+-                raise ValueError(f"/{command} needs an argument")
++                raise ControlError("/{command} needs an argument", command=command)
+             return await self._tool(sid, command, arguments)
+         if command in ("recap", "review"):
+             self._idle(sid)
+@@ -348,11 +359,11 @@ class ChatControls:
+                     attachments=attachments,
+                 )
+             }
+-        raise ValueError("Unknown command")
++        raise ControlError("Unknown command")
+ 
+     def _idle(self, sid: str) -> None:
+         if self.service.is_running(sid) or sid in self.jobs:
+-            raise ValueError("The chat is working; use /stop first")
++            raise ControlError("The chat is working; use /stop first")
+ 
+     async def _send(self, sid: str, text: str, **kwargs: Any) -> str:
+         if kwargs.get("direct_user", True):
+@@ -387,10 +398,13 @@ class ChatControls:
+             folded = "plan"
+         permission = folded
+         if session.surface == "society" and self.service.is_running(sid):
+-            raise ValueError("The agent chat is working; stop it before changing permissions")
++            raise ControlError("The agent chat is working; stop it before changing permissions")
+         if session.surface == "society" and permission not in ("plan", "read-only"):
+             if not society_mode_supported(runner, permission):
+-                raise ValueError(f"{runner} cannot provide an actionable approval for {permission}")
++                raise ControlError(
++                    "{runner} cannot provide an actionable approval for {permission}",
++                    runner=runner, permission=permission,
++                )
+         self.service.store.update_session(sid, permission_mode=permission)
+         if session.surface == "society":
+             self.service.store.set_permission_override(sid, permission)
+@@ -398,7 +412,7 @@ class ChatControls:
+             bound = await binder(sid) if binder is not None else session
+             self.service.store.set_permission_override(sid, bound.permission_mode)
+             if bound.permission_mode != permission:
+-                raise ValueError("The agent's roster does not permit that chat mode")
++                raise ControlError("The agent's roster does not permit that chat mode")
+             permission = bound.permission_mode
+         state.mode = "plan" if permission in ("plan", "read-only") else "build"
+         set_chat_read_only(sid, state.mode == "plan")
+@@ -418,7 +432,7 @@ class ChatControls:
+         brain = brain_manager()
+         executor = getattr(brain, "_tool_executor", None)
+         if runtime is None or executor is None:
+-            raise ValueError("Agent tools are still starting")
++            raise ControlError("Agent tools are still starting")
+         from dodaios.society.surface import agent_id_of
+ 
+         agent_id = (agent_id_of(sid) or "") if session.surface == "society" else "jarvis"
+@@ -426,7 +440,7 @@ class ChatControls:
+         if command == "message":
+             match = re.fullmatch(r'@(?P<target>"[^"]+"|\S+)\s+(?P<text>[\s\S]+)', arguments)
+             if not match:
+-                raise ValueError("Use /message @Agent text (quote names containing spaces)")
++                raise ControlError("Use /message @Agent text (quote names containing spaces)")
+             tool = MessageAgentTool(runtime, agent_id)
+             args = {"target": match["target"].strip('"'), "text": match["text"], "kind": "say"}
+         else:
+@@ -508,7 +522,7 @@ class ChatControls:
+         await self._send(sid, f"/{command} {arguments}", control_owned=True, control_runner=run)
+         await self.service.wait_turn(sid)
+         if not completed or not completed[-1].success:
+-            raise ValueError(completed[-1].error if completed else "Command was interrupted")
++            raise ValueError(completed[-1].error if completed else _control_text("Command was interrupted"))
+         return {"result": completed[-1].output}
+ 
+     async def user_message(self, sid: str, text: str) -> int | None:
+@@ -520,7 +534,7 @@ class ChatControls:
+         if self.service.is_running(sid) and not active:
+             return None
+         if active:
+-            await self.pause(sid, "User is steering the task")
++            await self.pause(sid, _control_text("User is steering the task"))
+             state = self.state(sid)
+             if state.goal is not None:
+                 state.goal.status = "active"
+@@ -546,7 +560,7 @@ class ChatControls:
+             return
+         if state.goal and state.goal.status == "active":
+             state.goal.status = "paused"
+-            state.goal.reason = "Message was not started"
++            state.goal.reason = _control_text("Message was not started")
+             state.goal.updated_ms = int(time.time() * 1000)
+             state.last_status = "interrupted"
+         else:
+@@ -637,7 +651,7 @@ class ChatControls:
+ 
+         adapter = next((item for item in native_adapters() if item.name == state.goal.engine), None)
+         if adapter is None:
+-            raise ValueError(
++            raise ControlError(
+                 "The previous native goal must be cleared before this chat can continue"
+             )
+         await adapter.clear_saved(self.service, self.service.store.get_session(sid))
+@@ -674,7 +688,7 @@ class ChatControls:
+                     e for e in self.service.store.list_events(sid) if e["kind"] == "turn_finished"
+                 ]
+                 if not finished or finished[-1]["payload"].get("status") != "done":
+-                    raise ValueError("Attachments could not be read; they were kept for /continue")
++                    raise ControlError("Attachments could not be read; they were kept for /continue")
+                 self.store.save_inputs(sid, [])
+             adapters = self.adapters if self.adapters is not None else native_adapters()
+             for adapter in adapters:
+@@ -727,9 +741,9 @@ class ChatControls:
+                 finished = [e for e in events if e["kind"] == "turn_finished"]
+                 if not finished or finished[-1]["payload"].get("status") != "done":
+                     raise ValueError(
+-                        str(finished[-1]["payload"].get("error") or "Work was interrupted")
++                        str(finished[-1]["payload"].get("error") or _control_text("Work was interrupted"))
+                         if finished
+-                        else "No turn result"
++                        else _control_text("No turn result")
+                     )
+                 verdict: GoalVerdict = await (self.evaluator or evaluate_goal)(
+                     session, state.goal.objective, events, state.output_language
+@@ -764,7 +778,7 @@ class ChatControls:
+                     state.goal.status = "blocked"
+                     if state.goal.stalled_steps >= 3:
+                         state.goal.reason = (
+-                            "No verified progress in three consecutive steps. " + verdict.reason
++                            _control_text("No verified progress in three consecutive steps. ") + verdict.reason
+                         )
+                 await self.publish(state)
+                 if state.goal.status != "active":
+@@ -777,7 +791,10 @@ class ChatControls:
+             log.exception("Goal supervision failed for %s", sid)
+             state = self.state(sid)
+             if state.goal and state.goal.id == goal_id and state.goal.status == "active":
+-                state.goal.status, state.goal.reason = "blocked", str(exc)
++                state.goal.status, state.goal.reason = "blocked", (
++                    _control_text(exc.message, **exc.fields)
++                    if isinstance(exc, ControlError) else str(exc)
++                )
+                 await self.publish(state)
+         finally:
+             self.native.pop(sid, None)
+@@ -814,6 +831,6 @@ class ChatControls:
+         self._closed = True
+         for sid in list(self.jobs):
+             try:
+-                await self.pause(sid, "App is closing; use /continue to resume")
++                await self.pause(sid, _control_text("App is closing; use /continue to resume"))
+             except Exception:
+                 log.exception("Could not finish native goal cleanup while closing %s", sid)
+diff --git a/dodaios/agent_chat/control_locale.py b/dodaios/agent_chat/control_locale.py
+new file mode 100644
+index 000000000..0ddcfb743
+--- /dev/null
++++ b/dodaios/agent_chat/control_locale.py
+@@ -0,0 +1,62 @@
++"""Finite slash-command messages, separate from provider diagnostic text.
++
++Only locally raised ControlError instances are translated at the command-result
++boundary. Unknown/provider exceptions keep their original text for diagnosis.
++Command identifiers, runner names and permission identifiers are never translated.
++"""
++from __future__ import annotations
++
++_MESSAGES_IT: dict[str, str] = {
++    "Session not found": "Sessione non trovata",
++    "Commands are available in Dodaios and agent chats only": "I comandi sono disponibili soltanto nelle chat Dodaios e degli agenti",
++    "Configure credentials in app settings, not in chat commands": "Configura le credenziali nelle impostazioni dell’app, non nei comandi della chat",
++    "This runner cannot enforce read-only verification; choose an API model": "Questo esecutore non può garantire verifiche in sola lettura; scegli un modello API",
++    "Stopped by the user": "Fermato dall’utente",
++    "Goal cleared by the user": "Obiettivo rimosso dall’utente",
++    "Leave plan mode with /build before starting a goal": "Esci dalla modalità piano con /build prima di avviare un obiettivo",
++    "Goal must be at most 4000 characters": "L’obiettivo non può superare 4000 caratteri",
++    "Replaced by a new goal": "Sostituito da un nuovo obiettivo",
++    "Plan mode activated": "Modalità piano attivata",
++    "No writable mode was selected before planning; update the agent permissions first": "Prima della pianificazione non era stata selezionata una modalità che consenta modifiche; aggiorna prima i permessi dell’agente",
++    "Leave plan mode with /build before resuming a goal": "Esci dalla modalità piano con /build prima di riprendere un obiettivo",
++    "The task that failed last came from Dodaios, a teammate or a routine, not from you, so /continue cannot resume it. Ask the agent yourself, or let the sender try again.": "L’ultima attività non riuscita proveniva da Dodaios, da un altro agente o da una routine, non da te: /continue non può riprenderla. Chiedilo direttamente all’agente oppure lascia che il mittente riprovi.",
++    "There is no interrupted task to continue": "Non ci sono attività interrotte da riprendere",
++    "Use /find followed by search text": "Usa /find seguito dal testo da cercare",
++    "This command accepts text; send files as a separate chat message": "Questo comando accetta testo; invia i file in un messaggio separato",
++    "Plan mode permits reads only; leave it with /build": "La modalità piano consente solo letture; esci con /build",
++    "/{command} needs an argument": "/{command} richiede un argomento",
++    "Unknown command": "Comando sconosciuto",
++    "The chat is working; use /stop first": "La chat sta lavorando; usa prima /stop",
++    "The agent chat is working; stop it before changing permissions": "La chat dell’agente sta lavorando; fermala prima di cambiare i permessi",
++    "{runner} cannot provide an actionable approval for {permission}": "{runner} non può fornire un’approvazione utilizzabile per {permission}",
++    "The agent's roster does not permit that chat mode": "La configurazione della squadra non consente questa modalità di chat",
++    "Agent tools are still starting": "Gli strumenti degli agenti si stanno ancora avviando",
++    "Use /message @Agent text (quote names containing spaces)": "Usa /message @Agente testo (racchiudi tra virgolette i nomi che contengono spazi)",
++    "Command was interrupted": "Il comando è stato interrotto",
++    "User is steering the task": "L’utente sta modificando la direzione dell’attività",
++    "Message was not started": "Il messaggio non è stato avviato",
++    "The previous native goal must be cleared before this chat can continue": "Occorre rimuovere l’obiettivo nativo precedente prima di continuare questa chat",
++    "Attachments could not be read; they were kept for /continue": "Non è stato possibile leggere gli allegati; sono stati conservati per /continue",
++    "Work was interrupted": "Il lavoro è stato interrotto",
++    "No turn result": "Nessun risultato del turno",
++    "No verified progress in three consecutive steps. ": "Nessun progresso verificato in tre passaggi consecutivi. ",
++    "App is closing; use /continue to resume": "L’app si sta chiudendo; usa /continue per riprendere",
++}
++
++
++def control_message(message: str, locale: str = "en", **fields: object) -> str:
++    """Translate a known local template, preserving unknown diagnostics."""
++    template = _MESSAGES_IT.get(message, message) if locale == "it" else message
++    return template.format(**fields) if fields else template
++
++
++class ControlError(ValueError):
++    """A local command error with an English diagnostic and localized display."""
++
++    def __init__(self, message: str, **fields: object) -> None:
++        self.message = message
++        self.fields = fields
++        super().__init__(control_message(message, **fields))
++
++    def localized(self, locale: str) -> str:
++        return control_message(self.message, locale, **self.fields)
+diff --git a/dodaios/agent_chat/control_types.py b/dodaios/agent_chat/control_types.py
+index 4023424cc..31f256023 100644
+--- a/dodaios/agent_chat/control_types.py
++++ b/dodaios/agent_chat/control_types.py
+@@ -32,7 +32,7 @@ class CommandRequest(BaseModel):
+     command: CommandName
+     arguments: str = Field(default="", max_length=16000)
+     request_id: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
+-    locale: Literal["en", "de", "es", "pt"] = "en"
++    locale: Literal["en", "de", "es", "pt", "it"] = "en"
+     attachments: list[dict] = Field(default_factory=list)
+ 
+ 
+diff --git a/dodaios/agentic_ide/clarify.py b/dodaios/agentic_ide/clarify.py
+index 0572387d6..634df6f95 100644
+--- a/dodaios/agentic_ide/clarify.py
++++ b/dodaios/agentic_ide/clarify.py
+@@ -780,7 +780,7 @@ def _classify(text: str, language: str) -> str:
+         return "unknown"
+     verdicts = {
+         classify_response(text, language=lang)
+-        for lang in {"de", "en", "es", "pt", str(language or "de")}
++        for lang in {"de", "en", "es", "pt", "it", str(language or "de")}
+     }
+     if "veto" in verdicts:
+         return "veto"
+diff --git a/dodaios/brain/ack_brain/spawn_announcement.py b/dodaios/brain/ack_brain/spawn_announcement.py
+index 85a9eabcd..b12a7ad54 100644
+--- a/dodaios/brain/ack_brain/spawn_announcement.py
++++ b/dodaios/brain/ack_brain/spawn_announcement.py
+@@ -112,13 +112,14 @@ _PERSONA_LANGUAGE_NAMES: dict[str, str] = {
+     "en": "English",
+     "es": "Spanish (Spain)",
+     "pt": "European Portuguese (pt-PT, never Brazilian Portuguese)",
++    "it": "Italian",
+ }
+ 
+ _PERSONA_LANGS: frozenset[str] = frozenset(_PERSONA_LANGUAGE_NAMES)
+ 
+ 
+ def get_spawn_persona(language: str, agent_brand: str | None = None) -> str:
+-    """Return the spawn persona prompt for ``language`` (de/en/es/pt).
++    """Return the spawn persona prompt for ``language`` (de/en/es/pt/it).
+ 
+     The persona's ``{agent}`` placeholder is resolved to ``agent_brand`` (the
+     wake-word-derived assistant name + "-Agent"); ``None`` keeps the neutral
+@@ -183,6 +184,16 @@ _FALLBACK_SPAWN: dict[str, tuple[str, ...]] = {
+         "Um {agent} já está a trabalhar nisso. Há mais por trás, por isso vai demorar um "
+         "bocadinho.",
+     ),
++    "it": (
++        "Ci penso io. Ho avviato un {agent} per questo compito più grande; ti avvisa a lavoro finito.",
++        "Capito. Un {agent} sta dando un'occhiata approfondita; ci può volere un momento.",
++        "Va bene, qui serve scavare a fondo. Un {agent} ci sta già lavorando in background.",
++        "Se ne occupa un {agent}. È un compito più corposo, quindi serve un momento.",
++        "Preso. Un {agent} ha in carico questo lavoro un po' più ampio.",
++        "Certo. Un {agent} ci sta già lavorando a fondo; farlo bene richiede un po' di tempo.",
++        "Ho messo un {agent} su questo tema più grande; tornerà con qualcosa di solido.",
++        "Un {agent} ci sta lavorando. C'è più dietro, quindi ci vorrà un attimo.",
++    ),
+ }
+ 
+ _FALLBACK_ALREADY_RUNNING: dict[str, tuple[str, ...]] = {
+@@ -210,6 +221,12 @@ _FALLBACK_ALREADY_RUNNING: dict[str, tuple[str, ...]] = {
+         "Um {agent} ainda está a trabalhar nisso, está quase.",
+         "Paciência, essa tarefa já está com um {agent}.",
+     ),
++    "it": (
++        "Un {agent} ci sta già lavorando; è ancora in corso.",
++        "L'{agent} ha già quel compito, un momento.",
++        "Un {agent} sta ancora lavorando a quello, quasi ci siamo.",
++        "Pazienza, quel compito è già affidato a un {agent}.",
++    ),
+ }
+ 
+ 
+@@ -254,6 +271,13 @@ STILL_RUNNING_PHRASES: dict[str, tuple[str, ...]] = {
+         "Ainda a trabalhar nisso. Volto a falar contigo já a seguir.",
+         "Quase lá; estou a juntar as peças para ti.",
+     ),
++    "it": (
++        "Sono ancora sul compito più grande. Tra un attimo avrò qualcosa di solido per te.",
++        "Questo richiede ancora un po'; continuo a lavorarci in background.",
++        "Non ho ancora finito: preferisco darti qualcosa di fatto bene che qualcosa a metà.",
++        "Ci sto ancora lavorando. Torno da te a breve.",
++        "Quasi finito; sto mettendo insieme i pezzi per te.",
++    ),
+ }
+ 
+ 
+@@ -272,8 +296,12 @@ _COMPLETION_CLAIM_RE = re.compile(
+     r"(?:hecho|hecha|terminado|terminada|completado|completada|enviado|enviada|"  # i18n-allow
+     r"reservado|reservada|feito|feita|concluído|concluída|"  # i18n-allow
+     r"marcado|marcada)\b"  # i18n-allow
++    # Italian: "è stato inviato", "sono state completate", ...
++    r"|\b(?:è|sono)\s+(?:stato|stata|stati|state)\s+(?:già\s+)?"  # i18n-allow
++    r"(?:fatto|fatta|fatti|fatte|completato|completata|completati|completate|"  # i18n-allow
++    r"inviato|inviata|inviati|inviate|prenotato|prenotata|terminato|terminata)\b"  # i18n-allow
+     r"|^\s*(?:erledigt|fertig|done|finished|completed|hecho|listo|feito|"  # i18n-allow
+-    r"pronto|concluído)\s*[.!]?\s*$)",  # i18n-allow
++    r"pronto|concluído|fatto|finito|completato)\s*[.!]?\s*$)",  # i18n-allow
+     re.IGNORECASE,
+ )
+ 
+@@ -315,12 +343,12 @@ def _fix_en_article(text: str) -> str:
+ def _resolve_language(explicit: str | None, utterance: str) -> str:
+     """Resolve the announcement language: explicit hint > utterance heuristic.
+ 
+-    Supports 'de', 'en', 'es' and 'pt' (Runtime Output Language doctrine — every
+-    spoken phrase table covers all four). An explicit hint wins (the
++    Supports 'de', 'en', 'es', 'pt' and 'it' (Runtime Output Language doctrine — every
++    spoken phrase table covers all five). An explicit hint wins (the
+     ``brain.reply_language`` pin / STT tag reaches here as ``language`` — the
+     live source on the voice path); otherwise the utterance heuristic decides,
+     and an inconclusive detection falls back to the shared ``DEFAULT_LOCALE``
+-    (honesty-over-guessing, never a per-layer hardcoded default). All four have
++    (honesty-over-guessing, never a per-layer hardcoded default). All five have
+     an LLM persona (see ``_PERSONA_LANGS``) and a curated fallback pool.
+     """
+     if explicit:
+@@ -331,10 +359,12 @@ def _resolve_language(explicit: str | None, utterance: str) -> str:
+             return "es"
+         if low.startswith("pt"):
+             return "pt"
++        if low.startswith("it"):
++            return "it"
+         if low.startswith("de"):
+             return "de"
+     detected = detect_text_language(utterance or "")
+-    return detected if detected in ("de", "en", "es", "pt") else DEFAULT_LOCALE
++    return detected if detected in ("de", "en", "es", "pt", "it") else DEFAULT_LOCALE
+ 
+ 
+ def _trim_to_sentences(text: str, max_words: int) -> str | None:
+@@ -456,7 +486,7 @@ class SpawnAnnouncementComposer:
+             return validated
+ 
+         # The flash-LLM path only runs for a language with a spawn persona
+-        # (de/en/es/pt); any other code goes straight to the curated pool.
++        # (de/en/es/pt/it); any other code goes straight to the curated pool.
+         if lang in _PERSONA_LANGS:
+             composed = await self._compose_via_llm(
+                 utterance, lang, action, target, brand
+diff --git a/dodaios/brain/spawn_gate.py b/dodaios/brain/spawn_gate.py
+index b27388b1b..2acbbdf7b 100644
+--- a/dodaios/brain/spawn_gate.py
++++ b/dodaios/brain/spawn_gate.py
+@@ -60,7 +60,7 @@ log = logging.getLogger(__name__)
+ SPAWN_VEHICLE_TOOL_NAMES: frozenset[str] = frozenset({"spawn_worker", "multi_spawn"})
+ 
+ 
+-# Explicit delegation vocabulary (DE/EN/ES). A bare "agent" is deliberately
++# Explicit delegation vocabulary (DE/EN/ES/IT). A bare "agent" is deliberately
+ # included: the user-visible brand is "<wake-name> Agent" (dynamic, §4), so
+ # "spawn einen Gustav Agent" must match for ANY wake word without resolving
+ # the live brand. Over-matching is safe by construction — a match only means
+@@ -71,12 +71,13 @@ _DELEGATION_MARKER_RE: re.Pattern[str] = re.compile(
+     r"\bagent(?:en|es|e|s)?\b"
+     r"|\bsub-?agent\w*"
+     r"|\bopen[- ]?claw\w*"
+-    r"|\bworker\w*|\btrabajador\w*"
+-    r"|\bmission\w*|\bmisi[oó]n\w*"
++    r"|\bworker\w*|\btrabajador\w*|\blavorator\w*"  # i18n-allow: ES/IT vehicle nouns
++    r"|\bmission\w*|\bmisi[oó]n\w*|\bmissione\b|\bmissioni\b"  # i18n-allow: ES/IT
+     # delegation verbs / markers
+     r"|\bspawn\w*"
+-    r"|\bdelegier\w*|\bdelegate\w*|\bdeleg[aá]\w*"
++    r"|\bdelegier\w*|\bdelegate\w*|\bdeleg[aá]\w*|\bdelegh\w*"  # i18n-allow: ES/IT
+     r"|\bhintergrund\w*|\bbackground\b|\bsegundo\s+plano\b"
++    r"|\bsfondo\b|\bin\s+background\b"  # i18n-allow: IT background markers
+     r")",
+     re.IGNORECASE,
+ )
+@@ -176,7 +177,7 @@ def _confirm_verdicts(text: str) -> set[str]:
+         from dodaios.voice.echo_confirmation import classify_response  # noqa: PLC0415
+     except Exception:  # noqa: BLE001 — classifier fault = no confirmation
+         return set()
+-    return {classify_response(text, language=lang) for lang in ("de", "en", "es", "pt")}
++    return {classify_response(text, language=lang) for lang in ("de", "en", "es", "pt", "it")}
+ 
+ 
+ class DelegationOfferWindow:
+diff --git a/dodaios/browser_voice/session.py b/dodaios/browser_voice/session.py
+index e5ea15794..25ba2e2ec 100644
+--- a/dodaios/browser_voice/session.py
++++ b/dodaios/browser_voice/session.py
+@@ -515,7 +515,7 @@ class BrowserVoiceSession:
+             )
+ 
+     def _lang_short(self) -> str:
+-        # scrub_for_voice only knows the runtime locales de/en/es/pt (AP-11, regex
++        # scrub_for_voice only knows the runtime locales de/en/es/pt/it (AP-11, regex
+         # only); an unknown tag would silently apply the wrong blacklist.
+         tag = (self.language_code or "de-DE").split("-", 1)[0].lower()
+-        return tag if tag in {"de", "en", "es", "pt"} else "en"
++        return tag if tag in {"de", "en", "es", "pt", "it"} else "en"
+diff --git a/dodaios/core/config.py b/dodaios/core/config.py
+index 5158d3445..76226da81 100644
+--- a/dodaios/core/config.py
++++ b/dodaios/core/config.py
+@@ -2186,7 +2186,7 @@ class UIConfig(BaseModel):
+     # value, so a voice command or the Control API can change it and the open UI
+     # switches live (a ConfigReloaded / UiLanguageChanged event reaches the
+     # frontend over /ws). Distinct from brain.reply_language (what Jarvis SPEAKS).
+-    language: Literal["en", "de", "es", "pt", "zh"] = "en"
++    language: Literal["en", "de", "es", "pt", "zh", "it"] = "en"
+     # Colour theme of the whole desktop app: "dark" (the product default —
+     # matte black + signal yellow), "light" (warm paper + dark gold), or
+     # "system" (follow the OS appearance, re-evaluated live when the OS flips).
+diff --git a/dodaios/core/config_writer.py b/dodaios/core/config_writer.py
+index 2ee9222e4..543e8af40 100644
+--- a/dodaios/core/config_writer.py
++++ b/dodaios/core/config_writer.py
+@@ -1126,8 +1126,8 @@ def set_wiki_semantic_search(
+ def set_reply_language(name: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
+     """Persist the user-facing reply-language pin in ``[brain] reply_language``.
+ 
+-    ``name`` is one of ``auto`` | ``de`` | ``en`` | ``es`` (validated by the
+-    caller). Takes effect as a boot default on the next ``load_config`` call — the
++    ``name`` is one of ``auto`` | ``de`` | ``en`` | ``es`` | ``pt`` | ``it``
++    (validated by the caller). Takes effect on the next ``load_config`` call — the
+     live switch happens via ``BrainManager.set_reply_language``.
+     """
+     _patch_table(path, "brain", "reply_language", name)
+@@ -1145,8 +1145,8 @@ def set_proactivity(level: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
+ def set_ui_language(name: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
+     """Persist the interface (display) language in ``[ui] language``.
+ 
+-    ``name`` is one of ``en`` | ``de`` | ``es`` | ``pt`` | ``zh`` (validated by the
+-    caller).
++    ``name`` is one of ``en`` | ``de`` | ``es`` | ``pt`` | ``zh`` | ``it``
++    (validated by the caller).
+     This is the backend home for what used to be a frontend-only localStorage value,
+     so a voice command / the Control API can change the visible app language and
+     the open UI switches live (the change is broadcast over /ws).
+diff --git a/dodaios/core/self_mod/overrides.py b/dodaios/core/self_mod/overrides.py
+index 30747ba1a..52fab9e48 100644
+--- a/dodaios/core/self_mod/overrides.py
++++ b/dodaios/core/self_mod/overrides.py
+@@ -49,7 +49,7 @@ OVERRIDES: dict[str, SpecOverride] = {
+     "ui.language": SpecOverride(
+         risk_tier="safe", needs_restart=False,
+         description=(
+-            "Interface / display language of the whole app (en/de/es/pt/zh) — what "
++            "Interface / display language of the whole app (en/de/es/pt/zh/it) — what "
+             "the user SEES. Applies live, no restart."
+         ),
+     ),
+@@ -60,7 +60,7 @@ OVERRIDES: dict[str, SpecOverride] = {
+     "brain.reply_language": SpecOverride(
+         risk_tier="safe", needs_restart=False,
+         description=(
+-            "Reply language for spoken/chat output (auto/de/en/es/pt). Canonical "
++            "Reply language for spoken/chat output (auto/de/en/es/pt/it). Canonical "
+             "language setting; applies to the next turn (no restart)."
+         ),
+     ),
+diff --git a/dodaios/core/turn_language.py b/dodaios/core/turn_language.py
+index a51f6f9f0..3ffd41745 100644
+--- a/dodaios/core/turn_language.py
++++ b/dodaios/core/turn_language.py
+@@ -199,6 +199,8 @@ class OutputLanguageValidation:
+ # weak point to each of the two (the pan-European acute-e counts for nothing).
+ _DE_SCRIPT_RE = re.compile(r"[äöüÄÖÜß]")  # i18n-allow: German-script regex
+ _ES_SCRIPT_RE = re.compile(r"[ñÑ¿¡]")
++# Grave accents on e/i/o/u: Italian only (Portuguese writes "à", French is not supported).
++_IT_SCRIPT_RE = re.compile(r"[èìòùÈÌÒÙ]")
+ _PT_SCRIPT_RE = re.compile(r"[ãõçâêôàÃÕÇÂÊÔÀ]")
+ _IBERIAN_ACUTE_RE = re.compile(r"[áíóúÁÍÓÚ]")
+ 
+@@ -254,17 +256,34 @@ _PT_TOKENS: frozenset[str] = frozenset({
+     "são", "foi", "bem", "neste", "nesta", "nesse", "nessa",
+ })
+ 
++# Italian words also common in Spanish or Portuguese ("la", "lo", "una", "con",
++# "te", "mi", "breve", "ma", "vai", "ci") are excluded.
++_IT_TOKENS: frozenset[str] = frozenset({
++    "il", "gli", "che", "non", "per", "sono", "ho", "hai", "ha", "di", "nel",
++    "nella", "della", "dello", "degli", "alla", "sul", "cosa", "dove", "oggi",
++    "domani", "adesso", "grazie", "ciao", "buongiorno", "buonasera", "anche",
++    "ancora", "molto", "fare", "puoi", "posso", "può", "voglio", "vorrei",
++    "potresti", "dimmi", "dammi", "apri", "leggi", "scrivi", "perché", "perche",
++    "questo", "questa", "quello", "quella", "sì", "sto", "stai", "sta", "bene",
++    "tutto", "senza", "sempre", "già", "più", "così", "mio", "mia", "tuo",
++    "io", "lui", "lei", "noi", "voi", "loro", "devo", "deve", "faccio", "fai",
++    "fatto", "poi", "però", "quindi", "inizierò", "lavorare", "scrivere",
++    "aiutare", "aiuto", "capo", "perfetto", "mostrami", "dimmelo", "vorrei",
++})
++
+ _SETS: tuple[tuple[str, frozenset[str]], ...] = (
+     ("de", _DE_TOKENS),
+     ("en", _EN_TOKENS),
+     ("es", _ES_TOKENS),
+     ("pt", _PT_TOKENS),
++    ("it", _IT_TOKENS),
+ )
+ 
+ # Whisper cloud APIs return language NAMES; local faster-whisper returns ISO
+ # codes; some TTS configs use BCP-47 ("pt-PT", "pt-BR"). All collapse to
+-# de/en/es/pt here.
++# de/en/es/pt/it here.
+ _TAG_TO_CODE: dict[str, str] = {
++    "it": "it", "ita": "it", "italian": "it", "italiano": "it",
+     "de": "de", "deu": "de", "ger": "de", "german": "de", "deutsch": "de",
+     "en": "en", "eng": "en", "english": "en", "englisch": "en",
+     "es": "es", "spa": "es", "spanish": "es", "spanisch": "es",
+@@ -275,7 +294,7 @@ _TAG_TO_CODE: dict[str, str] = {
+ 
+ 
+ def normalize_language_tag(tag: object) -> str:
+-    """Collapse an STT/TTS tag to ``de``/``en``/``es``/``pt``/``unknown``."""
++    """Collapse an STT/TTS tag to ``de``/``en``/``es``/``pt``/``it``/``unknown``."""
+     if not tag:
+         return "unknown"
+     head = str(tag).strip().lower().replace("_", "-").split("-", 1)[0]
+@@ -378,11 +397,6 @@ _OTHER_TOKENS: dict[str, frozenset[str]] = {
+             "toi ça aujourd'hui demain fichier ouvre montre s'il plaît plait qu'est "  # i18n-allow
+             "voudrais savoir marche "  # i18n-allow
+         ),
+-        "it": (
+-            "che sono è questo questa quello perché perche grazie ciao buongiorno "  # i18n-allow
+-            "anche ancora molto fare puoi voglio della dello degli nel nella sul "  # i18n-allow
+-            "alla gli dove oggi domani adesso io ho hai abbiamo di stai "  # i18n-allow
+-        ),
+         "nl": (
+             "het een ik jij niet wat hoe waarom waar wanneer bedankt alsjeblieft "  # i18n-allow
+             "alstublieft goed graag kun kunt kan mijn jouw zijn hebben heb deze dit "  # i18n-allow
+@@ -531,6 +545,8 @@ def _add_script_scores(text: str, scores: dict[str, int]) -> None:
+         scores["es"] += 2
+     if _PT_SCRIPT_RE.search(text):
+         scores["pt"] += 2
++    if _IT_SCRIPT_RE.search(text):
++        scores["it"] += 2
+     if _IBERIAN_ACUTE_RE.search(text):
+         scores["es"] += 1
+         scores["pt"] += 1
+diff --git a/dodaios/i18n/locales.py b/dodaios/i18n/locales.py
+index aeab9feb5..9641d8126 100644
+--- a/dodaios/i18n/locales.py
++++ b/dodaios/i18n/locales.py
+@@ -19,7 +19,7 @@ Portuguese, and every failure path picked its own fallback.
+ from __future__ import annotations
+ 
+ #: Languages with a full set of translated system phrases (the catalog files).
+-SUPPORTED_LOCALES: tuple[str, ...] = ("de", "en", "es", "pt")
++SUPPORTED_LOCALES: tuple[str, ...] = ("de", "en", "es", "pt", "it")
+ 
+ #: The language of every system phrase when the person's language has no
+ #: translation or cannot be told. One constant for every layer.
+@@ -31,6 +31,7 @@ SUPPORTED_LANGUAGE_NAMES: dict[str, str] = {
+     "en": "English",
+     "es": "Spanish",
+     "pt": "European Portuguese",
++    "it": "Italian",
+ }
+ 
+ #: English names of languages the detector can recognise but that have no
+@@ -44,7 +45,6 @@ OTHER_LANGUAGE_NAMES: dict[str, str] = {
+     "he": "Hebrew",
+     "hi": "Hindi",
+     "hu": "Hungarian",
+-    "it": "Italian",
+     "ja": "Japanese",
+     "ko": "Korean",
+     "nl": "Dutch",
+diff --git a/dodaios/i18n/locales/it.json b/dodaios/i18n/locales/it.json
+new file mode 100644
+index 000000000..cf86dd386
+--- /dev/null
++++ b/dodaios/i18n/locales/it.json
+@@ -0,0 +1,530 @@
++{
++  "brain": {
++    "cli_failure": {
++      "cause": "Il comando non è riuscito: {cause}",
++      "code": "Il comando è terminato con codice di uscita {code}.",
++      "bare": "Il comando non è riuscito."
++    },
++    "nothing_found": "Non ho trovato nulla al riguardo.",
++    "navigation_ack": "Apro {label}.",
++    "evidence_unfulfilled": "Non sono riuscito a recuperarlo: la chiamata allo strumento non è andata a buon fine. Dimmi se vuoi che riprovi.",
++    "evidence_domain_labels": {
++      "calendar": "il tuo calendario",
++      "email": "la tua posta in arrivo",
++      "tasks": "le tue attività",
++      "repos": "i tuoi repository",
++      "deployments": "le tue distribuzioni",
++      "cloud": "la fatturazione del tuo cloud",
++      "activity": "la cronologia delle tue attività"
++    },
++    "evidence_unfulfilled_domain": "Non sono riuscito a recuperare {label}: l’accesso non è andato a buon fine. Dimmi se vuoi che riprovi.",
++    "action_unfulfilled": {
++      "society_propose_change": "La routine non è stata creata. L’azione di salvataggio non è stata eseguita.",
++      "society-create-routine": "La routine non è stata creata. L’azione di salvataggio non è stata eseguita.",
++      "contact-upsert": "Non ho ancora salvato il contatto. Ripetimi i dettagli e lo aggiungerò.",
++      "wiki-ingest": "Non l’ho ancora annotato nella tua wiki. Ripetimelo e lo scriverò.",
++      "run_shell": "Non l’ho ancora fatto: il comando non è stato eseguito. Ripetimelo e lo farò subito."
++    },
++    "lang_switch_confirm_session": "Per questa sessione risponderò in italiano: non sono riuscito a salvare la scelta in modo permanente.",
++    "subagent_switch_confirm": "Fatto: dalla prossima missione il tuo sottoagente userà {p}.",
++    "subagent_switch_fail": {
++      "missing_credential": "{p} non è collegato. Configuralo prima, poi effettuerò il cambio.",
++      "other": "Non sono riuscito a impostare {p} per il sottoagente."
++    },
++    "provider_switch_confirm": "Fatto: il cervello principale ora usa {p}.",
++    "provider_switch_fail": {
++      "missing_credential": "{p} non è configurato. Aggiungi prima la sua chiave, poi effettuerò il cambio.",
++      "subagent_only": "{p} funziona solo come sottoagente, non come cervello principale.",
++      "other": "Non sono riuscito a impostare {p} per il cervello principale."
++    },
++    "cancel_confirm": "Fatto: ho fermato {n} attività in esecuzione.",
++    "cancel_none": "Non c’erano attività in esecuzione da fermare.",
++    "depth_confirm": {
++      "deep": "Ricevuto: d’ora in poi ragionerò più a fondo.",
++      "fast": "Ricevuto: d’ora in poi ragionerò più velocemente."
++    },
++    "provider_down": [
++      "Non riesco a raggiungere il mio modello linguistico. Un momento, per favore.",
++      "Il mio modello linguistico al momento non è disponibile. Riproverò tra poco.",
++      "Non posso rispondere ora: la connessione al modello non funziona. Dammi un secondo."
++    ],
++    "provider_down_cause": {
++      "missing_key": "Al momento non è impostata alcuna chiave API per il mio modello linguistico. Apri Chiavi API nella barra laterale e aggiungine una per continuare.",
++      "bad_key": "La chiave API salvata viene rifiutata: sembra non valida o scaduta. Sostituiscila in Chiavi API nella barra laterale.",
++      "account_blocked": "L’account del mio modello linguistico sta bloccando le richieste, probabilmente per credito esaurito o un limite raggiunto. Controlla l’account del fornitore.",
++      "rate_limit": "Il fornitore sta limitando le richieste perché sono troppe. Aspetta un momento e ripeti la domanda.",
++      "invalid_model": "Il fornitore non accetta il modello configurato. Controlla la selezione del modello nelle impostazioni.",
++      "context_overflow": "La richiesta è troppo grande per la finestra di contesto del modello configurato. Scegli un modello con un contesto più ampio oppure avvia una nuova chat.",
++      "local_context": "La finestra di contesto del modello locale è troppo piccola per questa richiesta. Aumentala nel server del modello e ricarica il modello; nella sezione Modelli locali usa Regola. Il registro indica la dimensione necessaria.",
++      "unreachable": "Non riesco a raggiungere il fornitore, probabilmente per un problema di rete o del servizio. Riprova tra un momento.",
++      "vision_unsupported": "Nessuno degli assistenti collegati può esaminare immagini al momento. La chiave è presente, ma la visione non è disponibile. Scegli un fornitore con supporto alle immagini in Chiavi API."
++    },
++    "mid_answer_error": "Ho eseguito i passaggi, ma si è verificato un problema mentre preparavo la risposta. Ripeti la domanda tra un momento.",
++    "action_failed": "Ho riconosciuto l’azione, ma non sono riuscito a eseguirla.",
++    "lang_switch_confirm": "Fatto: d’ora in poi risponderò in italiano.",
++    "lang_switch_confirm_auto": "Fatto: d’ora in poi userò la stessa lingua che usi tu.",
++    "ack": {
++      "final_markers": "Fatto.",
++      "generic_ack": [
++        "Va bene, un momento.",
++        "Solo un secondo.",
++        "Ci penso io, dammi un momento.",
++        "Un secondo, ci sto lavorando.",
++        "D’accordo, un attimo."
++      ],
++      "shell_ack": [
++        "Un momento, controllo.",
++        "Do un’occhiata veloce.",
++        "Controllo subito.",
++        "Dammi un secondo per controllare.",
++        "Do una rapida occhiata."
++      ],
++      "cli_service_ack": [
++        "Do un’occhiata a {service}.",
++        "Un momento, controllo {service}.",
++        "Recupero i dati da {service}.",
++        "Controllo subito {service}.",
++        "Do una rapida occhiata in {service}."
++      ],
++      "harness_ack": [
++        "Ricevuto, ci penso io.",
++        "D’accordo, me ne occupo.",
++        "Capito, ci sto lavorando.",
++        "Va bene, comincio subito.",
++        "Certo, dammi un momento."
++      ],
++      "search_topic_ack": [
++        "Va bene, cerco {topic}.",
++        "Cerco subito {topic}.",
++        "Un momento, approfondisco {topic}.",
++        "Vediamo cosa trovo su {topic}."
++      ],
++      "search_generic_ack": [
++        "Va bene, faccio una ricerca.",
++        "Recupero le informazioni.",
++        "Un momento, cerco.",
++        "Dammi un momento per raccogliere i fatti."
++      ],
++      "multi_spawn_ack": [
++        "Va bene, avvio {n} attività in parallelo.",
++        "Mi occupo contemporaneamente di queste {n} attività.",
++        "{n} attività in parallelo: ci penso io."
++      ],
++      "open_app_ack": [
++        "Va bene, apro {app}.",
++        "Un secondo, avvio {app}.",
++        "Avvio {app}."
++      ],
++      "run_skill_ack": [
++        "Va bene, eseguo {skill}.",
++        "Un momento, avvio {skill}.",
++        "Avvio subito {skill}."
++      ],
++      "gmail_read_ack": [
++        "Va bene, controllo la posta.",
++        "Un momento, apro la posta in arrivo.",
++        "Do un’occhiata alla tua posta.",
++        "Controllo la tua posta in arrivo."
++      ],
++      "calendar_ack": [
++        "Va bene, controllo il calendario.",
++        "Un momento, guardo i tuoi impegni.",
++        "Controllo i tuoi appuntamenti.",
++        "Do un’occhiata al calendario."
++      ],
++      "remember_ack": [
++        "Va bene, lo annoto.",
++        "Ricevuto, lo ricorderò.",
++        "Lo scrivo."
++      ],
++      "verify_ack": [
++        "Va bene, controllo.",
++        "Un momento, faccio una prova.",
++        "Lo verifico."
++      ],
++      "server_ack": [
++        "Va bene, avvio il server.",
++        "Un momento, metto in funzione il server.",
++        "Avvio il server."
++      ],
++      "set_config_ack": [
++        "Va bene, aggiorno.",
++        "Un momento, lo modifico.",
++        "Lo regolo subito."
++      ]
++    },
++    "action_honesty": {
++      "action_not_started_phrases": "Non ho avviato alcuna azione per questa richiesta, quindi non ho ancora un risultato. Ripeti la richiesta."
++    },
++    "local_action_gate": {
++      "unsupported_response": "Non posso ancora farlo: non ho uno strumento registrato per questa azione. Indicami quale MCP o integrazione deve gestirla e potrò imparare."
++    }
++  },
++  "tool_loop": {
++    "anti_silence": "Non posso farlo al momento: manca lo strumento adatto.",
++    "meta_debug_ack": "Capito. Che cosa avrebbe dovuto essere diverso, esattamente?"
++  },
++  "output_filter": {
++    "fallback": "Si è verificato un errore."
++  },
++  "speech": {
++    "brain_unavailable": "Non riesco a raggiungere nessuno dei miei modelli linguistici. Controlla se i fornitori hanno ancora credito.",
++    "stt_unavailable": "Non ho capito. Puoi ripeterlo?",
++    "realtime_unavailable": "La connessione vocale in tempo reale non è disponibile. Passo questa sessione alla modalità vocale classica.",
++    "timeout_tool_stall": "Non ho ottenuto una risposta in tempo: uno strumento che stavo aspettando non ha risposto.",
++    "timeout_no_answer": "Non sono riuscito a scoprirlo al momento."
++  },
++  "missions": {
++    "announcer": {
++      "failed_prefix": "La missione non è riuscita.",
++      "reason_label": "Motivo",
++      "cancelled": "Missione annullata.",
++      "timed_out": "La missione ha superato il tempo limite."
++    },
++    "readback": {
++      "failure_reason": {
++        "critic_loop_exhausted": "Tre tentativi non sono bastati.",
++        "critic_rejected": "La revisione non è stata superata.",
++        "task_error": "L’esecutore si è interrotto.",
++        "attempts_timed_out": "È stato raggiunto il tempo limite.",
++        "review_time_budget_exhausted": "È stato raggiunto il tempo limite per la revisione; è disponibile un risultato parziale.",
++        "budget_exceeded": "È stato raggiunto il limite di spesa.",
++        "decompose_failed": "Non sono riuscito a suddividere l’attività.",
++        "crash_recovery": "È stata ripulita una vecchia missione.",
++        "interrupted": "Una missione in esecuzione è stata interrotta; i risultati parziali sono disponibili.",
++        "empty_diff": "Non è stato scritto alcun file.",
++        "critic_unavailable": "Il revisore si è arrestato; il lavoro è conservato nella copia di lavoro.",
++        "worktree_setup_failed": "Non sono riuscito a creare un’area di lavoro.",
++        "checkpoint_missing": "Mancano i progressi salvati, quindi non posso continuare.",
++        "git_missing": "{agents} richiedono che git sia installato e presente nel PATH.",
++        "git_not_a_repository": "{agents} richiedono una copia di lavoro git: usa il programma di installazione basato su git, non un archivio ZIP.",
++        "source_checkout_unavailable": "Questa attività di {agent} richiede una copia del sorgente, che non è disponibile in questa installazione.",
++        "provider_auth": "L’accesso al fornitore AI non è valido oppure è scaduto.",
++        "provider_quota": "La quota del fornitore AI è esaurita.",
++        "provider_unreachable": "Il fornitore AI al momento non è raggiungibile.",
++        "worker_timeout": "L’esecutore ha raggiunto il tempo limite."
++      },
++      "empty_summary": "Attività completata.",
++      "unknown_reason": "errore sconosciuto",
++      "no_tool_call": "Non sono riuscito a farlo: non è stata effettuata alcuna chiamata allo strumento.",
++      "capacity_wait_phrases": {
++        "provider_quota": "La capacità disponibile di {provider} è momentaneamente esaurita.",
++        "provider_auth": "L’accesso a {provider} è scaduto.",
++        "provider_unavailable": "{provider} al momento non è utilizzabile.",
++        "paid_cap_reached": "È stato raggiunto il limite di spesa di questa missione per {provider}.",
++        "paid_daily_cap_reached": "È stato raggiunto il limite giornaliero per l’uso automatico di {provider}.",
++        "paid_consent_revoked": "L’uso automatico di {provider} è stato disattivato.",
++        "saved": "I progressi ottenuti finora sono stati salvati.",
++        "progress": "{done} passaggi completati su {total}, {open} ancora aperti.",
++        "progress_single": "L’attività è ancora aperta.",
++        "file": "1 file salvato.",
++        "files": "{files} file salvati.",
++        "wait": "La missione è in attesa che torni disponibile la capacità necessaria.",
++        "wait_auth": "La missione è in attesa che tu acceda di nuovo.",
++        "paid": "Le API a pagamento saranno usate solo con la tua approvazione esplicita nella sezione Artefatti."
++      },
++      "provider_fallback_name": "fornitore AI",
++      "default_target": "questa azione"
++    },
++    "deliverable": {
++      "deliverable_templates": {
++        "one": "Fatto. Ho salvato {name} come artefatto.",
++        "few": "Fatto. Ho salvato {count} file come artefatti: {joined}.",
++        "many": "Fatto. Ho salvato {count} file come artefatti."
++      },
++      "mission_completed_phrases": "Missione completata.",
++      "delivered_templates": {
++        "one": "Fatto. Ho salvato {name} come artefatto.",
++        "few": "Fatto. Ho salvato {count} file come artefatti: {joined}.",
++        "many": "Fatto. Ho salvato {count} file come artefatti."
++      }
++    }
++  },
++  "realtime": {
++    "local_output_failure": "Non sono riuscito a riprodurlo: l’altoparlante non è più disponibile.",
++    "output_language_failure": "Non sono riuscito a produrre una risposta sicura in italiano.",
++    "handshake_failure": {
++      "timeout": "La connessione vocale non si è avviata in tempo, quindi mi sono fermato.",
++      "unavailable": "Non sono riuscito a stabilire la connessione vocale.",
++      "rate_limited": "La connessione vocale al momento è occupata. Riprova tra un momento.",
++      "no_credits": "Il credito per la connessione vocale è esaurito. Ricaricalo presso il fornitore per riprendere.",
++      "not_offered": "Il tuo account al momento non offre questa connessione vocale. Controlla il piano oppure seleziona un altro account.",
++      "dropped": "La connessione vocale si è interrotta."
++    },
++    "public_fact_uncertainty": "Non sono riuscito a verificarlo in modo affidabile con una fonte pubblica.",
++    "delegate_bridge_texts": [
++      "Ci sto ancora lavorando.",
++      "Un momento, ci siamo quasi.",
++      "Ci sto lavorando, dammi un momento.",
++      "Un attimo, serve ancora un po’ di tempo."
++    ],
++    "interrupt_ack_texts": [
++      "Va bene, mi sono fermato.",
++      "D’accordo, annullo.",
++      "Va bene, lascio perdere."
++    ],
++    "local_voice": {
++      "refusals": {
++        "not_set_up": "La voce locale non è ancora configurata su questa macchina. Avvia la configurazione dalla scheda Voce locale nelle Impostazioni.",
++        "loading": "La voce locale si sta ancora caricando ({percent} %). La scheda Voce locale nelle Impostazioni mostra i progressi.",
++        "failed": "La voce locale non si è avviata. La scheda Voce locale nelle Impostazioni mostra il motivo."
++      }
++    }
++  },
++  "self_mod": {
++    "short_error": {
++      "pre_validate": "il controllo preliminare ha rifiutato il valore",
++      "reload": "la prova di ricaricamento ha rifiutato il nuovo valore",
++      "rollback": "anche il ripristino non è riuscito: occorre ripristinare manualmente",
++      "unexpected": "un errore imprevisto durante la modifica dell’impostazione"
++    }
++  },
++  "voice": {
++    "action": {
++      "phrases": {
++        "cu_done": "Fatto.",
++        "lookup_unspoken": "Ho le informazioni, ma non sono riuscito a leggerle ad alta voce. Vuoi che riprovi?",
++        "lookup_empty": "Non ho trovato nulla al riguardo.",
++        "cu_done_detail": "Fatto. {detail}",
++        "cu_failed": "L’azione sullo schermo non è riuscita.",
++        "cu_failed_reason": "L’azione sullo schermo non è riuscita: {error}",
++        "cu_crashed": "Si è verificato un problema durante l’azione sullo schermo.",
++        "cu_exit_gave_up": "Ho provato sullo schermo, ma non sono riuscito a completare l’azione.",
++        "cu_exit_no_view": "Non vedevo bene lo schermo, quindi mi sono fermato.",
++        "cu_exit_confused": "Non ho ottenuto una risposta valida dal controllo dello schermo, quindi mi sono fermato.",
++        "cu_exit_no_provider": "Al momento non ho un modello AI in grado di vedere lo schermo. Controlla le chiavi API o il credito nelle impostazioni.",
++        "cu_exit_too_many_steps": "L’operazione sullo schermo richiedeva troppi passaggi, quindi mi sono fermato.",
++        "cu_exit_action_failed": "Un’azione sullo schermo non è riuscita, quindi mi sono fermato.",
++        "cu_exit_cancelled": "L’azione sullo schermo è stata annullata.",
++        "cu_exit_needs_elevation": "Ho atteso la conferma dell’amministratore, ma non è arrivata, quindi mi sono fermato.",
++        "cu_blocked_permission": "Mi sono dovuto fermare: Dodaios ha bisogno del permesso {permission}. Attivalo in {pane}. Poi riprova.",
++        "cu_blocked_restart_hint": "Mi sono dovuto fermare: il permesso {permission} potrebbe avere effetto solo dopo aver chiuso e riaperto Dodaios. Riapri l’app, poi riprova.",
++        "cu_blocked_unavailable": "Mi sono dovuto fermare: Dodaios non può richiedere il permesso {permission} in questa sessione.",
++        "cu_blocked_waiting": "Mi sono dovuto fermare perché macOS sta chiedendo il permesso {permission}. Rispondi alla finestra di dialogo, poi riprova.",
++        "cu_blocked_dialog": "Mi sono dovuto fermare perché è aperta una finestra di sistema di macOS. Rispondi personalmente, poi riprova.",
++        "cu_blocked_restricted": "Mi sono dovuto fermare: un permesso necessario è limitato su questo Mac da un profilo o dal controllo parentale. Non è possibile modificarlo dall’app.",
++        "cu_blocked_generic": "Mi sono dovuto fermare perché macOS richiede un permesso per Dodaios. Concedilo in Impostazioni di Sistema, sotto Privacy e sicurezza, poi riprova.",
++        "cu_timeout": "L’azione sullo schermo ha impiegato troppo tempo, oltre {secs} secondi, ed è stata annullata.",
++        "open_app_launched": "Avviata: {app}",
++        "open_app_launched_raised": "Avviata e portata in primo piano: {app}",
++        "open_app_not_found": "L’applicazione “{app}” non è stata trovata.",
++        "cu_not_wired": "Il controllo dello schermo è disattivato su questa macchina. Attivalo nella configurazione con computer_use.enabled, poi riavviami una volta.",
++        "cu_dispatch_ack": "Ci penso io. Me ne occuperò sullo schermo e ti avviserò quando avrò finito.",
++        "cu_awaiting_elevation": "Servono i diritti di amministratore. Conferma la richiesta di sicurezza, poi continuerò.",
++        "cu_awaiting_human": "Questo passaggio richiede il tuo intervento: accedi o completa la verifica, poi continuerò.",
++        "cost_cooldown": "È attiva la pausa per i costi: il budget giornaliero è esaurito. Le nuove richieste riprenderanno al termine della pausa.",
++        "task_budget": "Il budget delle attività per questa conversazione è stato superato.",
++        "daily_budget": "Il budget giornaliero è stato superato.",
++        "tool_failed": "{tool} non è riuscito.",
++        "action_failed_generic": "Non ha funzionato.",
++        "stale_repeat_clarify": "Ho appena risposto a questa domanda. Che cosa vuoi sapere esattamente?",
++        "action_failed_reason": "Non ha funzionato: {reason}",
++        "delegate_no_brain": "Nessuno dei miei modelli ha risposto alla richiesta.",
++        "delegate_no_result": "Non ho ricevuto un risultato verificabile per questa richiesta.",
++        "delegate_failed_internal": "Si è verificato un problema interno, quindi mi sono fermato in sicurezza.",
++        "actions_unavailable": "Al momento non posso eseguire azioni, ma possiamo continuare a parlare.",
++        "actions_not_requested": "Non ho eseguito nulla. Dimmi che cosa vuoi fare.",
++        "skill_loaded_not_run": "Ho caricato le istruzioni, ma non le ho ancora eseguite.",
++        "action_timeout": "Ci è voluto troppo tempo, quindi mi sono fermato.",
++        "spawn_failed_generic": "Non sono riuscito ad avviare l’assistente in background.",
++        "spawn_failed_reason": "Non sono riuscito ad avviare l’assistente in background: {reason}",
++        "spawn_no_runner": "Non posso avviare l’attività al momento. Riavviami.",
++        "artifact_building": "Sto creando “{title}” in background e ti avviserò quando sarà pronto.",
++        "artifact_revising": "Sto rivedendo “{title}” in background e ti avviserò quando sarà pronto.",
++        "workflow_trigger_failed": "La routine {name} non è riuscita ad avviarsi. Riproverò al prossimo orario previsto.",
++        "workflow_scheduler_stalled": "Le routine pianificate al momento non sono in esecuzione. Continuerò a riprovare.",
++        "workflow_step_failed": "La routine {name} si è bloccata a {step}, quindi l’ho fermata.",
++        "workflow_step_failed_reason": "La routine {name} si è bloccata a {step}, quindi l’ho fermata. Motivo: {reason}",
++        "workflow_step_ordinal": "passaggio {n}",
++        "workflow_unnamed": "senza nome",
++        "wiki_saving": "Lo scrivo subito nella wiki.",
++        "wiki_saved": "Salvato nella wiki.",
++        "wiki_saved_detail": "Salvato nella wiki: {detail}.",
++        "wiki_save_failed": "Il salvataggio nella wiki non è riuscito.",
++        "wiki_save_failed_reason": "Il salvataggio nella wiki non è riuscito: {reason}",
++        "wiki_nothing_to_save": "Non sono sicuro di che cosa scrivere nella wiki. Ripetilo includendo il contenuto.",
++        "ide_prompt_sent": "Inviato a {terminal}.",
++        "ide_prompt_sent_files": "Inviato a {terminal}, con {count} file allegati.",
++        "ide_prompt_sent_one_file": "Inviato a {terminal}, con il file {file}.",
++        "ide_terminal_not_running": "{terminal} al momento non è in esecuzione ({status}). Non ho inviato nulla.",
++        "ide_prompt_sent_many": "Inviato a {names}.",
++        "ide_prompt_sent_partial": "Inviato a {names}. Non sono riuscito a raggiungere {failed}.",
++        "ide_prompt_sent_nobody": "Non sono riuscito a raggiungere {failed}, quindi non è in esecuzione nulla.",
++        "ide_prompt_typed_not_started": "Su {names} il testo è soltanto nella casella di inserimento.",
++        "ide_names_pair": "{head} e {last}",
++        "ide_terminals_spawned_one": "{names} è aperto.",
++        "ide_terminals_spawned": "{count} nuovi terminali: {names}.",
++        "ide_terminals_briefing_queued": "Consegnerò loro l’attività non appena i terminali saranno pronti.",
++        "ide_terminals_closed": "Ho chiuso {count} terminali: {names}.",
++        "ide_terminals_none_to_close": "Non ci sono terminali aperti corrispondenti.",
++        "ide_terminals_spawned_capped": "È stato possibile aprirne solo {count}: {names}.",
++        "ide_terminals_open_failed": "Non sono riuscito ad aprire un terminale.",
++        "ide_terminal_kind_unclear": "Ho sentito {spoken}. Intendevi {first} oppure {second}?",
++        "ide_terminal_kind_unclear_one": "Ho sentito {spoken}. Intendevi {first}?",
++        "ide_terminal_kind_unknown": "Non esiste un tipo di terminale {name}. Disponibili: {available}.",
++        "ide_terminals_opened_workspace": "Ho aperto {folder}: {names}.",
++        "ide_terminal_clarify_one": "Ho sentito {spoken}. Intendevi {name}?",
++        "ide_terminal_clarify_many": "Ho sentito {spoken}. Intendevi {names}?",
++        "ide_prompt_already_delivered": "{name} ha ricevuto l’attività alle {time}. Non la invierò due volte.",
++        "join_or": " oppure ",
++        "join_and": " e ",
++        "ide_terminal_clarify_also": "Ho sentito anche {spoken}. Intendevi {names}?",
++        "ide_terminal_who_else": "Ho identificato solo {names}. Chi altro intendevi?",
++        "ide_terminals_nowhere": "Non è aperta alcuna area di lavoro e non ce ne sono di recenti. Scegli una cartella nell’IDE agentico."
++      },
++      "permission_cause_templates": "Al momento Dodaios non dispone del permesso {name}.",
++      "permission_cause_names": {
++        "microphone": "Microfono",
++        "accessibility": "Accessibilità",
++        "screen_recording": "Registrazione schermo",
++        "input_monitoring": "Monitoraggio input",
++        "automation": "Automazione",
++        "event_posting": "Accessibilità"
++      }
++    },
++    "tool_confirmation": {
++      "tool_questions": {
++        "gmail": "Vuoi davvero che invii l’email? Rispondi sì o no.",
++        "gmail_rest": "Vuoi davvero che invii l’email? Rispondi sì o no.",
++        "call-contact": "Vuoi davvero che effettui la chiamata? Rispondi sì o no."
++      },
++      "generic_question": "Vuoi davvero che lo faccia? Rispondi sì o no.",
++      "impact_questions": {
++        "destructive": "Attenzione: questo comando eliminerebbe qualcosa ({commands}). Vuoi davvero che lo esegua? Rispondi sì o no.",
++        "modify": "Questo comando modificherebbe qualcosa sul computer ({commands}). Vuoi che lo esegua? Rispondi sì o no.",
++        "read": "Questo comando legge soltanto dati ({commands}). Vuoi che lo esegua? Rispondi sì o no."
++      },
++      "outcome": {
++        "done": "Fatto.",
++        "vetoed": "Va bene, lascio perdere.",
++        "timeout": "Non ho sentito una risposta, lascio perdere.",
++        "failed": "Non ha funzionato.",
++        "unclear": "Rispondi soltanto sì o no.",
++        "unavailable": "Serve la tua approvazione e qui nessuno può darla. Quindi non l’ho fatto."
++      }
++    },
++    "echo_confirmation": {
++      "value_words": {
++        "on": "attivo",
++        "off": "disattivo",
++        "empty": "vuoto"
++      },
++      "echo_templates": "Ricevuto: {label} passa da {old} a {new}. Confermi?",
++      "echo_templates_sensitive": "Ricevuto: {label} verrà impostato su un nuovo valore. Confermi?",
++      "outcome_words": {
++        "new_value": "il nuovo valore",
++        "old_value": "il valore precedente",
++        "validation_failed": "convalida non riuscita",
++        "unknown_error": "errore sconosciuto"
++      },
++      "outcome_templates": {
++        "safe_applied": "Ricevuto: {label} ora è {new}.",
++        "applied": "Fatto: {label} ora è {new}.",
++        "applied_restart": "Fatto: {label} ora è {new}. Riavvia Dodaios per applicare la modifica.",
++        "validate_failed": "Non è possibile: {err}. L’impostazione resta {old}.",
++        "rollback": "Non sono riuscito a salvare; ho ripristinato lo stato precedente. {err}",
++        "vetoed": "Va bene, lascio perdere.",
++        "timeout": "Non ho sentito una risposta, annullo. L’impostazione resta {old}."
++      }
++    },
++    "parked_results": {
++      "anchor_pools": [
++        "Riguardo alla tua richiesta precedente, {topic}: {result}",
++        "Tornando a {topic}: {result}",
++        "Ecco il risultato su {topic}: {result}"
++      ],
++      "anchor_pools_no_topic": [
++        "Riguardo alla tua richiesta precedente: {result}",
++        "Tornando a ciò che avevi chiesto: {result}"
++      ]
++    },
++    "config_readback": {
++      "phrases": {
++        "applied": "Fatto: {label} ora è {value}.",
++        "applied_restart": "Fatto: {label} ora è {value}. Riavvia Dodaios una volta per applicare la modifica.",
++        "refused": "Non lo modificherò tramite voce: fallo esplicitamente nelle Impostazioni.",
++        "unknown_setting": "Non è un’impostazione che posso modificare.",
++        "invalid_value": "Non è possibile: l’impostazione resta invariata.",
++        "rollback": "Non sono riuscito a salvare; ho ripristinato lo stato precedente."
++      }
++    }
++  },
++  "tools": {
++    "delegate": {
++      "ack": "{name} se ne sta occupando, ti avviserò.",
++      "quiet_ack": "{name} se ne sta occupando.",
++      "error_ack": "{name} se ne sta occupando; segnalerò eventuali impedimenti.",
++      "queued": "L’attività per {name} è stata registrata; l’avvio non è ancora confermato.",
++      "no_agent": "Non conosco un agente chiamato {target}.",
++      "ask_agent": "Intendevi {names}?",
++      "or": " oppure ",
++      "available": "Agenti disponibili: {names}.",
++      "no_fit": "Nessuno dei tuoi agenti è adatto a questa attività.",
++      "refused": "{name} non può occuparsene ora: {reason}.",
++      "not_ready": "Gli agenti non sono ancora pronti.",
++      "status_idle": "{name} al momento non ha attività da svolgere.",
++      "status_working": "{name} sta lavorando a: {text}",
++      "status_last": "{name}: ultimo evento {kind}, {text}",
++      "roster": "I tuoi agenti: {names}.",
++      "empty_roster": "Non hai ancora agenti nella squadra."
++    },
++    "dispatch_review": {
++      "voice_holding_phrases": "Dammi un momento per lavorare a questa attività.",
++      "voice_outcome_templates": {
++        "success": "Fatto: {summary}",
++        "cap_fired": "Ecco il miglior risultato ottenuto, con una riserva: {top_issue}",
++        "fail": "Così non funziona: {summary}",
++        "precheck_fail": "L’attività è troppo breve o poco chiara. Riprova fornendo più contesto."
++      },
++      "voice_fallback_fillers": {
++        "success": "completato",
++        "cap_fired": "alcuni piccoli problemi ancora aperti",
++        "fail": "un difetto architetturale"
++      }
++    }
++  },
++  "telephony": {
++    "default_greetings": "Ciao, come posso aiutarti?",
++    "named_greetings": "Sono {name}. Come posso aiutarti?",
++    "fallback_phrases": "Non ho capito. Puoi ripeterlo?"
++  },
++  "cu": {
++    "indicator": {
++      "esc_hints": "Esc per annullare"
++    }
++  },
++  "clis": {
++    "capability": {
++      "refusal_hints": {
++        "installed": " {name} è installato, ma non è ancora collegato. Dimmi quando vuoi configurarlo.",
++        "catalog": " Il catalogo CLI offre {name} per questa attività: posso aiutarti a configurarlo."
++      }
++    }
++  },
++  "ui": {
++    "desktop": {
++      "conductor_news_phrases": {
++        "failing": "L’attività pianificata {name} ha iniziato a fallire.",
++        "recovered": "L’attività pianificata {name} funziona di nuovo."
++      }
++    }
++  },
++  "harness": {
++    "step_progress": "Completato il passaggio {done} di {total}."
++  },
++  "self_build": {
++    "proposal": {
++      "memory": "Ricorda le correzioni che ripeti: \"{request}\".",
++      "skill": "Una competenza per ciò che continui a chiedere: \"{request}\".",
++      "routine": "Una routine che lo faccia prima che tu lo chieda: \"{request}\".",
++      "agent": "Un agente specializzato per il lavoro dietro \"{request}\"."
++    },
++    "case": {
++      "counted": "Richiesto {count} volte in {days} giorni diversi."
++    },
++    "code": {
++      "title": "Correggi il problema #{number} in {repo}: {title}",
++      "case": "Il problema #{number} in {repo} sembra adatto a un agente autonomo ({signal}). Un agente di programmazione potrebbe occuparsene usando il tuo abbonamento mentre sei assente, in una propria copia di lavoro e su un ramo separato, ed eseguire i test ({tests}). Il risultato è una richiesta di integrazione che chiude il problema, in bozza salvo che tu abbia autorizzato l’integrazione automatica per questo repository. {url}"
++    }
++  }
++}
+diff --git a/dodaios/live/tools.py b/dodaios/live/tools.py
+index 36e2411ec..6593ed213 100644
+--- a/dodaios/live/tools.py
++++ b/dodaios/live/tools.py
+@@ -52,9 +52,13 @@ _GO_AHEAD_WORDS = frozenset(
+         # European Portuguese  # i18n-allow: spoken confirmation vocabulary
+         "sim", "avança", "avanca", "força", "forca", "pode", "podes", "faz",
+         "isso", "manda", "envia", "certo", "confirmado",
++        # Italian  # i18n-allow: spoken confirmation vocabulary
++        "sì", "certo", "certamente", "conferma", "confermo", "confermato",  # i18n-allow
++        "procedi", "vai", "avanti", "fallo", "invialo", "manda", "mandalo",  # i18n-allow
++        "esatto", "ora", "pure", "va", "bene",  # i18n-allow
+     }
+ )  # fmt: skip
+-_APPROVAL_LOCALES = ("de", "en", "es", "pt")
++_APPROVAL_LOCALES = ("de", "en", "es", "pt", "it")
+ _RECENT_SEGMENTS = 4
+ _REQUEST_TEXT_CHARS = 1200
+ # Declared before every other tool so the size budget never drops them: the
+diff --git a/dodaios/missions/events.py b/dodaios/missions/events.py
+index c49be87c9..bc8d9b340 100644
+--- a/dodaios/missions/events.py
++++ b/dodaios/missions/events.py
+@@ -22,7 +22,7 @@ from .ids import uuid7_str
+ # language (``SUPPORTED_REPLY_LANGUAGES`` in dodaios/brain/manager.py minus
+ # "auto"), mirrored in frontend/src/types/missions.ts. Parity is guarded by
+ # tests/missions/test_mission_language_pt.py and test_mission_approved_parity.py.
+-MissionLanguage = Literal["de", "en", "es", "pt"]
++MissionLanguage = Literal["de", "en", "es", "pt", "it"]
+ MISSION_LANGUAGES: Final[tuple[str, ...]] = SUPPORTED_LOCALES
+ 
+ 
+diff --git a/dodaios/missions/voice/readback.py b/dodaios/missions/voice/readback.py
+index ebe33da6b..6e418b09e 100644
+--- a/dodaios/missions/voice/readback.py
++++ b/dodaios/missions/voice/readback.py
+@@ -35,7 +35,7 @@ if TYPE_CHECKING:
+ 
+ # Every supported reply language (``SUPPORTED_REPLY_LANGUAGES`` minus "auto");
+ # all locales are equal, so every table below carries each of them.
+-Lang = Literal["de", "en", "es", "pt"]
++Lang = Literal["de", "en", "es", "pt", "it"]
+ TemplateKey = Literal[
+     "approved",
+     "failed",
+@@ -57,6 +57,7 @@ MAX_VOICE_CHARS: Final[int] = 280
+ 
+ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-allow: German TTS voice-output templates (paired de/en)
+     "approved": {
++        "it": ["Fatto. {summary}", "Completato. {summary}"],
+         "de": [
+             "Fertig. {summary}",  # i18n-allow
+             "Erledigt. {summary}",
+@@ -76,6 +77,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
+         ],
+     },
+     "failed": {
++        "it": ["L’attività non è riuscita. Motivo: {reason}", "Attività non riuscita. {reason}"],
+         "de": [
+             "Die Aufgabe ist gescheitert. Grund: {reason}",  # i18n-allow
+             "Aufgabe gescheitert. {reason}",
+@@ -95,6 +97,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
+         ],
+     },
+     "timeout": {
++        "it": ["L’attività ha superato il tempo limite."],
+         "de": [
+             "Die Aufgabe ist in einen Timeout gelaufen.",  # i18n-allow
+             "Zeitueberschreitung. Aufgabe abgebrochen.",
+@@ -110,6 +113,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
+         ],
+     },
+     "cancelled": {
++        "it": ["Attività annullata."],
+         "de": [
+             "Aufgabe abgebrochen.",
+             "Die Aufgabe wurde gestoppt.",  # i18n-allow
+@@ -125,6 +129,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
+         ],
+     },
+     "budget_warn_50": {
++        "it": ["È stata utilizzata metà del budget."],
+         "de": [
+             "Halbes Budget verbraucht.",
+             "Fuenfzig Prozent vom Budget weg.",
+@@ -140,6 +145,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
+         ],
+     },
+     "budget_warn_80": {
++        "it": ["È stato utilizzato l’ottanta per cento del budget."],
+         "de": [
+             "Achtzig Prozent vom Budget weg.",
+             "Das Budget wird knapp.",  # i18n-allow
+@@ -155,6 +161,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
+         ],
+     },
+     "budget_exceeded": {
++        "it": ["Budget esaurito. Attività interrotta."],
+         "de": [
+             "Budget aufgebraucht. Aufgabe abgebrochen.",
+             "Das Limit ist erreicht. Stoppe die Aufgabe.",  # i18n-allow
+@@ -170,6 +177,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
+         ],
+     },
+     "injection_blocked": {
++        "it": ["È stato rilevato un tentativo di manipolazione. Attività interrotta."],
+         "de": [
+             "Injection-Versuch erkannt. Aufgabe abgebrochen.",
+             "Ein verdaechtiger Output wurde geblockt. Aufgabe gestoppt.",  # i18n-allow
+@@ -185,6 +193,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
+         ],
+     },
+     "path_guard_blocked": {
++        "it": ["È stato toccato un percorso protetto. Attività interrotta."],
+         "de": [
+             "Ein geschuetzter Pfad wurde angefasst. Aufgabe abgebrochen.",  # i18n-allow
+             "Geblockter Pfad in der Aufgabe. Stoppe.",
+@@ -200,6 +209,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
+         ],
+     },
+     "destructive_confirm": {
++        "it": ["Questa azione eliminerà {target}. Vuoi continuare? Conferma nell’interfaccia."],
+         "de": [
+             "Das wird {target} loeschen. Bist du sicher? Bitte in der UI bestaetigen.",  # i18n-allow
+             "Destruktive Aktion: {target}. Bestaetigung erforderlich.",
+@@ -215,6 +225,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
+         ],
+     },
+     "crash_recovery": {
++        "it": ["Un’attività precedente è stata interrotta a causa di un arresto anomalo."],
+         "de": [
+             "Eine vorherige Aufgabe wurde wegen Crash abgebrochen.",  # i18n-allow
+             "Ich habe eine abgebrochene Aufgabe gefunden und sauber abgeschlossen.",  # i18n-allow
+@@ -230,6 +241,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
+         ],
+     },
+     "iteration_running": {
++        "it": ["Tentativo {n} in corso."],
+         "de": [
+             "Iteration {n} laeuft.",  # i18n-allow
+             "Naechster Versuch laeuft.",  # i18n-allow
+diff --git a/dodaios/speech/pipeline.py b/dodaios/speech/pipeline.py
+index 8e27ceff3..7510e75e2 100644
+--- a/dodaios/speech/pipeline.py
++++ b/dodaios/speech/pipeline.py
+@@ -484,7 +484,7 @@ _REALTIME_UNAVAILABLE_PHRASE: dict[str, str] = i18n_catalog.table("speech.realti
+ #   • NO-ANSWER — a bare provider stall / total cap with no tool evidence:
+ #     honestly admit we could not find it out, never the vague "took too long".
+ # Both are short, TTS-clean (``_speak`` does not scrub — no em-dash, two short
+-# sentences), and carry all supported locales (de/en/es/pt). String-only: NO LLM
++# sentences), and carry all supported locales (de/en/es/pt/it). String-only: NO LLM
+ # call in this timeout/scrub path (AP-11). Resolved through the ONE output-
+ # language decision via ``_resolve_timeout_phrase`` below (— no
+ # per-layer language re-derivation).
+@@ -505,6 +505,7 @@ _CLARIFY_QUESTION_PHRASE: dict[str, str] = {
+     "en": "What do you mean exactly?",
+     "es": "¿Qué quieres decir exactamente?",
+     "pt": "O que queres dizer exatamente?",
++    "it": "Cosa intendi esattamente?",
+ }
+ 
+ # AD-OE6 confirmation for a SUCCESSFUL wordless desktop-action turn. When the
+@@ -522,21 +523,22 @@ _ACTION_DONE_PHRASE: dict[str, str] = {
+     "en": "Done.",
+     "es": "Listo.",
+     "pt": "Feito.",
++    "it": "Fatto.",
+ }
+ 
+ 
+-_PHRASE_LANGS: frozenset[str] = frozenset({"de", "en", "es", "pt"})
++_PHRASE_LANGS: frozenset[str] = frozenset({"de", "en", "es", "pt", "it"})
+ 
+ 
+ def _phrase_lang(lang: str | None) -> str:
+-    """Normalize a detected-language tag to a canned-phrase key ("de"/"en"/"es"/"pt").
++    """Normalize a detected-language tag to a canned-phrase key ("de"/"en"/"es"/"pt"/"it").
+ 
+     The utterance language reaches the phrase pickers in two shapes: full
+     language NAMES from the STT transcript (``(transcript.language or
+     "en").lower()`` → ``"german"``/``"spanish"`` for Groq Whisper) and
+     BCP-47-ish CODES ("de", "de-DE", "es-ES") from config pins / announcements.
+     Both collapse through the canonical ``normalize_language_tag`` so every
+-    supported language (de/en/es/pt) selects its own phrase set; anything
++    supported language (de/en/es/pt/it) selects its own phrase set; anything
+     unrecognised falls back to ``DEFAULT_LOCALE``. The pickers used to test
+     ``lang.startswith("de")`` only — ``"german"`` does not start with "de", so
+     every canned AD-OE6 fallback (clarify question, action-done ack,
+@@ -545,7 +547,7 @@ def _phrase_lang(lang: str | None) -> str:
+     bug 2026-06-09: "antwortet fast immer mit einer englischen
+     Standardphrase"); a Spanish speaker hit the same trap until this normalizer
+     learned ``es`` (Runtime Output Language doctrine). The canned tables now
+-    carry every supported language (de/en/es/pt).
++    carry every supported language (de/en/es/pt/it).
+     """
+     code = normalize_language_tag(lang)
+     return code if code in _PHRASE_LANGS else DEFAULT_LOCALE
+@@ -1917,6 +1919,8 @@ def _smalltalk_fallback_for_non_substantive(prompt: str, lang: str) -> str | Non
+         "como estas",  # i18n-allow: Spanish wellbeing marker
+         "como estás",  # i18n-allow: PT wellbeing marker
+         "tudo bem",  # i18n-allow: PT wellbeing marker
++        "come stai",  # i18n-allow: IT wellbeing marker
++        "come va",  # i18n-allow: IT wellbeing marker
+     )
+     if not any(marker in low for marker in wellbeing_markers):
+         return None
+@@ -1927,6 +1931,8 @@ def _smalltalk_fallback_for_non_substantive(prompt: str, lang: str) -> str | Non
+         return "Estoy bien. ¿Qué hacemos ahora?"  # i18n-allow: Spanish TTS
+     if phrase_lang == "pt":
+         return "Estou bem. O que fazemos a seguir?"  # i18n-allow: PT TTS
++    if phrase_lang == "it":
++        return "Sto bene. Cosa facciamo adesso?"  # i18n-allow: IT TTS
+     return "I'm good, Ruben. What's next?"
+ 
+ 
+@@ -5073,6 +5079,10 @@ class SpeechPipeline:
+                 "[execução agendada] Está na hora do skill '{name}'. Executa as "
+                 "suas instruções agora e informa brevemente o resultado."
+             ),
++            "it": (
++                "[esecuzione programmata] È ora della skill '{name}'. Esegui "  # i18n-allow
++                "ora le sue istruzioni e riferisci brevemente il risultato."
++            ),
+             "en": (
+                 "[scheduled run] It is time for the '{name}' skill. Execute its "
+                 "instructions now and report the result briefly."
+@@ -17068,8 +17078,8 @@ class SpeechPipeline:
+                 # These are *runtime* bilingual output strings (not artifacts),
+                 # so they stay bilingual per the voice-output policy.
+                 spoken_phrases: dict[str, dict[str, str]] = {
+-                    "incomplete": {"de": "Mhm?", "en": "Mhm?", "es": "¿Mhm?", "pt": "Hum?"},
+-                    "abort": {"de": "Okay.", "en": "Okay.", "es": "Vale.", "pt": "Ok."},
++                    "incomplete": {"de": "Mhm?", "en": "Mhm?", "es": "¿Mhm?", "pt": "Hum?", "it": "Mh?"},
++                    "abort": {"de": "Okay.", "en": "Okay.", "es": "Vale.", "pt": "Ok.", "it": "Ok."},
+                 }
+                 lang_key = _phrase_lang(lang)
+                 phrase = spoken_phrases.get(kind, {}).get(lang_key, "Mhm?")
+@@ -18380,7 +18390,7 @@ class SpeechPipeline:
+         return result is not False
+ 
+     #: Spoken readback for a Jarvis-Agent background task that finished off the
+-    #: chat path. de/en/es/pt so the readback follows the conversation language
++    #: chat path. de/en/es/pt/it so the readback follows the conversation language
+     #: instead of a hardcoded German literal (forensic 2026-06-23). German
+     #: strings are TTS product surface, not source artifacts (i18n-allow).
+     _BG_READBACK_PHRASES: dict[str, dict[str, str]] = {
+@@ -18408,15 +18418,21 @@ class SpeechPipeline:
+             "fail": "Isso não funcionou. {e}",
+             "unknown_err": "erro desconhecido",
+         },
++        "it": {
++            "done": "Fatto.",
++            "done_summ": "Fatto. {s}",
++            "fail": "Non ha funzionato. {e}",
++            "unknown_err": "errore sconosciuto",
++        },
+     }
+ 
+     _BCP47: dict[str, str] = {
+-        "de": "de-DE", "en": "en-US", "es": "es-ES", "pt": "pt-PT",
++        "de": "de-DE", "en": "en-US", "es": "es-ES", "pt": "pt-PT", "it": "it-IT",
+     }
+ 
+     @classmethod
+     def _bcp47(cls, lang: object) -> str | None:
+-        """Map a de/en/es/pt turn-language code to a TTS BCP-47 locale, else None.
++        """Map a de/en/es/pt/it turn-language code to a TTS BCP-47 locale, else None.
+ 
+         Single source for the whole pipeline — replaces four hand-copied maps,
+         one of which (the task-ack prerender) had silently dropped ``es``, so a
+diff --git a/dodaios/ui/web/control_routes.py b/dodaios/ui/web/control_routes.py
+index c8052c385..673a5aa47 100644
+--- a/dodaios/ui/web/control_routes.py
++++ b/dodaios/ui/web/control_routes.py
+@@ -154,7 +154,7 @@ class PendingIdBody(BaseModel):
+ class LanguageBody(BaseModel):
+     # Constrained so a bad value (e.g. "zh") is rejected with 422 at the boundary
+     # instead of being written to jarvis.toml and silently normalised to "auto".
+-    reply_language: Literal["auto", "de", "en", "es", "pt"]
++    reply_language: Literal["auto", "de", "en", "es", "pt", "it"]
+ 
+ 
+ class SecretBody(BaseModel):
+@@ -313,14 +313,14 @@ def reject_config(body: PendingIdBody, request: Request) -> dict[str, Any]:
+ 
+ @router.put("/language", dependencies=[Depends(require_control_key)])
+ def put_language(body: LanguageBody, request: Request) -> dict[str, Any]:
+-    """Switch the language. A concrete code (de/en/es/pt) sets BOTH the reply
++    """Switch the language. A concrete code (de/en/es/pt/it) sets BOTH the reply
+     language (what the assistant speaks) AND the interface language (what the user
+     sees) so the whole experience switches; "auto" only affects replies (it
+     mirrors the input language). Both are SAFE -> applied immediately, and the
+     interface switches live in the open UI via the ConfigReloaded broadcast."""
+     store = _pending_store(request)
+     reason = "control-api language switch"
+-    switch_ui = body.reply_language in ("de", "en", "es", "pt")
++    switch_ui = body.reply_language in ("de", "en", "es", "pt", "it")
+     # Validate BOTH writes before applying either, so a refused interface
+     # language never leaves the reply language switched on its own.
+     writer = _control_writer(request)
+diff --git a/dodaios/ui/web/frontend/src/types/missions.ts b/dodaios/ui/web/frontend/src/types/missions.ts
+index 367e6c848..be4c819c2 100644
+--- a/dodaios/ui/web/frontend/src/types/missions.ts
++++ b/dodaios/ui/web/frontend/src/types/missions.ts
+@@ -58,7 +58,7 @@ export interface MissionDispatched extends BasePayload {
+   prompt: string;
+   parent_mission_id: string | null;
+   priority: number;
+-  language: "de" | "en" | "es" | "pt";
++  language: "de" | "en" | "es" | "pt" | "it";
+ }
+ 
+ export interface MissionPlanReady extends BasePayload {
+diff --git a/dodaios/ui/web/settings_routes.py b/dodaios/ui/web/settings_routes.py
+index 0ce39bf08..b8073d4e2 100644
+--- a/dodaios/ui/web/settings_routes.py
++++ b/dodaios/ui/web/settings_routes.py
+@@ -551,7 +551,7 @@ def put_team_proxy(body: TeamProxyBody, request: Request) -> dict[str, object]:
+ # over /ws). Key-free same-origin route, like reply-language.
+ # ----------------------------------------------------------------------
+ 
+-_UI_LANGUAGES: tuple[str, ...] = ("en", "de", "es", "pt", "zh")
++_UI_LANGUAGES: tuple[str, ...] = ("en", "de", "es", "pt", "zh", "it")
+ 
+ 
+ class UiLanguageBody(BaseModel):
+diff --git a/dodaios/voice/action_phrases.py b/dodaios/voice/action_phrases.py
+index 216ee3163..f872dbafa 100644
+--- a/dodaios/voice/action_phrases.py
++++ b/dodaios/voice/action_phrases.py
+@@ -7,7 +7,7 @@ displayed VERBATIM, so it must be rendered in the turn's language HERE (live
+ bug 2026-06-15: an all-English computer-use turn ended with the German
+ "Erledigt." completion readback).
+ 
+-Pure dict lookups — no LLM, no IO (AP-9 / AP-11). Languages: de / en / es / pt;
++Pure dict lookups — no LLM, no IO (AP-9 / AP-11). Languages: de / en / es / pt / it;
+ an unknown language falls back to German (the historical default). The German
+ column is intentionally the same wording the paths used before, so a German
+ turn is byte-identical to the old behavior.
+@@ -20,9 +20,9 @@ from dodaios.core.turn_language import resolve_turn_language
+ from dodaios.i18n import catalog as i18n_catalog
+ 
+ _DEFAULT = "en"
+-_SUPPORTED = ("de", "en", "es", "pt")
++_SUPPORTED = ("de", "en", "es", "pt", "it")
+ 
+-#: ``HarnessTask.env`` key carrying the turn's resolved output language (de/en/es/pt)
++#: ``HarnessTask.env`` key carrying the turn's resolved output language (de/en/es/pt/it)
+ #: into the computer-use harness, so the in-harness verifier writes its spoken
+ #: ``proof`` in the user's language instead of defaulting to English (live bug
+ #: 2026-06-27: a German turn read back "Erledigt — The file explorer window is
+@@ -45,9 +45,9 @@ _PHRASES: dict[str, dict[str, str]] = i18n_catalog.nested_table("voice.action.ph
+ 
+ 
+ def resolve_phrase_language(reply_language: str | None, user_text: str) -> str:
+-    """Resolve de/en/es/pt for a deterministic action phrase.
++    """Resolve de/en/es/pt/it for a deterministic action phrase.
+ 
+-    An explicit ``brain.reply_language`` pin (de/en/es/pt) wins; otherwise the
++    An explicit ``brain.reply_language`` pin (de/en/es/pt/it) wins; otherwise the
+     turn's language is detected from ``user_text``; ambiguous text keeps the
+     historical German default. Mirrors ``BrainManager._direct_ack_language`` so
+     every non-LLM spoken path resolves language the same way.
+@@ -302,6 +302,7 @@ _REASON_FAMILIES: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
+             "en": "{subject} is not connected. Connect it in the Plugins view.",
+             "es": "{subject} no está conectado. Conéctalo en la vista de Plugins.",
+             "pt": "{subject} não está ligado. Liga-o na vista de Plugins.",
++            "it": "{subject} non è collegato. Collegalo nella vista Plugin.",
+         },
+     ),
+     (
+@@ -315,6 +316,7 @@ _REASON_FAMILIES: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
+             "en": "The sign-in for {subject} expired. Reconnect it in the Plugins view.",
+             "es": "La sesión de {subject} caducó. Vuelve a conectarlo en la vista de Plugins.",
+             "pt": "A sessão de {subject} expirou. Volta a ligá-lo na vista de Plugins.",
++            "it": "La sessione di {subject} è scaduta. Ricollegalo nella vista Plugin.",
+         },
+     ),
+     (
+@@ -324,6 +326,7 @@ _REASON_FAMILIES: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
+             "en": "I don't know a skill called {subject}.",
+             "es": "No conozco ninguna skill llamada {subject}.",
+             "pt": "Não conheço nenhuma skill chamada {subject}.",
++            "it": "Non conosco nessuna skill chiamata {subject}.",
+         },
+     ),
+     (
+@@ -335,6 +338,7 @@ _REASON_FAMILIES: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
+             "en": "The skill {subject} is still a draft. Promote it first.",
+             "es": "La skill {subject} sigue siendo un borrador. Actívala primero.",
+             "pt": "A skill {subject} ainda é um rascunho. Ativa-a primeiro.",
++            "it": "La skill {subject} è ancora una bozza. Attivala prima.",
+         },
+     ),
+     (
+@@ -347,6 +351,7 @@ _REASON_FAMILIES: tuple[tuple[re.Pattern[str], dict[str, str]], ...] = (
+             "en": "The skill {subject} is switched off. Switch it back on first.",
+             "es": "La skill {subject} está desactivada. Vuelve a activarla primero.",
+             "pt": "A skill {subject} está desativada. Volta a ativá-la primeiro.",
++            "it": "La skill {subject} è disattivata. Riattivala prima.",
+         },
+     ),
+ )
+@@ -382,12 +387,14 @@ _PERMISSION_FIXED_CAUSES: dict[str, dict[str, str]] = {
+         "en": "Dodaios paused because a macOS system dialog is open.",
+         "es": "Dodaios se detuvo porque hay un cuadro de diálogo del sistema abierto.",
+         "pt": "O Dodaios parou porque há uma caixa de diálogo do sistema aberta.",
++        "it": "Dodaios si è fermato perché c'è una finestra di dialogo di sistema aperta.",
+     },
+     "A macOS permission is missing right now.": {
+         "de": "Eine macOS-Berechtigung fehlt gerade.",  # i18n-allow
+         "en": "A macOS permission is missing right now.",
+         "es": "Falta un permiso de macOS en este momento.",
+         "pt": "Falta uma permissão do macOS neste momento.",
++        "it": "In questo momento manca un'autorizzazione di macOS.",
+     },
+ }
+ 
+@@ -542,7 +549,7 @@ _CU_BLOCKED_PERMISSION_RE = re.compile(
+ #: The engine's exit code for a tool/action failure; ``blocked_permission`` rides it.
+ _CU_TOOL_EXIT_CODE = 8
+ 
+-#: How the localized (de/es/pt) phrase names a permission, found by keyword in the
++#: How the localized (de/es/pt/it/it) phrase names a permission, found by keyword in the
+ #: engine's English sentence: ``(keyword, {lang: (permission name, settings pane)})``.
+ #: The pane names are the macOS UI labels (UNVERIFIED on a real Mac: they move
+ #: between macOS versions).
+@@ -562,6 +569,10 @@ _BLOCKED_PERMISSION_NAMES: tuple[tuple[str, dict[str, tuple[str, str]]], ...] =
+                 "Acessibilidade",
+                 "Definições do Sistema > Privacidade e segurança > Acessibilidade",
+             ),
++            "it": (
++                "Accessibilità",
++                "Impostazioni di Sistema > Privacy e sicurezza > Accessibilità",
++            ),
+         },
+     ),
+     (
+@@ -582,6 +593,11 @@ _BLOCKED_PERMISSION_NAMES: tuple[tuple[str, dict[str, tuple[str, str]]], ...] =
+                 "Definições do Sistema > Privacidade e segurança > Gravação de ecrã e áudio do "
+                 "sistema",
+             ),
++            "it": (
++                "Registrazione schermo e audio di sistema",
++                "Impostazioni di Sistema > Privacy e sicurezza > "
++                "Registrazione schermo e audio di sistema",
++            ),
+         },
+     ),
+     (
+@@ -599,6 +615,10 @@ _BLOCKED_PERMISSION_NAMES: tuple[tuple[str, dict[str, tuple[str, str]]], ...] =
+                 "Monitorização de entrada",
+                 "Definições do Sistema > Privacidade e segurança > Monitorização de entrada",
+             ),
++            "it": (
++                "Monitoraggio input",
++                "Impostazioni di Sistema > Privacy e sicurezza > Monitoraggio input",
++            ),
+         },
+     ),
+     (
+@@ -616,6 +636,10 @@ _BLOCKED_PERMISSION_NAMES: tuple[tuple[str, dict[str, tuple[str, str]]], ...] =
+                 "Microfone",
+                 "Definições do Sistema > Privacidade e segurança > Microfone",
+             ),
++            "it": (
++                "Microfono",
++                "Impostazioni di Sistema > Privacy e sicurezza > Microfono",
++            ),
+         },
+     ),
+     (
+@@ -633,6 +657,10 @@ _BLOCKED_PERMISSION_NAMES: tuple[tuple[str, dict[str, tuple[str, str]]], ...] =
+                 "Automatização",
+                 "Definições do Sistema > Privacidade e segurança > Automatização",
+             ),
++            "it": (
++                "Automazione",
++                "Impostazioni di Sistema > Privacy e sicurezza > Automazione",
++            ),
+         },
+     ),
+ )
+@@ -669,15 +697,15 @@ def _spoken_en(sentence: str) -> str:
+ 
+ def _spoken_pane(text: str, lang: str) -> str:
+     """Replace the written Settings-path separators with speakable words."""
+-    and_word = {"de": "und", "es": "y", "pt": "e"}.get(lang, "and")
+-    then_word = {"de": "dann", "es": "luego", "pt": "depois"}.get(lang, "then")
++    and_word = {"de": "und", "es": "y", "pt": "e", "it": "e"}.get(lang, "and")
++    then_word = {"de": "dann", "es": "luego", "pt": "depois", "it": "poi"}.get(lang, "then")
+     return text.replace(" > ", f", {then_word} ").replace(" & ", f" {and_word} ")
+ 
+ 
+ def _blocked_permission_readback(lang: str, sentence: str) -> str:
+     """The localized readback of a ``blocked_permission`` mission (no LLM, AP-11).
+ 
+-    English forwards the engine's own sentence (second person, speakable). de/es/pt
++    English forwards the engine's own sentence (second person, speakable). de/es/pt/it
+     cannot (it is English), so they name the permission by keyword and pick the
+     remedy by REASON: a dialog still open, a restart, an unaskable permission or a
+     restriction each get their own phrase, and only a switch that is off says "allow
+diff --git a/dodaios/voice/config_readback.py b/dodaios/voice/config_readback.py
+index 5568a0c8d..b39461825 100644
+--- a/dodaios/voice/config_readback.py
++++ b/dodaios/voice/config_readback.py
+@@ -7,7 +7,7 @@ brain must never freely phrase "done" for a change that was refused or rolled
+ back (the maintainer's original ask: "don't confirm something that wasn't done").
+ 
+ This renders that line directly from the ``set_config_value`` tool result, in
+-de/en/es/pt (every supported language — AGENTS.md "Runtime Output Language"). It is
++de/en/es/pt/it. It is
+ separate from ``echo_confirmation.format_outcome`` (the two-turn confirm flow)
+ because the failure results here carry no ``PendingMutation``, only an
+ ``error_kind``.
+@@ -22,7 +22,7 @@ from dodaios.i18n import catalog as i18n_catalog
+ 
+ from .echo_confirmation import is_sensitive_path
+ 
+-_SUPPORTED = ("de", "en", "es", "pt")
++_SUPPORTED = ("de", "en", "es", "pt", "it")
+ _DEFAULT = "en"
+ 
+ # outcome key -> {lang -> template}. ``{label}`` / ``{value}`` are filled for the
+@@ -47,22 +47,22 @@ def _lang(language: str | None) -> str:
+ def _value_for_speech(value: Any, lang: str) -> str:
+     """Render a setting value for speech (bool localized, else stringified)."""
+     if isinstance(value, bool):  # before int — bool is an int subtype
+-        on = {"de": "an", "en": "on", "es": "activado", "pt": "ativado"}[lang]
+-        off = {"de": "aus", "en": "off", "es": "desactivado", "pt": "desativado"}[lang]
++        on = {"de": "an", "en": "on", "es": "activado", "pt": "ativado", "it": "attivato"}[lang]
++        off = {"de": "aus", "en": "off", "es": "desactivado", "pt": "desativado", "it": "disattivato"}[lang]
+         return on if value else off
+     if value is None:
+-        return {"de": "leer", "en": "empty", "es": "vacío", "pt": "vazio"}[lang]
++        return {"de": "leer", "en": "empty", "es": "vacío", "pt": "vazio", "it": "vuoto"}[lang]
+     return str(value)
+ 
+ 
+-def _label(description: str) -> str:
++def _label(description: str, lang: str) -> str:
+     """A short spoken label from the setting description (first clause)."""
+     head = (description or "").split("(")[0].split("—")[0].strip(" .")
+-    return head or "the setting"
++    return head or ("l’impostazione" if lang == "it" else "the setting")
+ 
+ 
+ def config_readback(
+-    *, success: bool, output: Any, language: str | Literal["de", "en", "es", "pt"] = "de"
++    *, success: bool, output: Any, language: str | Literal["de", "en", "es", "pt", "it"] = "de"
+ ) -> str | None:
+     """The honest spoken line for a ``set_config_value`` result, or ``None``.
+ 
+@@ -78,11 +78,11 @@ def config_readback(
+         sens = is_sensitive_path(str(output.get("path", "")))
+         if sens:
+             value = {"de": "der neue Wert", "en": "the new value",
+-                     "es": "el nuevo valor", "pt": "o novo valor"}[lang]
++                     "es": "el nuevo valor", "pt": "o novo valor", "it": "il nuovo valore"}[lang]
+         else:
+             value = _value_for_speech(output.get("new_value"), lang)
+         key = "applied_restart" if output.get("requires_restart") else "applied"
+-        return _PHRASES[key][lang].format(label=_label(str(output.get("description", ""))),
++        return _PHRASES[key][lang].format(label=_label(str(output.get("description", "")), lang),
+                                           value=value)
+ 
+     # Failure: ``output`` carries ``error_kind``.
+diff --git a/dodaios/voice/echo_confirmation.py b/dodaios/voice/echo_confirmation.py
+index e55f4435b..59deeb52f 100644
+--- a/dodaios/voice/echo_confirmation.py
++++ b/dodaios/voice/echo_confirmation.py
+@@ -196,6 +196,54 @@ _AMBIGUOUS_PATTERNS_PT: tuple[str, ...] = (
+     r"\b(hum|hmm|hm|eh)\b",
+ )
+ 
++# Italian. A bare "puoi" ("can you") is NOT a confirmation: it opens questions
++# such as "puoi ripetere?", which must never approve a pending action. "fai"
++# counts only as the whole reply or as "fai pure" / "fallo".
++_CONFIRM_PATTERNS_IT: tuple[str, ...] = (
++    r"\bs(ì|i)\b",
++    r"\bcerto\b",
++    r"\bcertamente\b",
++    r"\bvai pure\b",
++    r"\bpuoi (procedere|continuare|inviare|farlo|mandare)\b",
++    r"^\W*fai\W*$",
++    r"\bfai pure\b",
++    r"\bfallo\b",
++    r"\bavanti\b",
++    r"\bprocedi\b",
++    r"\bok\b",
++    r"\bokay\b",
++    r"\bgiusto\b",
++    r"\besatto\b",
++    r"\bperfetto\b",
++    r"\bd'accordo\b",
++    r"\bconferm(o|a|are|ato)\b",
++)
++
++_VETO_PATTERNS_IT: tuple[str, ...] = (
++    r"\bno\b",
++    r"\bnon\b",
++    r"\bannulla(re)?\b",
++    r"\binterrompi\b",
++    r"\bferma(ti|re)?\b",
++    r"\bsmetti\b",
++    r"\blascia (stare|perdere)\b",
++    r"\bdimentica(lo)?\b",
++    r"\bnemmeno per sogno\b",
++    r"\bbasta\b",
++    r"\bsbagliato\b",
++    r"\bnegativo\b",
++)
++
++_AMBIGUOUS_PATTERNS_IT: tuple[str, ...] = (
++    r"\bforse\b",
++    r"\bmagari\b",
++    r"\baspetta\b",
++    r"\bun attimo\b",
++    r"\bun momento\b",
++    r"\bnon so\b",
++    r"\b(boh|mah|uhm|hmm|hm|eh)\b",
++)
++
+ ResponseVerdict = Literal["confirm", "veto", "ambiguous", "unknown"]
+ 
+ 
+@@ -226,6 +274,10 @@ def classify_response(
+         veto_pats = _VETO_PATTERNS_PT
+         confirm_pats = _CONFIRM_PATTERNS_PT
+         ambig_pats = _AMBIGUOUS_PATTERNS_PT
++    elif language == "it":
++        veto_pats = _VETO_PATTERNS_IT
++        confirm_pats = _CONFIRM_PATTERNS_IT
++        ambig_pats = _AMBIGUOUS_PATTERNS_IT
+     else:
+         veto_pats = _VETO_PATTERNS_DE
+         confirm_pats = _CONFIRM_PATTERNS_DE
+diff --git a/dodaios/voice/instant_ack.py b/dodaios/voice/instant_ack.py
+index 3fb9eda01..ce84ab1e2 100644
+--- a/dodaios/voice/instant_ack.py
++++ b/dodaios/voice/instant_ack.py
+@@ -52,7 +52,7 @@ from dodaios.brain.turn_planner import TurnPlan, TurnReason, is_lookup_shape
+ 
+ log = logging.getLogger(__name__)
+ 
+-_SUPPORTED_LANGUAGES = ("de", "en", "es", "pt")
++_SUPPORTED_LANGUAGES = ("de", "en", "es", "pt", "it")
+ _DEFAULT_LANGUAGE = "en"
+ 
+ #: Grace window for SHORT work: speak only if the turn is still running
+@@ -173,6 +173,12 @@ _POOLS: dict[WorkClass, dict[str, tuple[str, ...]]] = {
+             "Estou a ir buscar informação atual.",
+             "Uma pesquisa rápida, um momento.",
+         ),
++        "it": (  # i18n-allow: localized runtime voice output
++            "Sto cercando online.",
++            "Un momento, controllo online.",
++            "Sto cercando informazioni aggiornate.",
++            "Una ricerca veloce, un momento.",
++        ),
+     },
+     WorkClass.PERSONAL: {
+         "de": (  # i18n-allow: localized runtime voice output
+@@ -199,6 +205,12 @@ _POOLS: dict[WorkClass, dict[str, tuple[str, ...]]] = {
+             "Vou procurar isso nos teus dados.",
+             "Vou ver o que tenho teu sobre isso.",
+         ),
++        "it": (  # i18n-allow: localized runtime voice output
++            "Sto controllando i tuoi dati.",
++            "Un momento, guardo tra le tue cose.",
++            "Cerco tra i tuoi dati.",
++            "Controllo cosa ho di tuo su questo.",
++        ),
+     },
+     WorkClass.SCREEN: {
+         "de": (  # i18n-allow: localized runtime voice output
+@@ -225,6 +237,12 @@ _POOLS: dict[WorkClass, dict[str, tuple[str, ...]]] = {
+             "Fico com o ecrã por um momento.",
+             "Vou ver o que está no ecrã.",
+         ),
++        "it": (  # i18n-allow: localized runtime voice output
++            "Sto guardando lo schermo.",
++            "Un momento, controllo lo schermo.",
++            "Prendo lo schermo un attimo.",
++            "Vedo cosa c'è sullo schermo.",
++        ),
+     },
+     # ``{agent}`` is the wake-word-derived agent brand ("<Name>-Agent"),
+     # rendered by the caller — never a hardcoded product name.
+@@ -253,9 +271,15 @@ _POOLS: dict[WorkClass, dict[str, tuple[str, ...]]] = {
+             "Vou pôr um {agent} a tratar disso.",
+             "Isso fica com um {agent} a partir de agora.",
+         ),
++        "it": (  # i18n-allow: localized runtime voice output
++            "Lo passo a un {agent}.",
++            "Un {agent} se ne occupa, ti avviso.",
++            "Metto un {agent} su questo.",
++            "Da ora è in mano a un {agent}.",
++        ),
+     },
+     # ACTION: deliberately empty — an action ack must reference the request.
+-    WorkClass.ACTION: {"de": (), "en": (), "es": (), "pt": ()},
++    WorkClass.ACTION: {"de": (), "en": (), "es": (), "pt": (), "it": ()},
+ }
+ 
+ # No-repeat memory per (class, language): back-to-back acks never share a
+@@ -690,6 +714,115 @@ _INTENT_VERBS: dict[str, frozenset[str]] = {
+             "marcar",
+         }
+     ),
++    "it": frozenset(
++        {
++            "apro",
++            "vado",
++            "cerco",
++            "ricerco",
++            "controllo",
++            "verifico",
++            "vedo",
++            "guardo",
++            "leggo",
++            "scrivo",
++            "invio",
++            "mando",
++            "metto",
++            "cambio",
++            "modifico",
++            "accendo",
++            "spengo",
++            "salvo",
++            "eseguo",
++            "annoto",
++            "attivo",
++            "disattivo",
++            "avvio",
++            "consulto",
++            "preparo",
++            "prenoto",
++            "chiedo",
++            "faccio",
++            "comincio",
++            "inizio",
++            "passo",
++            "do",
++            "chiudo",
++            "sposto",
++            "copio",
++            "cancello",
++            "elimino",
++            "creo",
++            "installo",
++            "aggiorno",
++            "riavvio",
++            "fermo",
++            "sospendo",
++            "riprendo",
++            "detto",
++            "registro",
++            "programmo",
++            "pianifico",
++            "ricordo",
++            "termino",
++            "riproduco",
++            "suono",
++            "imposto",
++            "aprire",
++            "cercare",
++            "ricercare",
++            "controllare",
++            "verificare",
++            "vedere",
++            "guardare",
++            "leggere",
++            "scrivere",
++            "inviare",
++            "mandare",
++            "mettere",
++            "cambiare",
++            "modificare",
++            "accendere",
++            "spegnere",
++            "salvare",
++            "eseguire",
++            "annotare",
++            "attivare",
++            "disattivare",
++            "avviare",
++            "consultare",
++            "preparare",
++            "prenotare",
++            "chiedere",
++            "fare",
++            "cominciare",
++            "iniziare",
++            "passare",
++            "dare",
++            "chiudere",
++            "spostare",
++            "copiare",
++            "cancellare",
++            "eliminare",
++            "creare",
++            "installare",
++            "aggiornare",
++            "riavviare",
++            "fermare",
++            "sospendere",
++            "riprendere",
++            "dettare",
++            "registrare",
++            "programmare",
++            "pianificare",
++            "ricordare",
++            "terminare",
++            "riprodurre",
++            "suonare",
++            "impostare",
++        }
++    ),
+ }
+ 
+ # Function words, politeness, and time adverbs a contextual line may use
+@@ -1025,6 +1158,77 @@ _FREE_WORDS: dict[str, frozenset[str]] = {
+             "so",
+         }
+     ),
++    "it": frozenset(
++        {
++            "io",
++            "il",
++            "lo",
++            "la",
++            "i",
++            "gli",
++            "le",
++            "un",
++            "uno",
++            "una",
++            "in",
++            "nel",
++            "nella",
++            "nei",
++            "nelle",
++            "di",
++            "del",
++            "della",
++            "dei",
++            "delle",
++            "a",
++            "al",
++            "alla",
++            "ai",
++            "alle",
++            "per",
++            "da",
++            "dal",
++            "dalla",
++            "con",
++            "su",
++            "sul",
++            "sulla",
++            "ti",
++            "te",
++            "tuo",
++            "tua",
++            "tuoi",
++            "tue",
++            "ora",
++            "adesso",
++            "subito",
++            "momento",
++            "attimo",
++            "ok",
++            "certo",
++            "questo",
++            "questa",
++            "quello",
++            "quella",
++            "e",
++            "che",
++            "si",
++            "mi",
++            "ci",
++            "rapido",
++            "rapida",
++            "bene",
++            "sopra",
++            "verso",
++            "primo",
++            "poi",
++            "tutto",
++            "come",
++            "chiesto",
++            "richiesto",
++            "sto",
++        }
++    ),
+ }
+ 
+ # A completion / result claim in an ack is the one thing that must never
+@@ -1058,6 +1262,14 @@ _RESULT_MARKER_RE = re.compile(
+     r"(?:aberto|feito|guardado|enviado|encontrado|verificado|terminado)\b|"
+     r"\b(?:abri|fiz|guardei|enviei|mandei|encontrei|verifiquei|terminei|"
+     r"liguei|desliguei|ativei|desativei|pus|feito|concluido)\b"
++    r"|"
++    r"\b(?:e|sono|gia e|gia sono)\s+"
++    r"(?:aperto|aperta|pronto|pronta|fatto|fatta|salvato|salvata|"
++    r"inviato|inviata|attivato|attivata|acceso|accesa|spento|spenta)\b|"
++    r"\b(?:ho|ho gia)\s+(?:\w+\s+){0,3}"
++    r"(?:aperto|fatto|salvato|inviato|trovato|controllato|verificato|"
++    r"terminato|finito|completato)\b|"
++    r"\b(?:fatto|pronto|trovato|finito|completato|terminato)\b"
+     r")"
+ )
+ 
+@@ -1262,6 +1474,11 @@ _PROGRESS_POOLS: dict[ToolActivity, dict[str, tuple[str, ...]]] = {
+             "A pesquisa ainda está a decorrer.",
+             "A pesquisa online precisa de mais um momento.",
+         ),
++        "it": (  # i18n-allow: localized runtime voice output
++            "Sto ancora cercando.",
++            "La ricerca è ancora in corso.",
++            "La ricerca online richiede ancora un momento.",
++        ),
+     },
+     ToolActivity.READ: {
+         "de": (  # i18n-allow: localized runtime voice output
+@@ -1284,6 +1501,11 @@ _PROGRESS_POOLS: dict[ToolActivity, dict[str, tuple[str, ...]]] = {
+             "Ainda estou a ver isso.",
+             "Continuo a ler, um momento.",
+         ),
++        "it": (  # i18n-allow: localized runtime voice output
++            "Sto ancora leggendo i tuoi dati.",
++            "Lo sto ancora controllando.",
++            "Continuo a leggere, un momento.",
++        ),
+     },
+     ToolActivity.SCREEN: {
+         "de": (  # i18n-allow: localized runtime voice output
+@@ -1306,6 +1528,11 @@ _PROGRESS_POOLS: dict[ToolActivity, dict[str, tuple[str, ...]]] = {
+             "O passo no ecrã ainda está a decorrer.",
+             "Mais um momento no ecrã.",
+         ),
++        "it": (  # i18n-allow: localized runtime voice output
++            "Sono ancora sullo schermo.",
++            "Il passaggio sullo schermo è ancora in corso.",
++            "Ancora un momento sullo schermo.",
++        ),
+     },
+     ToolActivity.OTHER: {
+         "de": (  # i18n-allow: localized runtime voice output
+@@ -1328,9 +1555,14 @@ _PROGRESS_POOLS: dict[ToolActivity, dict[str, tuple[str, ...]]] = {
+             "Mais um momento.",
+             "Está quase.",
+         ),
++        "it": (  # i18n-allow: localized runtime voice output
++            "Ci sto ancora lavorando.",
++            "Ancora un momento.",
++            "Ci siamo quasi.",
++        ),
+     },
+     # HANDOVER: no line of its own — the spawn reply states the handover.
+-    ToolActivity.HANDOVER: {"de": (), "en": (), "es": (), "pt": ()},
++    ToolActivity.HANDOVER: {"de": (), "en": (), "es": (), "pt": (), "it": ()},
+ }
+ 
+ _RECENT_PROGRESS: dict[tuple[ToolActivity, str], deque[str]] = {}
+@@ -1460,6 +1692,7 @@ CONTEXTUAL_BUDGET_MS = 700
+ 
+ _LANGUAGE_NAMES = {
+     "de": "German", "en": "English", "es": "Spanish", "pt": "European Portuguese",
++    "it": "Italian",
+ }
+ 
+ 
+diff --git a/dodaios/voice/number_speller.py b/dodaios/voice/number_speller.py
+index 73f5e577f..a05e88146 100644
+--- a/dodaios/voice/number_speller.py
++++ b/dodaios/voice/number_speller.py
+@@ -12,7 +12,7 @@ hot path. It never raises, and when ``num2words`` is unavailable (a minimal
+ install that did not pull the dependency) it is a transparent no-op so text
+ passes through unchanged instead of crashing the voice path.
+ 
+-Locale-aware separators: German/Spanish/Portuguese use a comma decimal and dot
++Locale-aware separators: German/Spanish/Portuguese/Italian use a comma decimal and dot
+ thousands
+ ("3,8" = three-point-eight, "1.000" = one thousand); English is the reverse.
+ 
+@@ -41,13 +41,14 @@ except Exception:  # noqa: BLE001 — any import failure degrades to a no-op
+ 
+ # Supported locales. Anything else falls through unchanged (honesty over a wrong
+ # guess — never spell a French number with German words).
+-_SUPPORTED = ("de", "en", "es", "pt")
++_SUPPORTED = ("de", "en", "es", "pt", "it")
+ 
+ # (decimal separator, thousands separator) per locale.
+ _SEPARATORS: dict[str, tuple[str, str]] = {
+     "de": (",", "."),
+     "es": (",", "."),
+     "pt": (",", "."),
++    "it": (",", "."),
+     "en": (".", ","),
+ }
+ 
+@@ -58,18 +59,22 @@ _GROUPED_INT_RE: dict[str, re.Pattern[str]] = {
+     "de": re.compile(r"\d{1,3}(?:\.\d{3})+"),
+     "es": re.compile(r"\d{1,3}(?:\.\d{3})+"),
+     "pt": re.compile(r"\d{1,3}(?:\.\d{3})+"),
++    "it": re.compile(r"\d{1,3}(?:\.\d{3})+"),
+     "en": re.compile(r"\d{1,3}(?:,\d{3})+"),
+ }
+ 
+ # Time connector between hour and minute words, per locale.
+ # Portuguese inflects the hour noun ("uma hora" / "duas horas"), so its time is
+ # assembled in ``_spell_time_pt`` instead of these tables.
+-_TIME_JOIN: dict[str, str] = {"de": " Uhr ", "en": " ", "es": " y "}
+-_TIME_JOIN_OCLOCK: dict[str, str] = {"de": " Uhr", "en": " o'clock", "es": " en punto"}
++_TIME_JOIN: dict[str, str] = {"de": " Uhr ", "en": " ", "es": " y ", "it": " e "}  # i18n-allow
++_TIME_JOIN_OCLOCK: dict[str, str] = {
++    "de": " Uhr", "en": " o'clock", "es": " en punto", "it": " in punto",  # i18n-allow
++}
+ 
+ # The word spoken for the dot inside a version number or an IP address.
+ _DOT_JOIN: dict[str, str] = {  # i18n-allow
+     "de": " Punkt ", "en": " point ", "es": " punto ", "pt": " ponto ",  # i18n-allow
++    "it": " punto ",
+ }
+ 
+ # Month names for the date verbaliser — spoken output vocabulary.
+@@ -90,6 +95,10 @@ _MONTHS: dict[str, tuple[str, ...]] = {
+         "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+         "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+     ),
++    "it": (  # i18n-allow
++        "gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno",
++        "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre",
++    ),
+ }
+ 
+ # German ordinals decline, and the ending follows the word governing the date:
+@@ -110,6 +119,7 @@ _DATE_CUES: dict[str, frozenset[str]] = {
+     "en": frozenset({"on", "by", "from", "since", "until", "till", "after", "before", "the"}),
+     "es": frozenset({"el", "del", "al", "desde", "hasta", "en", "para"}),  # i18n-allow
+     "pt": frozenset({"a", "de", "em", "no", "dia", "desde", "até", "para"}),  # i18n-allow
++    "it": frozenset({"il", "lo", "dal", "al", "del", "fino", "entro", "per", "dopo", "prima"}),  # i18n-allow
+ }
+ 
+ # A clock time, optionally followed by a German "Uhr" that we consume so the
+@@ -164,6 +174,8 @@ def _norm_lang(language: str | None) -> str:
+         return "pt"
+     if low.startswith("de"):
+         return "de"
++    if low.startswith("it"):
++        return "it"
+     return low  # unknown → not in _SUPPORTED → passthrough
+ 
+ 
+@@ -227,6 +239,8 @@ def _spell_time(hour: str, minute: str, lang: str) -> str | None:
+     h_word = _spell_value(int(hour), lang)
+     if h_word is None:
+         return None
++    if lang == "it" and int(hour) == 1:  # "l'una e dieci", the hour noun is feminine
++        h_word = "una"
+     if int(minute) == 0:
+         return f"{h_word}{_TIME_JOIN_OCLOCK[lang]}"
+     m_word = _spell_value(int(minute), lang)
+@@ -282,6 +296,11 @@ def _spell_date(day: int, month: int, year: int | None, lang: str, cue: str) ->
+         if ordinal is None:
+             return None
+         spoken = f"{month_name} {ordinal}"
++    elif lang == "it":  # Italian: cardinal day, except the ordinal "primo" for the 1st
++        day_word = "primo" if day == 1 else _spell_value(day, "it")  # i18n-allow
++        if day_word is None:
++            return None
++        spoken = f"{day_word} {month_name}"
+     else:  # Spanish and European Portuguese speak the day as a cardinal
+         cardinal = _spell_value(day, lang)
+         if cardinal is None:
+diff --git a/dodaios/voice/parked_results.py b/dodaios/voice/parked_results.py
+index 867199d8c..ef278b4dc 100644
+--- a/dodaios/voice/parked_results.py
++++ b/dodaios/voice/parked_results.py
+@@ -54,7 +54,7 @@ SURFACE_PIPELINE: Final[str] = "pipeline"
+ SURFACE_CHAT: Final[str] = "chat"
+ SURFACE_CHANNEL: Final[str] = "channel"
+ 
+-_SUPPORTED_LANGUAGES: Final[tuple[str, ...]] = ("de", "en", "es", "pt")
++_SUPPORTED_LANGUAGES: Final[tuple[str, ...]] = ("de", "en", "es", "pt", "it")
+ _DEFAULT_LANGUAGE: Final[str] = "en"
+ _MAX_WAIT_QUERY_WORDS: Final[int] = 9
+ _TOPIC_MAX_WORDS: Final[int] = 8
+@@ -212,11 +212,12 @@ def requested_result(items: Sequence[ParkedResult], query: str) -> ParkedResult
+ _LEAD_IN: Final[str] = (
+     r"(?:(?:ja|yes|s[ií]|und|and|y|also|so|okay|ok|hey|hallo|hello|hola|"
+     r"jarvis|bitte|please|por\s+favor|sag\s+mal|tell\s+me|dime|"
+-    r"sim|e|ent(?:ã|a)o|ol(?:á|a)|diz\s+me)\s+)*"
++    r"sim|e|ent(?:ã|a)o|ol(?:á|a)|diz\s+me|"
++    r"s[ìi]|allora|ciao|ehi|per\s+favore|dimmi)\s+)*"
+ )
+ _TAIL: Final[str] = (
+     r"(?:\s+(?:damit|dabei|schon|jetzt|denn|eigentlich|now|yet|already|ya|ahora|con\s+eso|"
+-    r"j(?:á|a)|agora|com\s+isso))*"
++    r"j(?:á|a)|agora|com\s+isso|ora|adesso|gi(?:à|a)|con\s+questo))*"
+ )
+ 
+ _PROGRESS_CORES: Final[tuple[str, ...]] = (
+@@ -251,6 +252,15 @@ _PROGRESS_CORES: Final[tuple[str, ...]] = (
+     r"(?:j(?:á|a)\s+)?(?:acabaste|terminaste|est(?:á|a)\s+pronto)",
+     r"quanto\s+(?:tempo\s+)?(?:falta|demora)",
+     r"ainda\s+est(?:á|a)s\s+(?:a\s+trabalhar(?:\s+nisso)?|nisso)",
++    # --- Italian ---
++    r"a\s+che\s+punto\s+sei",
++    r"come\s+va(?:\s+(?:con\s+)?(?:quello|questo))?",
++    r"come\s+sta\s+andando",
++    r"(?:hai\s+)?(?:gi(?:à|a)\s+)?(?:finito|terminato)",
++    r"sei\s+(?:gi(?:à|a)\s+)?(?:pronto|a\s+posto)",
++    r"quanto\s+(?:ci\s+)?(?:manca|vuole|metti|ci\s+metti)",
++    r"ci\s+vuole\s+ancora\s+(?:molto|tanto)",
++    r"stai\s+ancora\s+(?:lavorando(?:\s+(?:su\s+)?(?:quello|questo))?|su\s+(?:quello|questo))",
+ )
+ 
+ _RESULT_CORES: Final[tuple[str, ...]] = (
+@@ -280,6 +290,12 @@ _RESULT_CORES: Final[tuple[str, ...]] = (
+     r"(?:j(?:á|a)\s+)?tens\s+(?:o|um|algum)?\s*resultado",
+     r"e\s+o\s+resultado",
+     r"qual\s+(?:(?:é|e)\s+)?o\s+resultado",
++    # --- Italian ---
++    r"(?:che\s+)?cosa\s+hai\s+trovato",
++    r"(?:hai\s+)?(?:gi(?:à|a)\s+)?(?:un\s+|il\s+)?risultato",
++    r"e\s+il\s+risultato",
++    r"qual\s+(?:è|e)\s+il\s+risultato",
++    r"cosa\s+(?:è|e)\s+(?:venuto|uscito)\s+fuori",
+ )
+ 
+ 
+@@ -334,6 +350,10 @@ _TOPIC_STOPWORDS: Final[dict[str, frozenset[str]]] = {
+         "por favor podes podias me mim eu hey olá jarvis ok pronto e depois "
+         "o a os as um uma uns umas".split()
+     ),
++    "it": frozenset(
++        "per favore puoi potresti mi me io ehi ciao jarvis ok va bene e poi "
++        "il lo la i gli le un uno una".split()
++    ),
+ }
+ 
+ _ANCHOR_POOLS: Final[dict[str, tuple[str, ...]]] = i18n_catalog.variant_table(
+diff --git a/dodaios/voice/tool_confirmation.py b/dodaios/voice/tool_confirmation.py
+index 04ec5fc87..056d97c81 100644
+--- a/dodaios/voice/tool_confirmation.py
++++ b/dodaios/voice/tool_confirmation.py
+@@ -22,8 +22,9 @@ from __future__ import annotations
+ 
+ from dodaios.core.turn_language import DEFAULT_LOCALE, normalize_language_tag
+ from dodaios.i18n import catalog as i18n_catalog
++from dodaios.i18n.locales import SUPPORTED_LOCALES
+ 
+-_PHRASE_LANGS: frozenset[str] = frozenset({"de", "en", "es", "pt"})
++_PHRASE_LANGS: frozenset[str] = frozenset(SUPPORTED_LOCALES)
+ 
+ 
+ def _phrase_lang(language: str | None) -> str:
+diff --git a/tests/integration/test_ui_language_route.py b/tests/integration/test_ui_language_route.py
+index 68960c1bf..60bc9fe5d 100644
+--- a/tests/integration/test_ui_language_route.py
++++ b/tests/integration/test_ui_language_route.py
+@@ -42,7 +42,7 @@ def test_get_returns_current_ui_language(ctx) -> None:
+     tc, _, _ = ctx
+     body = tc.get("/api/settings/ui-language").json()
+     assert body["language"] == "en"
+-    assert set(body["options"]) == {"en", "de", "es", "pt", "zh"}
++    assert set(body["options"]) == {"en", "de", "es", "pt", "zh", "it"}
+ 
+ 
+ def test_put_persists_and_broadcasts(ctx) -> None:
+@@ -74,6 +74,20 @@ def test_put_accepts_european_portuguese(ctx) -> None:
+     assert any(ev.language == "pt" for ev in captured)
+ 
+ 
++
++def test_put_accepts_italian_and_preserves_reply_and_recognition(ctx) -> None:
++    tc, config_file, captured = ctx
++    before = tc.app.state.config
++    reply, recognition = before.brain.reply_language, before.stt.language
++    res = tc.put("/api/settings/ui-language", json={"language": "it"})
++    assert res.status_code == 200, res.text
++    assert res.json() == {"ok": True, "language": "it", "persisted": True}
++    assert 'language = "it"' in config_file.read_text(encoding="utf-8")
++    assert tc.get("/api/settings/ui-language").json()["language"] == "it"
++    assert any(ev.language == "it" for ev in captured)
++    assert tc.app.state.config.brain.reply_language == reply
++    assert tc.app.state.config.stt.language == recognition
++
+ def test_put_rejects_unknown_language(ctx) -> None:
+     tc, _, _ = ctx
+     assert tc.put("/api/settings/ui-language", json={"language": "fr"}).status_code == 400
+diff --git a/tests/missions/test_mission_language_it.py b/tests/missions/test_mission_language_it.py
+new file mode 100644
+index 000000000..d25c4efc5
+--- /dev/null
++++ b/tests/missions/test_mission_language_it.py
+@@ -0,0 +1,40 @@
++"""Italian dispatch uses the real event model; no worker/provider is started."""
++import re
++import unittest
++from pathlib import Path
++from typing import get_args
++
++from pydantic import ValidationError
++
++from dodaios.missions.events import (
++    MISSION_LANGUAGES,
++    MissionDispatched,
++    MissionLanguage,
++    coerce_mission_language,
++)
++
++
++class ItalianMissionLanguageTests(unittest.TestCase):
++    def test_italian_dispatch_roundtrip(self):
++        language = coerce_mission_language(" IT ")
++        event = MissionDispatched(prompt="Offline contract test", language=language)
++        self.assertEqual(event.language, "it")
++        self.assertEqual(MissionDispatched.model_validate_json(event.model_dump_json()), event)
++
++    def test_all_declared_mission_languages_are_accepted(self):
++        self.assertEqual(set(get_args(MissionLanguage)), set(MISSION_LANGUAGES))
++        for language in MISSION_LANGUAGES:
++            with self.subTest(language=language):
++                self.assertEqual(MissionDispatched(prompt="x", language=language).language, language)
++
++    def test_frontend_dispatch_language_parity(self):
++        root = Path(__file__).resolve().parents[2]
++        text = (root / "dodaios/ui/web/frontend/src/types/missions.ts").read_text()
++        match = re.search(r"export interface MissionDispatched extends BasePayload \{.*?language: ([^;]+);", text, re.S)
++        self.assertIsNotNone(match)
++        self.assertEqual(set(re.findall(r'"([^\"]+)"', match.group(1))), set(MISSION_LANGUAGES))
++
++    def test_unknown_language_remains_rejected(self):
++        with self.assertRaises(ValidationError):
++            MissionDispatched(prompt="x", language="unsupported")
++        self.assertEqual(coerce_mission_language("unsupported"), "en")
+diff --git a/tests/missions/test_mission_readback_it.py b/tests/missions/test_mission_readback_it.py
+new file mode 100644
+index 000000000..d76f72e7d
+--- /dev/null
++++ b/tests/missions/test_mission_readback_it.py
+@@ -0,0 +1,130 @@
++"""Italian mission readback contracts; pure formatting, no TTS or provider calls."""
++from __future__ import annotations
++
++from collections import Counter
++from string import Formatter
++from types import SimpleNamespace
++from typing import get_args
++
++import pytest
++
++from dodaios.i18n.locales import SUPPORTED_LOCALES
++from dodaios.missions.events import CAPACITY_WAIT_REASONS, MissionApproved
++from dodaios.missions.voice import readback
++
++
++def _fields(template: str) -> Counter[str]:
++    return Counter(name for _, name, _, _ in Formatter().parse(template) if name is not None)
++
++
++@pytest.mark.parametrize("key", tuple(readback.READBACK_TEMPLATES))
++def test_every_status_template_has_italian_with_matching_placeholders(key: str) -> None:
++    table = readback.READBACK_TEMPLATES[key]
++    assert table.get("it"), f"{key} has no Italian status template"
++    english_fields = [_fields(template) for template in table["en"]]
++    for template in table["it"]:
++        assert _fields(template) in english_fields, (key, template)
++        values = {field: "VALORE" for field in _fields(template)}
++        assert "{" not in template.format(**values)
++
++
++def test_mission_readback_literal_covers_every_registered_locale() -> None:
++    assert set(get_args(readback.Lang)) == set(SUPPORTED_LOCALES)
++
++
++@pytest.mark.parametrize("table", (readback.FAILURE_REASON_PHRASES, readback.CAPACITY_WAIT_PHRASES))
++def test_italian_failure_and_capacity_key_placeholder_parity(table: dict) -> None:
++    assert table["it"].keys() == table["en"].keys()
++    for key, template in table["it"].items():
++        assert template
++        assert _fields(template) == _fields(table["en"][key]), key
++
++
++@pytest.mark.parametrize(
++    ("method", "key", "kwargs"),
++    [
++        ("render_timeout", "timeout", {}),
++        ("render_cancelled", "cancelled", {}),
++        ("render_budget_warn", "budget_warn_50", {"pct": 50}),
++        ("render_budget_warn", "budget_warn_80", {"pct": 80}),
++        ("render_budget_exceeded", "budget_exceeded", {}),
++        ("render_injection_blocked", "injection_blocked", {}),
++        ("render_path_guard_blocked", "path_guard_blocked", {}),
++        ("render_crash_recovery", "crash_recovery", {}),
++        ("render_iteration_running", "iteration_running", {"n": 3}),
++        ("render_destructive_confirm", "destructive_confirm", {"target": "file-demo"}),
++        ("render_approved", "approved", {"summary": "Risultato verificato."}),
++    ],
++)
++def test_status_renderers_select_italian_templates(method: str, key: str, kwargs: dict) -> None:
++    result = getattr(readback.MissionReadback(), method)(language="it", **kwargs)
++    templates = readback.READBACK_TEMPLATES[key]["it"]
++    expected = {template.format(**kwargs) for template in templates}
++    assert result in expected
++    assert len(result) <= readback.MAX_VOICE_CHARS
++
++
++@pytest.mark.parametrize("reason", tuple(readback.FAILURE_REASON_PHRASES["en"]))
++def test_known_failure_reasons_are_rendered_in_italian(reason: str, monkeypatch) -> None:
++    monkeypatch.setattr(readback, "render_agent_brand", lambda text: text.replace("{agents}", "Agenti-demo").replace("{agent}", "Agente-demo"))
++    result = readback.MissionReadback().render_failed(reason=reason, language="it")
++    if reason == "crash_recovery":
++        assert result in readback.READBACK_TEMPLATES["crash_recovery"]["it"]
++    else:
++        phrase = readback.render_agent_brand(readback.FAILURE_REASON_PHRASES["it"][reason])
++        if reason == "interrupted":
++            assert result == phrase
++        else:
++            assert result in {template.format(reason=phrase) for template in readback.READBACK_TEMPLATES["failed"]["it"]}
++    assert len(result) <= readback.MAX_VOICE_CHARS
++    assert "{agent" not in result
++
++
++def test_failure_error_class_precedes_generic_reason_and_empty_reason_is_italian() -> None:
++    result = readback.MissionReadback().render_failed(reason="task_error", error_class="provider_auth", language="it")
++    assert readback.FAILURE_REASON_PHRASES["it"]["provider_auth"] in result
++    assert readback.FAILURE_REASON_PHRASES["it"]["task_error"] not in result
++    empty = readback.MissionReadback().render_failed(language="it")
++    assert readback._UNKNOWN_REASON["it"] in empty
++
++
++def test_false_approval_uses_italian_failure_instead_of_success() -> None:
++    honesty = SimpleNamespace(honesty_overridden=True, verdict=SimpleNamespace(summary_de="GERMAN-PRIVATE", summary="ENGLISH-PRIVATE"))
++    result = readback.MissionReadback().render_approved(summary="SUCCESS-MARKER", language="it", honesty_check=honesty)
++    expected = {template.format(reason=readback._NO_TOOL_CALL["it"]) for template in readback.READBACK_TEMPLATES["failed"]["it"]}
++    assert result in expected
++    assert "SUCCESS-MARKER" not in result
++    assert "GERMAN-PRIVATE" not in result
++    assert "ENGLISH-PRIVATE" not in result
++
++
++def test_local_approved_summary_is_used_for_italian() -> None:
++    payload = MissionApproved(result_uri="mission://test", tokens_used=0, cost_usd=0, wall_ms=0, summary_de="DE", summary_en="EN", summary_local="Risultato italiano.")
++    assert readback.approved_summary(payload, "it") == "Risultato italiano."
++    assert readback.approved_summary(payload.model_copy(update={"summary_local": ""}), "it") == "EN"
++
++
++def test_capacity_wait_uses_italian_auth_and_explicit_paid_consent() -> None:
++    table = readback.CAPACITY_WAIT_PHRASES["it"]
++    result = readback.render_capacity_wait(reason="provider_auth", provider="X", steps_done=0, steps_total=1, files_saved=0, checkpoint_saved=True, language="it")
++    assert result.startswith(table["provider_auth"].format(provider="X"))
++    assert table["saved"] in result
++    assert table["wait_auth"] in result
++    assert table["paid"] in result
++    assert len(result) <= readback.MAX_VOICE_CHARS
++
++
++@pytest.mark.parametrize("reason", CAPACITY_WAIT_REASONS)
++def test_capacity_wait_reasons_format_italian_without_unresolved_placeholders(reason: str) -> None:
++    result = readback.render_capacity_wait(reason=reason, provider="X", steps_done=1, steps_total=2, files_saved=1, checkpoint_saved=False, language="it")
++    table = readback.CAPACITY_WAIT_PHRASES["it"]
++    assert result.startswith(table[reason].format(provider="X"))
++    assert table["paid"] in result
++    assert "{" not in result
++    assert len(result) <= readback.MAX_VOICE_CHARS
++
++
++def test_italian_long_summary_and_target_keep_voice_length_cap() -> None:
++    rb = readback.MissionReadback()
++    assert len(rb.render_approved(summary="testo " * 300, language="it")) <= readback.MAX_VOICE_CHARS
++    assert len(rb.render_destructive_confirm(target="file " * 300, language="it")) <= readback.MAX_VOICE_CHARS
+diff --git a/tests/test_italian_chat_controls.py b/tests/test_italian_chat_controls.py
+new file mode 100644
+index 000000000..fdc70ae1a
+--- /dev/null
++++ b/tests/test_italian_chat_controls.py
+@@ -0,0 +1,115 @@
++"""Offline slash-command locale checks using real control/store modules and SQLite."""
++from __future__ import annotations
++
++import ast
++import importlib.util
++import sys
++from pathlib import Path
++from types import SimpleNamespace
++import unittest
++from unittest.mock import AsyncMock, patch
++
++from pydantic import ValidationError
++
++from dodaios.agent_chat import control
++from dodaios.agent_chat.control import ChatControls
++from dodaios.agent_chat.control_locale import ControlError, control_message, _MESSAGES_IT
++from dodaios.agent_chat.control_types import CommandRequest, GoalState
++from dodaios.agent_chat.store import AgentChatStore
++
++
++class ItalianCommandLocaleTests(unittest.IsolatedAsyncioTestCase):
++    def setUp(self):
++        self.chat_store = AgentChatStore()
++        self.session = self.chat_store.create_session(
++            provider="openrouter", model="synthetic", effort="", cwd=".", surface="jarvis",
++        )
++        self.service = SimpleNamespace(
++            store=self.chat_store, is_running=lambda sid: False, cancel=AsyncMock(),
++            post_notice=AsyncMock(),
++        )
++        self.controls = ChatControls(self.service)
++        self.language = patch.object(control, "_chat_language", lambda current, text: current)
++        self.language.start()
++        # Load the real regex-only guard without importing the optional wiki DB
++        # package (aiosqlite is not needed for command localization).
++        guard_path = Path(control.__file__).parents[1] / "memory/wiki/secret_guard.py"
++        spec = importlib.util.spec_from_file_location("isolated_secret_guard", guard_path)
++        guard = importlib.util.module_from_spec(spec)
++        spec.loader.exec_module(guard)
++        self.guard = patch.dict(sys.modules, {"dodaios.memory.wiki.secret_guard": guard})
++        self.guard.start()
++
++    def tearDown(self):
++        self.guard.stop()
++        self.language.stop()
++        self.chat_store.close()
++
++    def request(self, command, *, locale="it", arguments="", request_id="test-1"):
++        return CommandRequest(command=command, locale=locale, arguments=arguments, request_id=request_id)
++
++    def test_request_accepts_italian_but_rejects_unknown_locale(self):
++        self.assertEqual(self.request("help").locale, "it")
++        with self.assertRaises(ValidationError):
++            self.request("help", locale="unsupported")
++
++    async def test_missing_find_argument_is_localized_and_receipt_stays_failed(self):
++        request = self.request("find")
++        with self.assertLogs(control.log, level="WARNING") as captured:
++            result = await self.controls.execute(self.session.session_id, request)
++        self.assertEqual(result.status, "failed")
++        self.assertEqual(result.error, "Usa /find seguito dal testo da cercare")
++        self.assertIn("Use /find followed by search text", captured.output[0])
++        replay = await self.controls.execute(self.session.session_id, request)
++        self.assertEqual(replay.error, result.error)
++        self.assertIsNone(control._command_origin.get())
++
++    async def test_other_locale_keeps_existing_english_behavior(self):
++        result = await self.controls.execute(self.session.session_id, self.request("find", locale="de"))
++        self.assertEqual(result.error, "Use /find followed by search text")
++
++    async def test_provider_diagnostic_is_not_translated_even_if_text_matches_local_error(self):
++        diagnostic = "The chat is working; use /stop first"
++        with patch.object(self.controls, "_dispatch", AsyncMock(side_effect=ValueError(diagnostic))):
++            result = await self.controls.execute(self.session.session_id, self.request("find", arguments="word"))
++        self.assertEqual(result.error, diagnostic)
++
++    async def test_stop_reason_uses_request_locale_without_changing_language_or_status_ids(self):
++        state = self.controls.state(self.session.session_id)
++        state.output_language = "fr"
++        state.goal = GoalState(id="synthetic-goal", objective="synthetic", started_ms=1, updated_ms=1)
++        self.controls.store.save(state)
++        result = await self.controls.execute(self.session.session_id, self.request("stop"))
++        self.assertEqual(result.status, "done")
++        self.assertEqual(result.state.goal.status, "paused")
++        self.assertEqual(result.state.goal.reason, "Fermato dall’utente")
++        self.assertEqual(result.state.output_language, "fr")
++        self.service.cancel.assert_awaited_once_with(self.session.session_id)
++
++    async def test_surface_admission_error_is_localized(self):
++        with self.assertRaisesRegex(ValueError, "soltanto nelle chat"):
++            await self.controls.execute("missing-session", self.request("help"))
++
++    def test_dynamic_command_and_permission_identifiers_are_preserved(self):
++        self.assertEqual(ControlError("/{command} needs an argument", command="remember").localized("it"), "/remember richiede un argomento")
++        message = ControlError("{runner} cannot provide an actionable approval for {permission}", runner="codex-cli", permission="ask")
++        self.assertIn("codex-cli", message.localized("it"))
++        self.assertIn("ask", message.localized("it"))
++        self.assertIn("cannot provide", str(message))
++        self.assertEqual(control_message("raw error {identifier}", "it"), "raw error {identifier}")
++
++    def test_every_finite_local_error_template_is_covered(self):
++        source = ast.parse(Path(control.__file__).read_text())
++        templates = [
++            node.args[0].value for node in ast.walk(source)
++            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
++            and node.func.id in ("ControlError", "_control_text")
++            and node.args and isinstance(node.args[0], ast.Constant)
++        ]
++        self.assertTrue(templates)
++        for message in templates:
++            self.assertIn(message, _MESSAGES_IT)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_italian_config_readback.py b/tests/test_italian_config_readback.py
+new file mode 100644
+index 000000000..a272f5198
+--- /dev/null
++++ b/tests/test_italian_config_readback.py
+@@ -0,0 +1,41 @@
++"""Offline checks of real config readback and sensitive-path protection."""
++import unittest
++
++# Preserve the application's established import order for self_mod.
++import dodaios.core.config  # noqa: F401
++from dodaios.voice.config_readback import config_readback
++
++
++class ItalianConfigReadbackTests(unittest.TestCase):
++    def test_values_and_restart(self):
++        for value, spoken in ((True, "attivato"), (False, "disattivato"), (None, "vuoto")):
++            with self.subTest(value=value):
++                output = {"applied": True, "path": "tts.speed", "description": "Audio", "new_value": value}
++                self.assertEqual(config_readback(success=True, output=output, language="it"), f"Fatto: Audio ora è {spoken}.")
++                output.update(description="", requires_restart=True)
++                text = config_readback(success=True, output=output, language="it")
++                self.assertIn("l’impostazione", text)
++                self.assertIn("Riavvia", text)
++
++    def test_sensitive_value_is_hidden(self):
++        output = {"applied": True, "path": "security.admin_password_hash", "description": "Credenziale", "new_value": "SECRET-742"}
++        text = config_readback(success=True, output=output, language="it")
++        self.assertNotIn("SECRET-742", text)
++        self.assertIn("il nuovo valore", text)
++
++    def test_failures_never_claim_success_or_leak_values(self):
++        for kind in ("forbidden_path", "path_not_allowed", "validate_failed", "reload_failed_rolled_back", "rollback_failed"):
++            with self.subTest(kind=kind):
++                output = {"error_kind": kind, "path": "secret.path", "new_value": "SECRET-742"}
++                text = config_readback(success=False, output=output, language="it")
++                self.assertTrue(text)
++                for forbidden in ("Fatto", "SECRET-742", "secret.path"):
++                    self.assertNotIn(forbidden, text)
++
++    def test_unrecognized_outcome_keeps_fallthrough(self):
++        self.assertIsNone(config_readback(success=False, output={}, language="it"))
++        self.assertIsNone(config_readback(success=True, output="unrelated", language="it"))
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_italian_config_roundtrip.py b/tests/test_italian_config_roundtrip.py
+new file mode 100644
+index 000000000..3faa1e472
+--- /dev/null
++++ b/tests/test_italian_config_roundtrip.py
+@@ -0,0 +1,33 @@
++"""Exercise real TOML writers and config parsing against a disposable file."""
++from pathlib import Path
++from tempfile import TemporaryDirectory
++import tomllib
++import unittest
++
++from dodaios.core.config import load_config
++from dodaios.core import config_writer
++
++
++class ItalianConfigRoundtripTests(unittest.TestCase):
++    def test_ui_and_reply_language_survive_reload_independently(self):
++        with TemporaryDirectory() as directory:
++            path = Path(directory) / "jarvis.toml"
++            path.write_text('[ui]\nlanguage = "en"\n[brain]\nreply_language = "auto"\n[stt]\nlanguage = "de"\n')
++            config_writer.set_ui_language("it", path=path)
++            cfg = load_config(config_file=path)
++            self.assertEqual(cfg.ui.language, "it")
++            self.assertEqual(cfg.brain.reply_language, "auto")
++            self.assertEqual(cfg.stt.language, "de")
++            config_writer.set_reply_language("it", path=path)
++            cfg = load_config(config_file=path)
++            self.assertEqual(cfg.brain.reply_language, "it")
++            self.assertEqual(cfg.ui.language, "it")
++            self.assertEqual(cfg.stt.language, "de")
++            saved = tomllib.loads(path.read_text())
++            self.assertEqual(saved["ui"]["language"], "it")
++            self.assertEqual(saved["brain"]["reply_language"], "it")
++            self.assertEqual(saved["stt"]["language"], "de")
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_italian_confirmation.py b/tests/test_italian_confirmation.py
+new file mode 100644
+index 000000000..08e423052
+--- /dev/null
++++ b/tests/test_italian_confirmation.py
+@@ -0,0 +1,28 @@
++"""Italian go-ahead / veto classification uses its own patterns, not the German fallback."""
++import unittest
++
++from dodaios.voice.echo_confirmation import classify_response
++
++
++class ItalianConfirmationTests(unittest.TestCase):
++    def test_confirm(self):
++        for text in ("sì", "Sì, procedi", "vai pure", "ok", "fai", "confermo", "certo"):
++            with self.subTest(text=text):
++                self.assertEqual(classify_response(text, language="it"), "confirm")
++
++    def test_veto_wins_over_confirm(self):
++        for text in ("no", "no, anzi sì", "annulla", "ferma tutto", "non farlo", "lascia perdere"):
++            with self.subTest(text=text):
++                self.assertEqual(classify_response(text, language="it"), "veto")
++
++    def test_ambiguous_and_unknown(self):
++        self.assertEqual(classify_response("forse", language="it"), "ambiguous")
++        self.assertEqual(classify_response("aspetta un attimo", language="it"), "ambiguous")
++        self.assertEqual(classify_response("che ore sono", language="it"), "unknown")
++
++    def test_a_question_is_not_approval(self):
++        self.assertNotEqual(classify_response("puoi ripetere?", language="it"), "confirm")
++
++    def test_live_approval_locales_include_italian(self):
++        from dodaios.live.tools import _APPROVAL_LOCALES
++        self.assertIn("it", _APPROVAL_LOCALES)
+diff --git a/tests/test_italian_input_detection.py b/tests/test_italian_input_detection.py
+new file mode 100644
+index 000000000..e39142fa7
+--- /dev/null
++++ b/tests/test_italian_input_detection.py
+@@ -0,0 +1,37 @@
++"""Reply language 'auto' mirrors the input: Italian text must not read as Spanish or English."""
++import unittest
++from itertools import combinations
++
++from dodaios.core import turn_language as tl
++
++
++class ItalianInputDetectionTests(unittest.TestCase):
++    def test_italian_sentences_resolve_to_italian(self):
++        for text in (
++            "A breve inizierò a lavorare con te",
++            "Ciao, come stai?",
++            "Mi puoi aiutare con una cosa?",
++            "Voglio scrivere una email al mio capo",
++            "Cosa fai oggi?",
++            "Perché non funziona?",
++        ):
++            with self.subTest(text=text):
++                self.assertEqual(tl.resolve_output_language("auto", "unknown", text, default="en"), "it")
++
++    def test_other_supported_languages_are_unchanged(self):
++        for text, code in (("Hola, ¿cómo estás?", "es"), ("Olá, tudo bem?", "pt"),
++                           ("Wie geht es dir heute?", "de"), ("What is the weather today?", "en")):
++            with self.subTest(text=text):
++                self.assertEqual(tl.resolve_output_language("auto", "unknown", text, default="en"), code)
++
++    def test_word_sets_stay_disjoint(self):
++        for (a, x), (b, y) in combinations(tl._SETS, 2):
++            self.assertFalse(x & y, (a, b, sorted(x & y)))
++
++    def test_italian_reply_to_italian_target_is_a_match(self):
++        result = tl.validate_output_language("Va bene, sono qui quando hai bisogno di me.", resolved_language="it")
++        self.assertNotEqual(result.status, "mismatch")
++        self.assertEqual(
++            tl.validate_output_language("Perfecto. Aquí estoy cuando lo necesites ahora mismo.", resolved_language="it").status,
++            "mismatch",
++        )
+diff --git a/tests/test_italian_language_support.py b/tests/test_italian_language_support.py
+new file mode 100644
+index 000000000..7ef5194ae
+--- /dev/null
++++ b/tests/test_italian_language_support.py
+@@ -0,0 +1,159 @@
++"""Offline language boundary checks; no application server or provider is loaded.
++
++The registry/catalog are imported normally. Heavy application modules are parsed
++and their exact methods/annotations compiled in isolation: these tests do not
++claim a live HTTP route or a TOML persistence round trip.
++"""
++from __future__ import annotations
++
++import ast
++import json
++from string import Formatter
++from pathlib import Path
++import types
++import unittest
++from typing import Literal
++
++from pydantic import TypeAdapter, ValidationError
++
++from dodaios.i18n import catalog
++from dodaios.i18n.locales import (
++    SUPPORTED_LANGUAGE_NAMES,
++    SUPPORTED_LOCALES,
++    phrase_locale,
++)
++
++ROOT = Path(__file__).resolve().parents[1]
++
++
++def tree(path: str) -> ast.Module:
++    return ast.parse((ROOT / path).read_text(encoding="utf-8-sig"))
++
++
++def load_nodes(nodes: list[ast.stmt], namespace: dict) -> dict:
++    exec(compile(ast.Module(body=nodes, type_ignores=[]), "<source-boundary>", "exec"), namespace)
++    return namespace
++
++
++def annotated_value(path: str, name: str):
++    node = next(n for n in tree(path).body if isinstance(n, ast.AnnAssign) and n.target.id == name)
++    return ast.literal_eval(node.value)
++
++
++def field_type(path: str, class_name: str, field: str):
++    cls = next(n for n in tree(path).body if isinstance(n, ast.ClassDef) and n.name == class_name)
++    annotation = next(n.annotation for n in cls.body if isinstance(n, ast.AnnAssign) and n.target.id == field)
++    return eval(compile(ast.Expression(annotation), "<annotation>", "eval"), {"Literal": Literal})
++
++
++class ItalianLanguageSupportTests(unittest.TestCase):
++    def test_explicit_reply_pin_and_canned_phrase_catalog_are_available(self):
++        self.assertIn("it", ("auto", *SUPPORTED_LOCALES))
++        self.assertEqual(SUPPORTED_LANGUAGE_NAMES["it"], "Italian")
++        self.assertIn("it", SUPPORTED_LOCALES)
++        self.assertEqual(phrase_locale("it"), "it")
++        self.assertEqual(catalog.t("brain.lang_switch_confirm", "it"), "Fatto: d’ora in poi risponderò in italiano.")
++
++    def test_italian_catalog_matches_every_key_variant_and_placeholder(self):
++        root = ROOT / "dodaios/i18n/locales"
++        english = json.loads((root / "en.json").read_text())
++        italian = json.loads((root / "it.json").read_text())
++        portuguese = json.loads((root / "pt.json").read_text())
++        formatter = Formatter()
++        # English alone carries a pre-composed sentence there; every other
++        # language fills {permission} and {pane} (see _blocked_permission_readback).
++        by_pt = ".voice.action.phrases.cu_blocked_permission"
++
++        def walk(master, translated, path=""):
++            self.assertIs(type(translated), type(master), path)
++            if isinstance(master, dict):
++                self.assertEqual(master.keys(), translated.keys(), path)
++                for key in master:
++                    walk(master[key], translated[key], f"{path}.{key}")
++            elif isinstance(master, list):
++                self.assertEqual(len(master), len(translated), path)
++                for index, (left, right) in enumerate(zip(master, translated)):
++                    walk(left, right, f"{path}[{index}]")
++            else:
++                fields = lambda text: sorted(field for _, field, _, _ in formatter.parse(text) if field is not None)
++                if path == by_pt:
++                    master = portuguese["voice"]["action"]["phrases"]["cu_blocked_permission"]
++                self.assertEqual(fields(master), fields(translated), path)
++                self.assertTrue(translated.strip(), path)
++        walk(english, italian)
++
++    def test_normalize_and_live_switch_use_italian_registry(self):
++        source = tree("dodaios/brain/manager.py")
++        normalize = next(n for n in source.body if isinstance(n, ast.FunctionDef) and n.name == "normalize_reply_language")
++        manager = next(n for n in source.body if isinstance(n, ast.ClassDef) and n.name == "BrainManager")
++        names = {"set_reply_language", "_mandatory_lang_directive", "_reply_language_directive"}
++        methods = [n for n in manager.body if isinstance(n, ast.FunctionDef) and n.name in names]
++        ns = load_nodes([normalize, *methods], {"_REPLY_LANGS": frozenset(("auto", *SUPPORTED_LOCALES)), "_REPLY_LANG_NAMES": SUPPORTED_LANGUAGE_NAMES})
++        self.assertEqual(ns["normalize_reply_language"](" IT "), "it")
++        self.assertEqual(ns["normalize_reply_language"]("unsupported"), "auto")
++        owner = types.SimpleNamespace()
++        for method in methods:
++            setattr(owner, method.name, types.MethodType(ns[method.name], owner))
++        owner.set_reply_language(" IT ")
++        self.assertEqual(owner._reply_language, "it")
++        self.assertIn("Always reply in Italian", owner._reply_language_directive())
++        with self.assertRaises(ValueError):
++            owner.set_reply_language("unsupported")
++
++    def test_ui_configuration_and_route_allow_italian(self):
++        adapter = TypeAdapter(field_type("dodaios/core/config.py", "UIConfig", "language"))
++        self.assertEqual(adapter.validate_python("it"), "it")
++        with self.assertRaises(ValidationError):
++            adapter.validate_python("unsupported")
++        self.assertIn("it", annotated_value("dodaios/ui/web/settings_routes.py", "_UI_LANGUAGES"))
++
++    def test_control_boundary_accepts_italian_and_rejects_unknown(self):
++        adapter = TypeAdapter(field_type("dodaios/ui/web/control_routes.py", "LanguageBody", "reply_language"))
++        self.assertEqual(adapter.validate_python("it"), "it")
++        with self.assertRaises(ValidationError):
++            adapter.validate_python("unsupported")
++
++    def test_italian_stt_tags_survive_promotion_to_supported_catalog(self):
++        from dodaios.core.turn_language import normalize_any_language_tag, normalize_language_tag
++        for tag in ("it", "ita", "Italian", "italiano", "it-IT", "it_IT"):
++            with self.subTest(tag=tag):
++                self.assertEqual(normalize_language_tag(tag), "it")
++                self.assertEqual(normalize_any_language_tag(tag), "it")
++
++    def test_valid_italian_output_is_not_rejected_as_spanish(self):
++        from dodaios.core.turn_language import validate_output_language
++        for text in (
++            "La casa è molto bella e la cosa che mi piace di più è la luce.",
++            "Questa risposta contiene le informazioni che hai richiesto.",
++        ):
++            result = validate_output_language(text, resolved_language="it")
++            self.assertEqual(result.status, "match")
++        result = validate_output_language(
++            "The weather today is beautiful and I would like to go outside.",
++            resolved_language="it",
++        )
++        self.assertEqual(result.status, "mismatch")
++
++    def test_tool_confirmation_uses_the_italian_catalog(self):
++        from dodaios.voice.tool_confirmation import format_tool_confirmation
++        expected = catalog.t("voice.tool_confirmation.generic_question", "it")
++        self.assertEqual(format_tool_confirmation("synthetic_unknown_tool", language="it-IT"), expected)
++        self.assertNotEqual(expected, catalog.t("voice.tool_confirmation.generic_question", "en"))
++
++    def test_recognition_already_accepts_italian(self):
++        self.assertIn("it", annotated_value("dodaios/core/config.py", "RECOGNITION_LANGUAGES"))
++
++    def test_language_writers_preserve_independent_config_paths(self):
++        calls = []
++        source = tree("dodaios/core/config_writer.py")
++        names = {"set_ui_language", "set_reply_language"}
++        methods = [n for n in source.body if isinstance(n, ast.FunctionDef) and n.name in names]
++        ns = load_nodes(methods, {"Path": Path, "DEFAULT_CONFIG_FILE": Path("unused"), "_patch_table": lambda *args: calls.append(args)})
++        path = Path("synthetic-config.toml")
++        ns["set_ui_language"]("it", path=path)
++        ns["set_reply_language"]("en", path=path)
++        self.assertEqual(calls, [(path, "ui", "language", "it"), (path, "brain", "reply_language", "en")])
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_italian_pipeline_spawn.py b/tests/test_italian_pipeline_spawn.py
+new file mode 100644
+index 000000000..989ad3367
+--- /dev/null
++++ b/tests/test_italian_pipeline_spawn.py
+@@ -0,0 +1,47 @@
++"""Italian (``it``) registration in the speech pipeline, spawn announcements,
++spawn gate and workspace clarification."""
++
++from __future__ import annotations
++
++import asyncio
++
++from dodaios.agentic_ide import clarify
++from dodaios.brain import spawn_gate
++from dodaios.brain.ack_brain import spawn_announcement as sa
++from dodaios.speech import pipeline as pl
++
++
++def test_pipeline_phrase_tables_and_lang():
++    assert "it" in pl._PHRASE_LANGS
++    assert pl._phrase_lang("it") == "it"
++    assert pl._phrase_lang("it-IT") == "it"
++    assert pl._phrase_lang("italian") == "it"
++    assert pl._CLARIFY_QUESTION_PHRASE["it"]
++    assert pl._ACTION_DONE_PHRASE["it"] == "Fatto."
++    assert pl.SpeechPipeline._bcp47("it") == "it-IT"
++    ph = pl.SpeechPipeline._BG_READBACK_PHRASES["it"]
++    assert set(ph) == set(pl.SpeechPipeline._BG_READBACK_PHRASES["pt"])
++    assert "{s}" in ph["done_summ"] and "{e}" in ph["fail"]
++
++
++def test_spawn_announcement_pools():
++    for pool in (sa._FALLBACK_SPAWN, sa._FALLBACK_ALREADY_RUNNING, sa.STILL_RUNNING_PHRASES):
++        assert pool["it"]
++    assert all("{agent}" in p for p in sa._FALLBACK_SPAWN["it"])
++    assert all("{agent}" in p for p in sa._FALLBACK_ALREADY_RUNNING["it"])
++    assert "it" in sa._PERSONA_LANGS
++    assert "Italian" in sa.get_spawn_persona("it", "Max-Agent")
++    assert sa._resolve_language("it-IT", "") == "it"
++    assert sa._COMPLETION_CLAIM_RE.search("È stato inviato.")
++    assert sa._COMPLETION_CLAIM_RE.search("Fatto.")
++
++
++def test_spawn_gate_italian_markers():
++    assert spawn_gate._DELEGATION_MARKER_RE.search("lancialo in background")
++    assert spawn_gate._DELEGATION_MARKER_RE.search("delega questo a un agente")
++    assert spawn_gate._DELEGATION_MARKER_RE.search("avvia una missione")
++
++
++def test_clarify_classifier_accepts_italian_tag():
++    assert clarify.classify_short_answer("no", "it") == "veto"
++    assert clarify.classify_short_answer("", "it") == "unknown"
+diff --git a/tests/test_italian_voice_phrases_a.py b/tests/test_italian_voice_phrases_a.py
+new file mode 100644
+index 000000000..bf6e3ef06
+--- /dev/null
++++ b/tests/test_italian_voice_phrases_a.py
+@@ -0,0 +1,157 @@
++"""Italian (``it``) coverage of the voice modules: instant_ack, action_phrases, parked_results.
++
++Exercises the REAL tables: every key ``pt`` has must exist for ``it``, the
++``{placeholders}`` must match the pt entries, and nothing may fall back to
++English.
++"""
++from __future__ import annotations
++
++import re
++
++import pytest
++
++from dodaios.voice import action_phrases, instant_ack, parked_results
++
++_FIELD_RE = re.compile(r"\{(\w+)\}")
++
++
++def _fields(text: str) -> set[str]:
++    return set(_FIELD_RE.findall(text))
++
++
++def test_it_is_a_supported_language_everywhere() -> None:
++    assert "it" in instant_ack._SUPPORTED_LANGUAGES
++    assert "it" in action_phrases._SUPPORTED
++    assert "it" in parked_results._SUPPORTED_LANGUAGES
++    assert instant_ack._language_key("it-IT") == "it"
++    assert parked_results._language_key("it") == "it"
++    assert instant_ack.language_name("it") == "Italian"
++
++
++@pytest.mark.parametrize("work_class", list(instant_ack.WorkClass))
++def test_instant_ack_pools_have_italian(work_class: instant_ack.WorkClass) -> None:
++    pt = instant_ack.instant_ack_pool(work_class, "pt", agent_brand="Nova-Agent")
++    it = instant_ack.instant_ack_pool(work_class, "it", agent_brand="Nova-Agent")
++    en = instant_ack.instant_ack_pool(work_class, "en", agent_brand="Nova-Agent")
++    assert bool(it) == bool(pt)
++    assert len(it) == len(pt)
++    assert not set(it) & set(en)
++    if work_class is instant_ack.WorkClass.MISSION:
++        assert all("Nova-Agent" in line for line in it)
++    for line in it:
++        assert "{" not in line
++
++
++def test_instant_ack_pick_is_italian_not_default() -> None:
++    line = instant_ack.pick_instant_ack_text(instant_ack.WorkClass.RESEARCH, "it")
++    assert line in instant_ack.instant_ack_pool(instant_ack.WorkClass.RESEARCH, "it")
++    assert line not in instant_ack.instant_ack_pool(instant_ack.WorkClass.RESEARCH, "en")
++    assert instant_ack.normalize_ack_line(line) in instant_ack.all_instant_ack_lines("it")
++
++
++@pytest.mark.parametrize("activity", list(instant_ack.ToolActivity))
++def test_progress_pools_have_italian(activity: instant_ack.ToolActivity) -> None:
++    pt = instant_ack.progress_pool(activity, "pt")
++    it = instant_ack.progress_pool(activity, "it")
++    en = instant_ack.progress_pool(activity, "en")
++    assert len(it) == len(pt)
++    assert not set(it) & set(en)
++    if it:
++        assert instant_ack.pick_progress_text(activity, "it") in it
++    else:
++        assert instant_ack.pick_progress_text(activity, "it") == ""
++
++
++def test_intent_and_free_word_tables_have_italian() -> None:
++    assert instant_ack._INTENT_VERBS["it"]
++    assert instant_ack._FREE_WORDS["it"]
++    assert set(instant_ack._INTENT_VERBS) == set(instant_ack._FREE_WORDS)
++    assert "it" in instant_ack._INTENT_VERBS
++
++
++def test_contextual_ack_validator_italian() -> None:
++    ok = instant_ack.contextual_ack_is_valid
++    assert ok("Apro Spotify.", utterance="apri Spotify per favore", language="it")
++    assert ok(
++        "Controllo le tue note.", utterance="controlla le note", language="it"
++    )
++    # Result claims and invented words are rejected.
++    assert not ok("Spotify è aperto.", utterance="apri Spotify", language="it")
++    assert not ok("Ho aperto Spotify.", utterance="apri Spotify", language="it")
++    assert not ok("Fatto.", utterance="apri Spotify", language="it")
++    assert not ok("Apro Spotify e Netflix.", utterance="apri Spotify", language="it")
++    assert not ok("Apro Spotify?", utterance="apri Spotify", language="it")
++
++
++@pytest.mark.parametrize("lang", ["it", "pt"])
++def test_wait_query_classification(lang: str) -> None:
++    probes = {
++        "it": {
++            "a che punto sei": parked_results.WAIT_QUERY_PROGRESS,
++            "come va": parked_results.WAIT_QUERY_PROGRESS,
++            "hai già finito": parked_results.WAIT_QUERY_PROGRESS,
++            "quanto manca": parked_results.WAIT_QUERY_PROGRESS,
++            "stai ancora lavorando": parked_results.WAIT_QUERY_PROGRESS,
++            "cosa hai trovato": parked_results.WAIT_QUERY_RESULT,
++            "e il risultato": parked_results.WAIT_QUERY_RESULT,
++            "qual è il risultato": parked_results.WAIT_QUERY_RESULT,
++            "ciao, dimmi il risultato adesso": parked_results.WAIT_QUERY_RESULT,
++            "cosa hai trovato sui prezzi dei voli nel wiki di ieri sera": "",
++            "apri spotify": "",
++        },
++        "pt": {"como vais": parked_results.WAIT_QUERY_PROGRESS},
++    }[lang]
++    for text, expected in probes.items():
++        assert parked_results.classify_wait_query(text) == expected, text
++
++
++def test_parked_topic_and_anchor_italian() -> None:
++    assert parked_results._TOPIC_STOPWORDS["it"]
++    assert parked_results.topic_of("per favore apri il calendario", "it") == "apri il calendario"
++    pool = parked_results.anchor_pool("it")
++    assert pool != parked_results.anchor_pool("en")
++    assert len(pool) == len(parked_results.anchor_pool("pt"))
++    assert all(_fields(line) == {"topic", "result"} for line in pool)
++    bare = parked_results.anchor_pool("it", with_topic=False)
++    assert bare != parked_results.anchor_pool("en", with_topic=False)
++    assert all(_fields(line) == {"result"} for line in bare)
++    out = parked_results.reanchor(
++        "Sono le tre.", request_text="che ore sono", language="it", intervening_turns=1
++    )
++    assert "Sono le tre." in out
++
++
++def test_action_phrase_catalog_italian() -> None:
++    for key, by_lang in action_phrases._PHRASES.items():
++        assert "it" in by_lang, key
++        assert _fields(by_lang["it"]) == _fields(by_lang["pt"]), key
++        if by_lang["en"] != by_lang["pt"]:
++            assert by_lang["it"] != by_lang["en"], key
++
++
++def test_reason_families_and_fixed_causes_italian() -> None:
++    for _pattern, by_lang in action_phrases._REASON_FAMILIES:
++        assert set(by_lang) >= {"it"}
++        assert _fields(by_lang["it"]) == _fields(by_lang["pt"])
++        assert by_lang["it"] != by_lang["en"]
++    for _en, by_lang in action_phrases._PERMISSION_FIXED_CAUSES.items():
++        assert by_lang["it"] != by_lang["en"]
++        assert _fields(by_lang["it"]) == _fields(by_lang["pt"])
++
++
++def test_blocked_permission_names_italian() -> None:
++    for keyword, names in action_phrases._BLOCKED_PERMISSION_NAMES:
++        assert "it" in names, keyword
++        permission, pane = names["it"]
++        assert permission and pane
++        assert (permission, pane) != names["en"] if "en" in names else True
++        assert (permission, pane) != names["pt"]
++
++
++def test_blocked_permission_readback_italian() -> None:
++    sentence = "Accessibility permission is off. Allow it in System Settings."
++    text = action_phrases._blocked_permission_readback("it", sentence)
++    assert text and "Accessibilit" in text
++    assert text != action_phrases._blocked_permission_readback("en", sentence)
++    assert action_phrases._spoken_pane("A > B & C", "it") == "A, poi B e C"
++    assert action_phrases.resolve_phrase_language("it", "hello") == "it"
+diff --git a/tests/test_italian_voice_phrases_b.py b/tests/test_italian_voice_phrases_b.py
+new file mode 100644
+index 000000000..61623f97a
+--- /dev/null
++++ b/tests/test_italian_voice_phrases_b.py
+@@ -0,0 +1,54 @@
++"""Italian coverage for the voice number speller, live tools and browser voice."""
++from __future__ import annotations
++
++import pytest
++
++from dodaios.browser_voice.session import BrowserVoiceSession
++from dodaios.live import tools as live_tools
++from dodaios.voice.number_speller import spell_out_numbers
++
++
++@pytest.mark.parametrize(
++    ("text", "expected"),
++    [
++        ("0", "zero"),
++        ("1", "uno"),
++        ("21", "ventuno"),
++        ("100", "cento"),
++        ("1234", "milleduecentotrentaquattro"),
++        ("1,5", "uno virgola cinque"),
++        ("1.000", "mille"),
++    ],
++)
++def test_italian_numbers(text: str, expected: str) -> None:
++    assert spell_out_numbers(text, "it") == expected
++    assert spell_out_numbers(text, "it-IT") == expected
++
++
++def test_italian_time_date_and_version() -> None:
++    assert spell_out_numbers("20:30", "it") == "venti e trenta"
++    assert spell_out_numbers("20:00", "it") == "venti in punto"
++    assert spell_out_numbers("1:10", "it") == "una e dieci"
++    assert spell_out_numbers("17.08.2026", "it") == "diciassette agosto duemilaventisei"
++    assert spell_out_numbers("01.03.2026", "it") == "primo marzo duemilaventisei"
++    assert spell_out_numbers("3.11", "it") == "tre punto undici"
++    assert spell_out_numbers("192.168.1.1", "it") == (
++        "centonovantadue punto centosessantotto punto uno punto uno"
++    )
++
++
++def test_other_languages_unchanged() -> None:
++    assert spell_out_numbers("1,5", "de") == "eins Komma fünf"
++    assert spell_out_numbers("1.5", "en") == "one point five"
++
++
++def test_live_tools_italian_go_ahead_words() -> None:
++    assert {"sì", "procedi", "conferma"} <= live_tools._GO_AHEAD_WORDS
++
++
++def test_browser_voice_lang_short_accepts_italian() -> None:
++    session = BrowserVoiceSession.__new__(BrowserVoiceSession)
++    session.language_code = "it-IT"
++    assert session._lang_short() == "it"
++    session.language_code = "fr-FR"
++    assert session._lang_short() == "en"
+diff --git a/tests/unit/brain/test_cu_fast_path_unwired.py b/tests/unit/brain/test_cu_fast_path_unwired.py
+index 9cb828451..80f3ec25e 100644
+--- a/tests/unit/brain/test_cu_fast_path_unwired.py
++++ b/tests/unit/brain/test_cu_fast_path_unwired.py
+@@ -133,8 +133,8 @@ def test_cu_not_wired_is_translated_in_every_locale() -> None:
+     from dodaios.voice.action_phrases import _PHRASES
+ 
+     variants = _PHRASES["cu_not_wired"]
+-    assert set(variants) == {"de", "en", "es", "pt"}
+-    assert len(set(variants.values())) == 4, f"a locale was left untranslated: {variants}"
++    assert set(variants) == {"de", "en", "es", "pt", "it"}
++    assert len(set(variants.values())) == 5, f"a locale was left untranslated: {variants}"
+     # The actionable half must survive translation in every locale.
+     assert all("computer_use.enabled" in text for text in variants.values())
+ 
+diff --git a/tests/unit/brain/test_provider_down_phrase.py b/tests/unit/brain/test_provider_down_phrase.py
+index 3ed111c64..80177ef82 100644
+--- a/tests/unit/brain/test_provider_down_phrase.py
++++ b/tests/unit/brain/test_provider_down_phrase.py
+@@ -128,7 +128,7 @@ class TestCauseAwareProviderDownPhrase:
+         from dodaios.brain.manager import _PROVIDER_DOWN_CAUSE_PHRASES
+ 
+         for cause, table in _PROVIDER_DOWN_CAUSE_PHRASES.items():
+-            assert set(table) == {"de", "en", "es", "pt"}, cause
++            assert set(table) == {"de", "en", "es", "pt", "it"}, cause
+ 
+     def test_cause_phrases_are_voice_safe(self) -> None:
+         from dodaios.brain.manager import _PROVIDER_DOWN_CAUSE_PHRASES
+diff --git a/tests/unit/cu/indicator/test_controller.py b/tests/unit/cu/indicator/test_controller.py
+index 99f7899c5..7ee893777 100644
+--- a/tests/unit/cu/indicator/test_controller.py
++++ b/tests/unit/cu/indicator/test_controller.py
+@@ -149,7 +149,7 @@ def test_hint_table_covers_every_supported_locale() -> None:
+ 
+     supported = {
+         resolve_output_language(pin, "", "", default="en")
+-        for pin in ("de", "en", "es", "pt")
++        for pin in ("de", "en", "es", "pt", "it")
+     }
+     assert supported == set(_ESC_HINTS.keys())
+     assert all(hint.strip() for hint in _ESC_HINTS.values())

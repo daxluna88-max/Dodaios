@@ -720,6 +720,7 @@ def _build_provider(tts_cfg: Any, provider: str) -> Any:
             voice_id_en=ct.get("voice_id_en"),
             voice_id_es=ct.get("voice_id_es"),
             voice_id_pt=ct.get("voice_id_pt"),
+            voice_id_it=ct.get("voice_id_it"),
             language=ct.get("language", tts_cfg.language_code or "auto"),
             chunk_by_sentence=bool(ct.get("chunk_by_sentence", True)),
             speed=float(ct.get("speed", tts_cfg.speed)),

@@ -6,6 +6,8 @@ Model names are namespaced ("anthropic/claude-opus-4.7", "openai/gpt-5").
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from typing import Any
@@ -23,6 +25,53 @@ from ._openai_base import CLIENT_TIMEOUT, stream_complete
 # almost every path; this only bites a genuinely model-less construction.
 DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
 BASE_URL = "https://openrouter.ai/api/v1"
+
+
+log = logging.getLogger(__name__)
+
+
+def _data_policy() -> dict[str, Any] | None:
+    """OpenRouter provider routing for privacy (``JARVIS_OPENROUTER_DATA_COLLECTION=deny``).
+
+    ``deny`` asks the gateway to route only to upstream providers that do not store prompts or train
+    on them. Off by default (no behaviour change). When on, a model with no such provider fails
+    with an explicit routing error instead of silently sending the data to one that keeps it.
+    """
+    value = os.environ.get("JARVIS_OPENROUTER_DATA_COLLECTION", "").strip().lower()
+    if value == "deny":
+        return {"provider": {"data_collection": "deny"}}
+    return None
+
+
+#: Seconds to wait before each retry of a provider-side 429.
+_RATE_LIMIT_WAITS: tuple[float, ...] = (2.0, 5.0, 10.0)
+
+
+def _fallback_models(primary: str) -> list[str]:
+    """Models OpenRouter may answer with when ``primary`` fails (``JARVIS_OPENROUTER_FALLBACK_MODELS``, comma separated)."""
+    raw = os.environ.get("JARVIS_OPENROUTER_FALLBACK_MODELS", "")
+    out: list[str] = []
+    for name in raw.split(","):
+        name = name.strip()
+        if name and name != primary and name not in out:
+            out.append(name)
+    return out
+
+
+def _is_upstream_rate_limit(exc: BaseException) -> bool:
+    """True for a 429 the gateway relays from the model's own provider."""
+    if getattr(exc, "status_code", None) == 429:
+        return True
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error", body)
+        if isinstance(error, dict):
+            if error.get("code") == 429:
+                return True
+            metadata = error.get("metadata")
+            if isinstance(metadata, dict) and metadata.get("error_type") == "rate_limit_exceeded":
+                return True
+    return "rate_limit_exceeded" in str(exc).lower()
 
 
 class OpenRouterBrain:
@@ -74,12 +123,41 @@ class OpenRouterBrain:
         return self._client
 
     async def complete(self, req: BrainRequest) -> AsyncIterator[BrainDelta]:
+        """One call, retried with a short wait when the upstream provider rate-limits it.
+
+        OpenRouter reports a rate limit of the model's own provider as a generic
+        "Provider returned error" (code 429 in the body) that the SDK's own
+        retry does not see. With one brain in the chain that error ended the turn
+        ("Non riesco a raggiungere il fornitore"); a few seconds' wait usually
+        clears it. Only before the first words: a half-spoken answer is never
+        replayed.
+        """
+        for attempt in range(len(_RATE_LIMIT_WAITS) + 1):
+            started = False
+            try:
+                async for delta in self._complete_once(req):
+                    started = True
+                    yield delta
+                return
+            except Exception as exc:  # noqa: BLE001 — only a provider rate limit is retried
+                if started or attempt >= len(_RATE_LIMIT_WAITS) or not _is_upstream_rate_limit(exc):
+                    raise
+                log.warning(
+                    "openrouter(%s): provider rate limit, retrying in %ss (%d/%d)",
+                    self._model, _RATE_LIMIT_WAITS[attempt], attempt + 1, len(_RATE_LIMIT_WAITS),
+                )
+                await asyncio.sleep(_RATE_LIMIT_WAITS[attempt])
+
+    async def _complete_once(self, req: BrainRequest) -> AsyncIterator[BrainDelta]:
         client = self._client
         if client is None:
             # First use imports the SDK — seconds on a cold disk, and never on
             # the event loop (BUG-189; see claude_api.py for the measurement).
             client = await asyncio.to_thread(self._ensure_client)
         extra_body: dict[str, Any] | None = None
+        policy = _data_policy()
+        if policy is not None:
+            extra_body = dict(policy)
         if getattr(req, "reasoning_effort", None) == "none":
             # OpenRouter's unified ``reasoning`` parameter: ask the gateway to
             # disable internal reasoning for this call. Gatewayed
@@ -88,7 +166,12 @@ class OpenRouterBrain:
             # latency the caller opted out of with ``reasoning_effort="none"``.
             # The gateway normalizes the field per model; models without a
             # reasoning knob are unaffected.
-            extra_body = {"reasoning": {"enabled": False}}
+            extra_body = {**(extra_body or {}), "reasoning": {"enabled": False}}
+        fallbacks = _fallback_models(self._model)
+        if fallbacks:
+            # OpenRouter's own model fallback: the gateway tries the next model
+            # when the first one errors or is rate limited, with no wait here.
+            extra_body = {**(extra_body or {}), "models": [self._model, *fallbacks]}
         if extra_body is None:
             async for delta in stream_complete(client, self._model, req):
                 yield delta
@@ -111,8 +194,10 @@ class OpenRouterBrain:
             # upstream just refused — under its other name (live 2026-07-26:
             # two identical 400s per delegated voice turn against
             # google/gemini-3.5-flash, whose endpoint requires reasoning).
+            # The privacy routing rule must survive this retry: dropping it here would send the
+            # prompt to a provider the person asked not to use.
             async for delta in stream_complete(
-                client, self._model, replace(req, reasoning_effort=None)
+                client, self._model, replace(req, reasoning_effort=None), extra_body=policy
             ):
                 yield delta
             return

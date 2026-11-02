@@ -1,0 +1,57 @@
+diff --git a/dodaios/browser_voice/session.py b/dodaios/browser_voice/session.py
+index 6c8efd44a..f35aea9ac 100644
+--- a/dodaios/browser_voice/session.py
++++ b/dodaios/browser_voice/session.py
+@@ -77,6 +77,7 @@ _TTS_MIN_CHARS = 80  # first piece: short, so the voice starts early
+ _TTS_NEXT_MIN_CHARS = 240  # later pieces: longer, so the intonation resets less often
+ _TTS_MAX_CHARS = 450
+ _MAX_LEAD_S = 6.0
++_SLICE_BYTES = TTS_SAMPLE_RATE * 2  # 1 s of 16-bit mono PCM, always sample-aligned
+ 
+ 
+ class _ReplyState:
+@@ -708,23 +709,27 @@ class BrowserVoiceSession:
+                         )
+                     if rate != TTS_SAMPLE_RATE:
+                         pcm = resample_pcm16(pcm, rate, TTS_SAMPLE_RATE)
+-                    pcm = apply_output_gain_pcm16(
+-                        pcm,
+-                        vol,
+-                        sample_rate=TTS_SAMPLE_RATE,
+-                        limiter=self._out_limiter,
+-                    )
+-                    # The browser's playback ring holds ~10 s and drops the OLDEST audio
+-                    # on overrun, so never run more than _MAX_LEAD_S ahead of real time.
+-                    if clock_start is None:
+-                        clock_start = time.monotonic()
+-                    lead = audio_seconds - (time.monotonic() - clock_start)
+-                    if lead > _MAX_LEAD_S:
+-                        await asyncio.sleep(lead - _MAX_LEAD_S)
+-                    audio_seconds += len(pcm) / 2 / TTS_SAMPLE_RATE
+-                    self._audio_seconds_total += len(pcm) / 2 / TTS_SAMPLE_RATE
+-                    await self._send_binary(pcm)
+-                    sent += 1
++                    # Cloud engines (Cartesia) return a whole piece as ONE chunk, tens of seconds long.
++                    # Send it in ~1 s slices so the pacing below can hold the lead: the browser's
++                    # playback ring keeps ~10 s and drops the OLDEST audio on overrun, which skips
++                    # the start of the piece and jumps to its end.
++                    for offset in range(0, len(pcm), _SLICE_BYTES):
++                        part = apply_output_gain_pcm16(
++                            pcm[offset : offset + _SLICE_BYTES],
++                            vol,
++                            sample_rate=TTS_SAMPLE_RATE,
++                            limiter=self._out_limiter,
++                        )
++                        # Never run more than _MAX_LEAD_S ahead of real time.
++                        if clock_start is None:
++                            clock_start = time.monotonic()
++                        lead = audio_seconds - (time.monotonic() - clock_start)
++                        if lead > _MAX_LEAD_S:
++                            await asyncio.sleep(lead - _MAX_LEAD_S)
++                        audio_seconds += len(part) / 2 / TTS_SAMPLE_RATE
++                        self._audio_seconds_total += len(part) / 2 / TTS_SAMPLE_RATE
++                        await self._send_binary(part)
++                        sent += 1
+ 
+             if not spoken_pieces:
+                 return 0  # nothing to say (reply was empty or only filler): stay silent

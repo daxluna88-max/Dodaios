@@ -93,31 +93,33 @@ _TOKEN_RE = re.compile(r"\b[\w']+\b", re.UNICODE)
 # translation, quotation, negation, or task. The vocabulary is speech input.
 _LANGUAGE_REQUEST_RE = re.compile(
     r"(?:jarvis[\s,]+)?"
-    r"(?:(?:please|bitte|por favor)[\s,]+)?"  # i18n-allow
+    r"(?:(?:please|bitte|por favor|per favore|per piacere)[\s,]+)?"  # i18n-allow
     r"(?:(?:always|from now on|immer|ab jetzt|siempre|a partir de ahora|sempre"  # i18n-allow
-    r"|a partir de agora)\s+)?"  # i18n-allow
+    r"|a partir de agora|d'ora in poi|da ora in poi)\s+)?"  # i18n-allow
     r"(?:(?:can|could|would) you\s+|(?:kannst|könntest) du\s+|puedes\s+"  # i18n-allow
-    r"|(?:podes|consegues|pode|podia|podias)\s+)?"  # i18n-allow
-    r"(?:(?:please|bitte|por favor)\s+)?"  # i18n-allow
+    r"|(?:podes|consegues|pode|podia|podias)\s+|(?:puoi|potresti|riesci a)\s+)?"  # i18n-allow
+    r"(?:(?:please|bitte|por favor|per favore|per piacere)\s+)?"  # i18n-allow
     r"(?:(?:speak|reply|respond|answer|write|continue|switch)(?:\s+to me)?\s+"
     r"|(?:sprich|spreche|antworte|antworten|schreib|schreibe|rede|wechsel|wechsle)\s+"  # i18n-allow
     r"|(?:sollst|du sollst)\s+"  # i18n-allow
     r"|(?:habla|háblame|responde|contesta|escribe|cambia)\s+"
+    r"|(?:parla|parlare|parlami|rispondi|rispondere|rispondimi|scrivi|scrivere|scrivimi|cambia|cambiare|passa|passare)\s+"
     r"|(?:fala|fale|falar|responde|responda|responder|escreve|escreva|escrever"  # i18n-allow
     r"|muda|mude|passa|continua)(?:-me)?(?:\s+comigo)?\s+)?"  # i18n-allow
-    r"(?:(?:please|bitte|por favor)\s+)?"  # i18n-allow
+    r"(?:(?:please|bitte|por favor|per favore|per piacere)\s+)?"  # i18n-allow
     r"(?:(?:always|from now on|immer|ab jetzt|siempre|a partir de ahora|sempre"  # i18n-allow
-    r"|a partir de agora)\s+)?"  # i18n-allow
+    r"|a partir de agora|d'ora in poi|da ora in poi)\s+)?"  # i18n-allow
     r"(?:(?:in|auf|en|to|zu|a|em|para)\s+)?"  # i18n-allow
     r"(?P<language>deutsch|german|alemán|aleman|english|englisch|inglés|ingles"  # i18n-allow
     r"|español|espanol|spanish|spanisch"  # i18n-allow
     r"|português|portugues|portugués|portuguese|portugiesisch"  # i18n-allow
     r"|alemão|alemao|inglês|espanhol"  # i18n-allow
+    r"|italiano|inglese|spagnolo|tedesco|francese|portoghese"  # i18n-allow
     r"|turkish|türkisch|türkçe|turkce|french|französisch|italian|italienisch"  # i18n-allow
     r"|dutch|niederländisch|polish|polnisch|russian|russisch|greek|griechisch"  # i18n-allow
     r"|arabic|arabisch|japanese|japanisch|korean|koreanisch|chinese|chinesisch)"  # i18n-allow
     r"(?:\s+(?:antworten|sprechen|konuş|konus|cevap ver))?"  # i18n-allow
-    r"(?:[\s,]+(?:please|bitte|por favor|now|jetzt|ahora|agora))?"  # i18n-allow
+    r"(?:[\s,]+(?:please|bitte|por favor|now|jetzt|ahora|agora|adesso|ora))?"  # i18n-allow
     r"[\s.!?]*",
     re.IGNORECASE,
 )
@@ -129,6 +131,8 @@ _REQUEST_LANGUAGE_CODES = {
     "portuguese": "pt", "portugiesisch": "pt",  # i18n-allow
     "alemão": "de", "alemao": "de", "inglês": "en", "espanhol": "es",  # i18n-allow
     # Languages without translated system phrases: the model still answers in them.
+    "italiano": "it", "inglese": "en", "spagnolo": "es", "tedesco": "de",  # i18n-allow
+    "francese": "fr", "portoghese": "pt",  # i18n-allow
     "turkish": "tr", "türkisch": "tr", "türkçe": "tr", "turkce": "tr",  # i18n-allow
     "french": "fr", "französisch": "fr", "italian": "it", "italienisch": "it",  # i18n-allow
     "dutch": "nl", "niederländisch": "nl", "polish": "pl", "polnisch": "pl",  # i18n-allow
@@ -199,6 +203,8 @@ class OutputLanguageValidation:
 # weak point to each of the two (the pan-European acute-e counts for nothing).
 _DE_SCRIPT_RE = re.compile(r"[äöüÄÖÜß]")  # i18n-allow: German-script regex
 _ES_SCRIPT_RE = re.compile(r"[ñÑ¿¡]")
+# Grave accents on e/i/o/u: Italian only (Portuguese writes "à", French is not supported).
+_IT_SCRIPT_RE = re.compile(r"[èìòùÈÌÒÙ]")
 _PT_SCRIPT_RE = re.compile(r"[ãõçâêôàÃÕÇÂÊÔÀ]")
 _IBERIAN_ACUTE_RE = re.compile(r"[áíóúÁÍÓÚ]")
 
@@ -229,15 +235,17 @@ _EN_TOKENS: frozenset[str] = frozenset({
     "yesterday",
 })
 # Spanish words also common in Portuguese ("que", "como", "por", "favor",
-# "para", "está", "estás", "abre", "clima") are excluded.
+# "para", "está", "estás", "abre", "clima") or Italian ("la", "lo", "un", "una",
+# "con", "del", "al") are excluded.
 _ES_TOKENS: frozenset[str] = frozenset({
-    "el", "la", "los", "las", "un", "una", "unos", "unas", "qué",
+    "el", "los", "las", "unos", "unas", "qué",
     "cómo", "cuándo", "cuando", "dónde", "donde", "quién", "quien",
     "hace", "hacer", "hoy", "mañana", "ahora", "estoy", "tiempo", "gracias",
     "hola", "sí", "puedes", "puedo", "puede", "quiero", "necesito", "dime",
-    "dame", "muestra", "lee", "escribe", "y", "pero", "con", "del", "al",
-    "muy", "bien", "hay", "yo", "tú", "lo", "eso", "esto", "también",
-    "entonces", "tengo",
+    "dame", "muestra", "lee", "escribe", "y", "pero",
+    "muy", "bien", "hay", "yo", "tú", "eso", "esto", "también",
+    "entonces", "tengo", "sé", "buenas", "buenos", "noches", "señor", "ayuda",
+    "ayúdame",
 })
 # Portuguese words also common in Spanish, German or English ("que", "para",
 # "está", "da", "dos", "das", "um", "as", "do", "o", "e", "na", "tu", "porque",
@@ -254,17 +262,39 @@ _PT_TOKENS: frozenset[str] = frozenset({
     "são", "foi", "bem", "neste", "nesta", "nesse", "nessa",
 })
 
+# Italian words also common in Spanish or Portuguese ("la", "lo", "una", "con",
+# "te", "mi", "breve", "ma", "vai", "ci") are excluded.
+_IT_TOKENS: frozenset[str] = frozenset({
+    "il", "gli", "che", "non", "per", "sono", "ho", "hai", "ha", "di", "nel",
+    "nella", "della", "dello", "degli", "alla", "sul", "cosa", "dove", "oggi",
+    "domani", "adesso", "grazie", "ciao", "buongiorno", "buonasera", "anche",
+    "ancora", "molto", "fare", "puoi", "posso", "può", "voglio", "vorrei",
+    "potresti", "dimmi", "dammi", "apri", "leggi", "scrivi", "perché", "perche",
+    "questo", "questa", "quello", "quella", "sì", "sto", "stai", "sta", "bene",
+    "tutto", "senza", "sempre", "già", "più", "così", "mio", "mia", "tuo",
+    "io", "lui", "lei", "noi", "voi", "loro", "devo", "deve", "faccio", "fai",
+    "fatto", "poi", "però", "quindi", "inizierò", "lavorare", "scrivere",
+    "aiutare", "aiuto", "capo", "perfetto", "mostrami", "dimmelo", "vorrei",
+    "presto", "lavoro", "lavoriamo", "lavoreremo", "insieme", "subito", "ecco",
+    "dai", "senti", "salve", "allora", "davvero", "niente", "nulla", "qualcosa",
+    "qualche", "ogni", "mai", "buon", "notte", "sera", "mattina", "siamo",
+    "vediamo", "vado", "andiamo", "iniziamo", "cominciamo", "scusa", "scusami",
+    "prego", "arrivederci", "alla", "sulla", "nello", "negli", "dalla", "dallo",
+})
+
 _SETS: tuple[tuple[str, frozenset[str]], ...] = (
     ("de", _DE_TOKENS),
     ("en", _EN_TOKENS),
     ("es", _ES_TOKENS),
     ("pt", _PT_TOKENS),
+    ("it", _IT_TOKENS),
 )
 
 # Whisper cloud APIs return language NAMES; local faster-whisper returns ISO
 # codes; some TTS configs use BCP-47 ("pt-PT", "pt-BR"). All collapse to
-# de/en/es/pt here.
+# de/en/es/pt/it here.
 _TAG_TO_CODE: dict[str, str] = {
+    "it": "it", "ita": "it", "italian": "it", "italiano": "it",
     "de": "de", "deu": "de", "ger": "de", "german": "de", "deutsch": "de",
     "en": "en", "eng": "en", "english": "en", "englisch": "en",
     "es": "es", "spa": "es", "spanish": "es", "spanisch": "es",
@@ -275,7 +305,7 @@ _TAG_TO_CODE: dict[str, str] = {
 
 
 def normalize_language_tag(tag: object) -> str:
-    """Collapse an STT/TTS tag to ``de``/``en``/``es``/``pt``/``unknown``."""
+    """Collapse an STT/TTS tag to ``de``/``en``/``es``/``pt``/``it``/``unknown``."""
     if not tag:
         return "unknown"
     head = str(tag).strip().lower().replace("_", "-").split("-", 1)[0]
@@ -377,11 +407,6 @@ _OTHER_TOKENS: dict[str, frozenset[str]] = {
             "bonjour merci oui très où c'est j'ai suis sont avez peux faire fais moi "  # i18n-allow
             "toi ça aujourd'hui demain fichier ouvre montre s'il plaît plait qu'est "  # i18n-allow
             "voudrais savoir marche "  # i18n-allow
-        ),
-        "it": (
-            "che sono è questo questa quello perché perche grazie ciao buongiorno "  # i18n-allow
-            "anche ancora molto fare puoi voglio della dello degli nel nella sul "  # i18n-allow
-            "alla gli dove oggi domani adesso io ho hai abbiamo di stai "  # i18n-allow
         ),
         "nl": (
             "het een ik jij niet wat hoe waarom waar wanneer bedankt alsjeblieft "  # i18n-allow
@@ -531,6 +556,8 @@ def _add_script_scores(text: str, scores: dict[str, int]) -> None:
         scores["es"] += 2
     if _PT_SCRIPT_RE.search(text):
         scores["pt"] += 2
+    if _IT_SCRIPT_RE.search(text):
+        scores["it"] += 2
     if _IBERIAN_ACUTE_RE.search(text):
         scores["es"] += 1
         scores["pt"] += 1
@@ -748,6 +775,7 @@ def resolve_conversation_language(
     text: str,
     *,
     conversation_language: object = "",
+    fallback_language: object = "",
 ) -> str:
     """The language the person is speaking in this turn: any code, or ``unknown``.
 
@@ -767,7 +795,10 @@ def resolve_conversation_language(
        cannot replace an established language;
     4. else the detected language of the turn (text first, the STT tag breaks
        ties), an ambiguous substantive turn inheriting ``conversation_language``;
-    5. else ``"unknown"``.
+    5. else ``fallback_language`` (the app's configured UI language) when it
+       names a known language: a short Italian message such as "Ricorda" has no
+       detectable language and no history yet, and the pilot's UI is Italian;
+    6. else ``"unknown"``.
     """
     pin = str(reply_language or "").strip().lower()
     if pin in _REPLY_PINS:
@@ -791,7 +822,10 @@ def resolve_conversation_language(
         return detected
     if detected != "unknown":
         return detected
-    return normalize_any_language_tag(stt_language)
+    tagged = normalize_any_language_tag(stt_language)
+    if tagged != "unknown":
+        return tagged
+    return _known_language(fallback_language) or "unknown"
 
 
 def resolve_output_language(
@@ -801,6 +835,7 @@ def resolve_output_language(
     *,
     default: str = DEFAULT_LOCALE,
     conversation_language: object = "",
+    fallback_language: object = "",
 ) -> str:
     """The SINGLE authoritative output language for one turn (de/en/es/pt).
 
@@ -820,12 +855,15 @@ def resolve_output_language(
     that is not a pin (``"auto"``, ``""``, ``None``, a typo) means "no pin —
     mirror the input". ``conversation_language`` is the language of the
     conversation so far (any code); pass ``""`` when none is established yet.
+    ``fallback_language`` is the configured UI language, used before ``default``
+    when neither the text, the history nor the STT tag name a language.
     """
     language = resolve_conversation_language(
         reply_language,
         stt_language,
         text,
         conversation_language=conversation_language,
+        fallback_language=fallback_language,
     )
     if language in _REPLY_PINS:
         return language

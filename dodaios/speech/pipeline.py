@@ -484,7 +484,7 @@ _REALTIME_UNAVAILABLE_PHRASE: dict[str, str] = i18n_catalog.table("speech.realti
 #   • NO-ANSWER — a bare provider stall / total cap with no tool evidence:
 #     honestly admit we could not find it out, never the vague "took too long".
 # Both are short, TTS-clean (``_speak`` does not scrub — no em-dash, two short
-# sentences), and carry all supported locales (de/en/es/pt). String-only: NO LLM
+# sentences), and carry all supported locales (de/en/es/pt/it). String-only: NO LLM
 # call in this timeout/scrub path (AP-11). Resolved through the ONE output-
 # language decision via ``_resolve_timeout_phrase`` below (— no
 # per-layer language re-derivation).
@@ -505,6 +505,7 @@ _CLARIFY_QUESTION_PHRASE: dict[str, str] = {
     "en": "What do you mean exactly?",
     "es": "¿Qué quieres decir exactamente?",
     "pt": "O que queres dizer exatamente?",
+    "it": "Cosa intendi esattamente?",
 }
 
 # AD-OE6 confirmation for a SUCCESSFUL wordless desktop-action turn. When the
@@ -522,21 +523,22 @@ _ACTION_DONE_PHRASE: dict[str, str] = {
     "en": "Done.",
     "es": "Listo.",
     "pt": "Feito.",
+    "it": "Fatto.",
 }
 
 
-_PHRASE_LANGS: frozenset[str] = frozenset({"de", "en", "es", "pt"})
+_PHRASE_LANGS: frozenset[str] = frozenset({"de", "en", "es", "pt", "it"})
 
 
 def _phrase_lang(lang: str | None) -> str:
-    """Normalize a detected-language tag to a canned-phrase key ("de"/"en"/"es"/"pt").
+    """Normalize a detected-language tag to a canned-phrase key ("de"/"en"/"es"/"pt"/"it").
 
     The utterance language reaches the phrase pickers in two shapes: full
     language NAMES from the STT transcript (``(transcript.language or
     "en").lower()`` → ``"german"``/``"spanish"`` for Groq Whisper) and
     BCP-47-ish CODES ("de", "de-DE", "es-ES") from config pins / announcements.
     Both collapse through the canonical ``normalize_language_tag`` so every
-    supported language (de/en/es/pt) selects its own phrase set; anything
+    supported language (de/en/es/pt/it) selects its own phrase set; anything
     unrecognised falls back to ``DEFAULT_LOCALE``. The pickers used to test
     ``lang.startswith("de")`` only — ``"german"`` does not start with "de", so
     every canned AD-OE6 fallback (clarify question, action-done ack,
@@ -545,7 +547,7 @@ def _phrase_lang(lang: str | None) -> str:
     bug 2026-06-09: "antwortet fast immer mit einer englischen
     Standardphrase"); a Spanish speaker hit the same trap until this normalizer
     learned ``es`` (Runtime Output Language doctrine). The canned tables now
-    carry every supported language (de/en/es/pt).
+    carry every supported language (de/en/es/pt/it).
     """
     code = normalize_language_tag(lang)
     return code if code in _PHRASE_LANGS else DEFAULT_LOCALE
@@ -1917,6 +1919,8 @@ def _smalltalk_fallback_for_non_substantive(prompt: str, lang: str) -> str | Non
         "como estas",  # i18n-allow: Spanish wellbeing marker
         "como estás",  # i18n-allow: PT wellbeing marker
         "tudo bem",  # i18n-allow: PT wellbeing marker
+        "come stai",  # i18n-allow: IT wellbeing marker
+        "come va",  # i18n-allow: IT wellbeing marker
     )
     if not any(marker in low for marker in wellbeing_markers):
         return None
@@ -1927,6 +1931,8 @@ def _smalltalk_fallback_for_non_substantive(prompt: str, lang: str) -> str | Non
         return "Estoy bien. ¿Qué hacemos ahora?"  # i18n-allow: Spanish TTS
     if phrase_lang == "pt":
         return "Estou bem. O que fazemos a seguir?"  # i18n-allow: PT TTS
+    if phrase_lang == "it":
+        return "Sto bene. Cosa facciamo adesso?"  # i18n-allow: IT TTS
     return "I'm good, Ruben. What's next?"
 
 
@@ -5070,6 +5076,10 @@ class SpeechPipeline:
             "pt": (
                 "[execução agendada] Está na hora do skill '{name}'. Executa as "
                 "suas instruções agora e informa brevemente o resultado."
+            ),
+            "it": (
+                "[esecuzione programmata] È ora della skill '{name}'. Esegui "  # i18n-allow
+                "ora le sue istruzioni e riferisci brevemente il risultato."
             ),
             "en": (
                 "[scheduled run] It is time for the '{name}' skill. Execute its "
@@ -17048,8 +17058,8 @@ class SpeechPipeline:
                 # These are *runtime* bilingual output strings (not artifacts),
                 # so they stay bilingual per the voice-output policy.
                 spoken_phrases: dict[str, dict[str, str]] = {
-                    "incomplete": {"de": "Mhm?", "en": "Mhm?", "es": "¿Mhm?", "pt": "Hum?"},
-                    "abort": {"de": "Okay.", "en": "Okay.", "es": "Vale.", "pt": "Ok."},
+                    "incomplete": {"de": "Mhm?", "en": "Mhm?", "es": "¿Mhm?", "pt": "Hum?", "it": "Mh?"},
+                    "abort": {"de": "Okay.", "en": "Okay.", "es": "Vale.", "pt": "Ok.", "it": "Ok."},
                 }
                 lang_key = _phrase_lang(lang)
                 phrase = spoken_phrases.get(kind, {}).get(lang_key, "Mhm?")
@@ -18360,7 +18370,7 @@ class SpeechPipeline:
         return result is not False
 
     #: Spoken readback for a Jarvis-Agent background task that finished off the
-    #: chat path. de/en/es/pt so the readback follows the conversation language
+    #: chat path. de/en/es/pt/it so the readback follows the conversation language
     #: instead of a hardcoded German literal (forensic 2026-06-23). German
     #: strings are TTS product surface, not source artifacts (i18n-allow).
     _BG_READBACK_PHRASES: dict[str, dict[str, str]] = {
@@ -18388,15 +18398,21 @@ class SpeechPipeline:
             "fail": "Isso não funcionou. {e}",
             "unknown_err": "erro desconhecido",
         },
+        "it": {
+            "done": "Fatto.",
+            "done_summ": "Fatto. {s}",
+            "fail": "Non ha funzionato. {e}",
+            "unknown_err": "errore sconosciuto",
+        },
     }
 
     _BCP47: dict[str, str] = {
-        "de": "de-DE", "en": "en-US", "es": "es-ES", "pt": "pt-PT",
+        "de": "de-DE", "en": "en-US", "es": "es-ES", "pt": "pt-PT", "it": "it-IT",
     }
 
     @classmethod
     def _bcp47(cls, lang: object) -> str | None:
-        """Map a de/en/es/pt turn-language code to a TTS BCP-47 locale, else None.
+        """Map a de/en/es/pt/it turn-language code to a TTS BCP-47 locale, else None.
 
         Single source for the whole pipeline — replaces four hand-copied maps,
         one of which (the task-ack prerender) had silently dropped ``es``, so a

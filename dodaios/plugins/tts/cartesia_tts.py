@@ -28,6 +28,8 @@ CARTESIA_VERSION = "2026-03-01"
 _HTTP_TIMEOUT_S = 30.0
 _QUOTA_COOLDOWN_S = 900.0
 _MAX_CHARS_PER_REQUEST = 8_000
+_TRUNCATION_MIN_CHARS = 120  # shorter pieces are not checked for cut-off audio
+_TRUNCATION_MAX_CPS = 28.0  # chars per second above which the audio is treated as cut off
 
 DEFAULT_MODEL_ID = "sonic-3.5"
 
@@ -79,6 +81,7 @@ class CartesiaTTS:
         voice_id_en: str | None = None,
         voice_id_es: str | None = None,
         voice_id_pt: str | None = None,
+        voice_id_it: str | None = None,
         language: str = "auto",
         chunk_by_sentence: bool = True,
         speed: float = 1.0,
@@ -99,6 +102,10 @@ class CartesiaTTS:
             "es": voice_id_es or DEFAULT_VOICE_ID_ES,
             "pt": voice_id_pt or DEFAULT_VOICE_ID_PT,
         }
+        # Italian has no built-in default: only a configured voice enables it, otherwise
+        # Italian falls back to the doctrine default locale as before.
+        if voice_id_it:
+            self._voice_by_lang["it"] = voice_id_it
         self._language = language
         # Voice used when neither a per-call language_code nor the text sniff
         # resolves a language. A configured concrete language pins it; else the
@@ -329,29 +336,56 @@ class CartesiaTTS:
             payload["generation_config"] = {"speed": self._speed}
 
         assert self._client is not None
-        try:
-            resp = await self._client.post(CARTESIA_TTS_ENDPOINT, json=payload)
-        except Exception as exc:  # noqa: BLE001
-            log.warning(
-                "Cartesia HTTP error (%s) -- soft-fail.", exc.__class__.__name__
-            )
-            return b""
+        # One retry on a transient failure (transport error, 5xx/408, empty body): a piece that
+        # silently returns no audio is skipped mid-reply, which the listener hears as a jump.
+        best = b""
+        for attempt in (1, 2):
+            retry = attempt == 1
+            try:
+                resp = await self._client.post(CARTESIA_TTS_ENDPOINT, json=payload)
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "Cartesia HTTP error (%s) -- attempt %d/2, %d chars.",
+                    exc.__class__.__name__, attempt, len(text),
+                )
+                if retry:
+                    continue
+                return b""
 
-        if resp.status_code in (401, 403, 429):
-            raise _CartesiaFatalError(f"HTTP {resp.status_code}")
-        if resp.status_code >= 400:
-            body = resp.text[:200] if resp.text else "<empty>"
-            log.warning(
-                "Cartesia HTTP %d -- voice=%s text=%r body=%s",
-                resp.status_code, voice_id, text[:80], body,
-            )
-            return b""
+            if resp.status_code in (401, 403, 429):
+                raise _CartesiaFatalError(f"HTTP {resp.status_code}")
+            if resp.status_code >= 400:
+                body = resp.text[:200] if resp.text else "<empty>"
+                log.warning(
+                    "Cartesia HTTP %d -- voice=%s text=%r body=%s attempt %d/2",
+                    resp.status_code, voice_id, text[:80], body, attempt,
+                )
+                if retry and (resp.status_code >= 500 or resp.status_code == 408):
+                    continue
+                return b""
 
-        data = resp.content
-        if not data:
-            log.warning("Cartesia 200 OK but empty body -- voice=%s", voice_id)
-            return b""
-        return data
+            data = resp.content
+            if not data:
+                log.warning(
+                    "Cartesia 200 OK but empty body -- voice=%s attempt %d/2", voice_id, attempt
+                )
+                if retry:
+                    continue
+                return best
+            seconds = len(data) / 2 / CARTESIA_TTS_SAMPLE_RATE
+            log.warning(
+                "Cartesia piece: %d chars -> %.1f s of audio (attempt %d/2)",
+                len(text), seconds, attempt,
+            )
+            if len(data) > len(best):
+                best = data
+            # Speech runs at ~13 chars/s; a long piece that comes back far shorter was cut off
+            # by the service (200 OK, no error), which sounds like a skipped passage.
+            if retry and len(text) >= _TRUNCATION_MIN_CHARS and len(text) / max(seconds, 0.1) > _TRUNCATION_MAX_CPS:
+                log.warning("Cartesia audio looks truncated -- retrying once.")
+                continue
+            return best
+        return best
 
     async def _fallback(
         self, text: str, language_code: str | None

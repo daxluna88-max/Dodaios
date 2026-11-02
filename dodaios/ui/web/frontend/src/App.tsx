@@ -64,6 +64,8 @@ import { installDictationFocusTracker } from "@/lib/dictationTarget";
 import { SubscriptionRealtimeTransportBroker } from "@/components/voice/SubscriptionRealtimeTransportBroker";
 import { BrowserRealtimeControl } from "@/components/voice/BrowserRealtimeControl";
 import { cn } from "@/lib/utils";
+import { initialNavCollapsed } from "@/lib/navCollapsedDefault";
+import { useNarrowViewport } from "@/hooks/useNarrowViewport";
 
 /** Where the collapsed/expanded choice for the nav sidebar is remembered. */
 const NAV_COLLAPSED_KEY = "jarvis.sidebar.collapsed.v1";
@@ -262,11 +264,13 @@ export default function App() {
    * rather than taking the shell down with it.
    */
   const [navCollapsed, setNavCollapsed] = useState<boolean>(() => {
+    let stored: string | null = null;
     try {
-      return window.localStorage.getItem(NAV_COLLAPSED_KEY) === "true";
+      stored = window.localStorage.getItem(NAV_COLLAPSED_KEY);
     } catch {
-      return false;
+      /* storage unavailable — fall through to the width-based default */
     }
+    return initialNavCollapsed(stored, window.innerWidth);
   });
   // Dragging the seam is itself an "I want the sidebar" gesture: a drag that
   // left the rail state behind would snap straight back to icons and read as a
@@ -285,6 +289,14 @@ export default function App() {
     },
     [navCollapsed, sidebar],
   );
+
+  // Phone width: the rail has no seam to drag, so the full sidebar opens as a
+  // sheet over the page instead (and closes once a page or chat is picked).
+  const narrow = useNarrowViewport();
+  const [navSheetOpen, setNavSheetOpen] = useState(false);
+  useEffect(() => {
+    if (!narrow) setNavSheetOpen(false);
+  }, [narrow]);
 
   const activeSection = useEventStore((s) => s.activeSection);
   // Agents, Docs and the Wiki fill the window: each brings its own navigation column,
@@ -363,7 +375,26 @@ export default function App() {
           <Sidebar
             width={sidebar.size}
             collapsed={navCollapsed}
+            onOpenMenu={narrow ? () => setNavSheetOpen(true) : undefined}
           />
+          {narrow && navSheetOpen && (
+            <div className="fixed inset-0 z-40 flex" data-testid="nav-sheet">
+              <button
+                type="button"
+                aria-label={t("common.close")}
+                className="absolute inset-0 bg-black/50"
+                onClick={() => setNavSheetOpen(false)}
+              />
+              <div
+                className="relative h-full max-w-[85vw] shadow-xl"
+                onClick={(event) => {
+                  if ((event.target as HTMLElement).closest("button, a")) setNavSheetOpen(false);
+                }}
+              >
+                <Sidebar width={280} collapsed={false} />
+              </div>
+            </div>
+          )}
 
           <PaneResizer
             showLine={false}

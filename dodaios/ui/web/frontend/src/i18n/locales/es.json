@@ -951,7 +951,18 @@
     "resize_hint": "Arrastra para cambiar el tamaño de la barra lateral; doble clic para restablecerlo",
     "ide_navigation": "Navegación del IDE",
     "workspace_options": "Opciones del espacio de trabajo",
-    "open_conversation_failed": "No se pudo abrir la conversación"
+    "open_conversation_failed": "No se pudo abrir la conversación",
+    "mic_mode_label": "Microphone mode",
+    "mic_mode_auto": "Automatic (speak, then tap)",
+    "mic_mode_push": "Hold to talk",
+    "mic_mode_always": "Always on",
+    "mic_device_label": "Microphone",
+    "mic_device_default": "System default",
+    "mic_auto_listening": "Listening… tap to pause",
+    "mic_auto_tap": "Tap to speak",
+    "mic_push_hold": "Hold to talk",
+    "mic_push_active": "Speak… release to send",
+    "mic_always_on": "Microphone always on"
   },
   "provider_billing": {
     "api": "API, facturación por uso",
@@ -1020,7 +1031,9 @@
     "prompt_mode_failed": "No se pudo cambiar el modo Prompt.",
     "theme_to_light": "Cambiar al modo claro",
     "theme_to_dark": "Cambiar al modo oscuro",
-    "back_to_assistant": "Volver a {name}"
+    "back_to_assistant": "Volver a {name}",
+    "call_end": "Terminar llamada",
+    "call_end_hint": "Termina la llamada. La conversación queda en el historial."
   },
   "assistant_chat": {
     "voice_enter": "Modo voz",
@@ -2665,6 +2678,12 @@
     "file_open": "Ver archivo",
     "never_title": "Nunca se guarda",
     "never_body": "{name} se niega a guardar esto, diga lo que diga una conversación.",
+    "never_cat": {
+      "political": "Política",
+      "health": "Salud",
+      "relationship": "Conflictos de pareja",
+      "mbti": "Tipo MBTI"
+    },
     "back_to_profile": "Volver al perfil",
     "fields": {
       "name": "Nombre",
@@ -3321,6 +3340,10 @@
       "self_build": "Autoconstrucción"
     },
     "languages_group_title": "Idiomas",
+    "privacy_group_title": "Privacidad",
+    "personal_context_title": "Enviar mi perfil y mi memoria a modelos en la nube",
+    "personal_context_description": "Activado: tu perfil, memoria, personas y contactos se incluyen en lo que se envía al proveedor del modelo. Desactivado: se quedan en este equipo y el asistente sabe menos de ti. Tus mensajes y lo que le pides que lea se siguen enviando. Se aplica desde el siguiente mensaje.",
+    "personal_context_error": "No se pudo guardar el ajuste. Inténtalo de nuevo.",
     "sections": {
       "voice": "Voz"
     },
@@ -4111,6 +4134,9 @@
       "pt": {
         "label": "Português (Portugal)",
         "description": "Portugués europeo para cada etiqueta y botón."
+      },
+      "it": {
+        "label": "Italiano (italiano)"
       }
     },
     "reply_options": {
@@ -4118,7 +4144,8 @@
       "en": "{name} responde en inglés.",
       "de": "{name} responde en alemán.",
       "es": "{name} responde en español.",
-      "pt": "{name} responde en portugués."
+      "pt": "{name} responde en portugués.",
+      "it": "{name} responde en italiano."
     },
     "stt_options": {
       "auto": "Detecta automáticamente el idioma que hablas.",
@@ -4399,7 +4426,8 @@
     "active_vault_label": "{name} escribe en",
     "restart_required_hint": "Reinicia {name} para empezar a escribir en la nueva ubicación.",
     "restart_now": "Reiniciar ahora",
-    "restarting": "Reiniciando…"
+    "restarting": "Reiniciando…",
+    "remote_note": "Obsidian is optional. It is installed on the computer where Jarvis runs, not on your phone or in the browser: if you use Jarvis remotely you can close this guide. The wiki can also be read inside Jarvis."
   },
   "docs_sidebar": {
     "title": "Documentación",
@@ -7558,7 +7586,8 @@
       "plan_mode": "el modo plan solo permite leer",
       "cancelled": "se canceló",
       "timeout": "nadie lo aprobó a tiempo",
-      "no_approver": "necesitaba una aprobación y no había nadie para darla"
+      "no_approver": "necesitaba una aprobación y no había nadie para darla",
+      "declined": "la rechazaste"
     },
     "family": {
       "wiki": "buscó en la wiki",

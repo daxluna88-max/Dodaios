@@ -281,3 +281,417 @@ async def test_browser_voice_fallback_ack_is_scoped_to_current_id():
         {"type": "tts_browser_done", "id": messages[0]["id"], "outcome": "ended"}
     )
     assert await task == 0
+
+
+def test_split_for_tts_keeps_first_piece_short_and_loses_no_text():
+    from dodaios.browser_voice.session import split_for_tts
+
+    text = (
+        "Un frigorifero sposta il calore dall'interno verso l'esterno. "
+        "Un liquido refrigerante evapora dentro lo scomparto freddo e assorbe calore. "
+        "Il compressore comprime il gas, che si scalda. "
+        "Nel condensatore sul retro il gas cede calore e torna liquido. "
+        "Un termostato accende e spegne il compressore."
+    )
+    pieces = split_for_tts(text)
+    assert len(pieces) > 1
+    assert " ".join(pieces) == text
+    assert all(len(piece) <= 450 for piece in pieces)
+    assert len(pieces[0]) < len(pieces[1])  # short first piece, longer next ones
+    assert split_for_tts("Ciao.") == ["Ciao."]
+    assert " ".join(split_for_tts("parola " * 200)) == ("parola " * 200).strip()
+
+
+def test_speak_never_runs_far_ahead_of_playback(monkeypatch):
+    import asyncio
+
+    from dodaios.browser_voice import session as mod
+
+    class Chunk:
+        sample_rate = mod.TTS_SAMPLE_RATE
+        pcm = b"\x01\x00" * mod.TTS_SAMPLE_RATE  # 1 s of audio
+
+    class FakeTts:
+        async def synthesize(self, text, language_code=None):
+            for _ in range(12):  # 12 s of audio, produced instantly
+                yield Chunk()
+
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(mod.asyncio, "sleep", fake_sleep)
+    sess = mod.BrowserVoiceSession.__new__(mod.BrowserVoiceSession)
+    sess._tts, sess._config, sess._out_limiter = FakeTts(), None, None
+    sess.language_code, sess.session_id = "it-IT", "t"
+
+    async def noop(*_a, **_k):
+        return None
+
+    sess._send_json = sess._send_binary = noop
+    sess._speaking = False
+    asyncio.run(sess._speak("Una frase."))
+    assert sleeps and max(sleeps) > 0  # the 7th second onward had to wait
+
+
+class _RecordingTTS:
+    name = "recording-tts"
+    supports_streaming = True
+
+    def __init__(self, on_call=None) -> None:
+        self.texts: list[str] = []
+        self._on_call = on_call
+
+    async def synthesize(self, text, language_code="it-IT", voice=None):
+        self.texts.append(text)
+        if self._on_call:
+            self._on_call(text)
+        yield AudioChunk(pcm=b"\x01\x00" * 240, sample_rate=24_000, timestamp_ns=0, channels=1)
+
+
+class _ScriptedBrain:
+    """Yields the given text pieces, with a hook that fires right before the LAST one."""
+
+    def __init__(self, parts, before_last=None) -> None:
+        self._parts = parts
+        self._before_last = before_last
+
+    async def generate_stream(self, user_text, **_kw):
+        for i, part in enumerate(self._parts):
+            if i == len(self._parts) - 1 and self._before_last:
+                self._before_last()
+            yield part
+            await asyncio.sleep(0)
+
+
+_LONG_IT = (
+    "Un frigorifero sposta il calore dall'interno verso l'esterno. "
+    "Un liquido refrigerante evapora dentro lo scomparto freddo e assorbe calore. "
+)
+
+
+async def _run_stream(session, tts_texts_hook=None):
+    from dodaios.browser_voice.session import _ReplyState
+
+    state = _ReplyState()
+    await session._speak_pieces(session._reply_pieces("domanda", state))
+    return state
+
+
+async def test_speech_starts_before_the_reply_is_complete():
+    sink = _Sink()
+    finished: list[str] = []
+    tts = _RecordingTTS(on_call=lambda text: finished.append("tts"))
+    brain = _ScriptedBrain(
+        [_LONG_IT, "Il compressore comprime il gas, che si scalda e lo spinge verso il retro."],
+        before_last=lambda: finished.append("last-brain-chunk"),
+    )
+    session = _make_session(sink, brain=brain, tts=tts, language_code="it-IT")
+    state = await _run_stream(session)
+    assert finished[0] == "tts"  # the first piece was synthesized before the brain ended
+    assert "".join(state.chunks).startswith("Un frigorifero")
+    assert sink.json_of("tts_start") and sink.json_of("tts_end")
+
+
+async def test_hard_leak_in_a_later_piece_cuts_speech_and_says_the_fallback():
+    from dodaios.brain.output_filter import FALLBACK_PHRASES
+
+    sink = _Sink()
+    tts = _RecordingTTS()
+    leak = "Traceback (most recent call last):\n  File \"x.py\", line 1, in <module>\nValueError: boom"
+    brain = _ScriptedBrain([_LONG_IT, leak])
+    session = _make_session(sink, brain=brain, tts=tts, language_code="it-IT")
+    state = await _run_stream(session)
+    assert state.cut
+    assert tts.texts[-1] == FALLBACK_PHRASES["en"] or tts.texts[-1] in FALLBACK_PHRASES.values()
+    assert not any("Traceback" in text or "ValueError" in text for text in tts.texts)
+    assert sink.json_of("tts_cancel")  # audio already queued in the browser was dropped
+
+
+async def test_whole_reply_scrub_catches_a_leak_that_spans_pieces():
+    sink = _Sink()
+    tts = _RecordingTTS()
+    # "Traceback" alone is harmless; the aggregate with the next lines is the leak.
+    brain = _ScriptedBrain([_LONG_IT + "Traceback (most recent call last):", "\n  File \"x.py\", line 1\nValueError: boom"])
+    session = _make_session(sink, brain=brain, tts=tts, language_code="it-IT")
+    state = await _run_stream(session)
+    assert state.cut
+    assert not any("ValueError" in text for text in tts.texts)
+
+
+async def test_empty_reply_is_silent_not_an_error():
+    sink = _Sink()
+    tts = _RecordingTTS()
+    session = _make_session(sink, brain=_ScriptedBrain([""]), tts=tts, language_code="it-IT")
+    state = await _run_stream(session)
+    assert not state.cut and not state.spoken and tts.texts == []
+
+
+class _Bus:
+    def __init__(self, session_ref) -> None:
+        self.events: list[tuple[str, bool]] = []
+        self._session_ref = session_ref
+
+    async def publish(self, event) -> None:
+        self.events.append((type(event).__name__, self._session_ref[0]._speaking))
+
+
+async def test_reply_text_is_published_while_the_voice_is_still_speaking():
+    sink = _Sink()
+    ref: list = []
+    bus = _Bus(ref)
+    session = _make_session(sink, tts=_SlowTTS(chunks=15, delay=0.02), bus=bus)
+    ref.append(session)
+    await _drive_one_utterance(session)
+    published = [speaking for name, speaking in bus.events if name == "ResponseGenerated"]
+    assert published == [True]  # text appeared during speech, not after it
+
+
+async def test_speaking_over_jarvis_interrupts_and_answers_the_new_request():
+    sink = _Sink()
+    brain = FakeBrain("Una risposta lunga che continua a parlare per un bel po' di tempo.")
+    session = _make_session(
+        sink,
+        stt=FakeSTT(["Raccontami cosa puoi fare", "grazie perfetto"]),
+        brain=brain,
+        tts=_SlowTTS(chunks=40, delay=0.02),
+    )
+    await _drive_until_speaking(session)
+    assert session._speaking
+    # The person talks over the reply.
+    for _ in range(8):
+        await session.handle_audio_frame(_pcm16_frame(15000))
+    for _ in range(10):
+        await session.handle_audio_frame(_pcm16_frame(0))
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if "grazie perfetto" in brain.prompts:
+            break
+    assert sink.json_of("tts_cancel")
+    assert "grazie perfetto" in brain.prompts
+
+
+async def test_jarvis_own_voice_picked_up_by_the_mic_does_not_interrupt_it():
+    sink = _Sink()
+    brain = FakeBrain("Una risposta lunga che continua a parlare per un bel po' di tempo.")
+    session = _make_session(
+        sink,
+        stt=FakeSTT(["Raccontami cosa puoi fare", "continua a parlare per un bel po"]),
+        brain=brain,
+        tts=_SlowTTS(chunks=40, delay=0.02),
+    )
+    await _drive_until_speaking(session)
+    for _ in range(8):
+        await session.handle_audio_frame(_pcm16_frame(15000))
+    for _ in range(10):
+        await session.handle_audio_frame(_pcm16_frame(0))
+    await asyncio.sleep(0.2)
+    assert not sink.json_of("tts_cancel")
+    assert brain.prompts == ["Raccontami cosa puoi fare"]
+
+
+async def test_a_phantom_grazie_does_not_interrupt_the_story():
+    sink = _Sink()
+    brain = FakeBrain("Una risposta lunga che continua a parlare per un bel po' di tempo.")
+    session = _make_session(
+        sink,
+        stt=FakeSTT(["Raccontami cosa puoi fare", "Grazie."]),
+        brain=brain,
+        tts=_SlowTTS(chunks=40, delay=0.02),
+    )
+    await _drive_until_speaking(session)
+    for _ in range(8):
+        await session.handle_audio_frame(_pcm16_frame(15000))
+    for _ in range(10):
+        await session.handle_audio_frame(_pcm16_frame(0))
+    await asyncio.sleep(0.2)
+    assert not sink.json_of("tts_cancel")
+    assert brain.prompts == ["Raccontami cosa puoi fare"]
+
+
+async def test_browser_engine_speaks_with_the_phone_and_never_calls_cloud_tts(monkeypatch):
+    monkeypatch.setenv("JARVIS_BROWSER_VOICE_ENGINE", "browser")
+    sink = _Sink()
+    tts = _RecordingTTS()
+    session = _make_session(sink, brain=_ScriptedBrain([_LONG_IT]), tts=tts, language_code="it-IT")
+
+    async def ack_soon():
+        for _ in range(200):
+            await asyncio.sleep(0.005)
+            for msg in sink.json_of("tts_browser_fallback"):
+                await session.handle_control({"type": "tts_browser_done", "id": msg["id"], "outcome": "ended"})
+
+    acker = asyncio.create_task(ack_soon())
+    await _run_stream(session)
+    acker.cancel()
+    assert tts.texts == []  # no cloud synthesis
+    assert sink.json_of("tts_browser_fallback")
+    assert sink.binary == []
+
+
+async def test_a_transcript_invented_from_silence_does_not_start_a_turn():
+    sink = _Sink()
+    brain = FakeBrain("risposta")
+    session = _make_session(sink, stt=FakeSTT(["Grazie."]), brain=brain)
+    await _drive_one_utterance(session)
+    assert brain.prompts == []
+    assert sink.json_of("vad_silence")
+
+
+async def test_a_real_short_turn_is_still_answered():
+    sink = _Sink()
+    brain = FakeBrain("risposta")
+    session = _make_session(sink, stt=FakeSTT(["Ciao"]), brain=brain)
+    await _drive_one_utterance(session)
+    assert brain.prompts == ["Ciao"]
+
+
+def test_repeated_invented_sentences_are_still_invented():
+    from dodaios.browser_voice.session import _is_silence_hallucination
+
+    assert _is_silence_hallucination("Grazie. Grazie.")
+    assert _is_silence_hallucination("Grazie.")
+    assert _is_silence_hallucination("Sottotitoli creati dalla comunità Amara.org")
+    assert not _is_silence_hallucination("Grazie, e adesso raccontami un'altra storia.")
+    assert not _is_silence_hallucination("Ciao")
+
+
+def test_hesitation_sounds_are_neither_a_turn_nor_an_interruption():
+    from dodaios.browser_voice.session import _is_phantom, _is_silence_hallucination
+
+    for sound in ("Mmm.", "Ehm...", "Hmm", "Uhm. Mmm."):
+        assert _is_silence_hallucination(sound)
+    assert _is_phantom("Mmm") and _is_phantom("ehm")
+    assert not _is_silence_hallucination("Mmm, e adesso dimmi l'ora")
+    assert not _is_silence_hallucination("Ok")
+
+
+async def test_the_chat_turn_is_closed_while_the_voice_is_still_speaking():
+    sink = _Sink()
+    ref: list = []
+    bus = _Bus(ref)
+    session = _make_session(sink, tts=_SlowTTS(chunks=15, delay=0.02), bus=bus)
+    ref.append(session)
+    await _drive_one_utterance(session)
+    completed = [speaking for name, speaking in bus.events if name == "VoiceTurnCompleted"]
+    assert completed == [True]  # filed in the chat during speech, once
+
+
+def test_one_long_chunk_is_sliced_and_paced(monkeypatch):
+    import asyncio
+
+    from dodaios.browser_voice import session as mod
+
+    class OneBigChunk:
+        sample_rate = mod.TTS_SAMPLE_RATE
+        pcm = b"\x01\x00" * (mod.TTS_SAMPLE_RATE * 12)  # 12 s in a single chunk, like a cloud piece
+
+    class FakeTts:
+        async def synthesize(self, text, language_code=None):
+            yield OneBigChunk()
+
+    sleeps: list[float] = []
+    frames: list[int] = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(mod.asyncio, "sleep", fake_sleep)
+    sess = mod.BrowserVoiceSession.__new__(mod.BrowserVoiceSession)
+    sess._tts, sess._config, sess._out_limiter = FakeTts(), None, None
+    sess.language_code, sess.session_id = "it-IT", "t"
+
+    async def noop(*_a, **_k):
+        return None
+
+    async def record(data):
+        frames.append(len(data))
+
+    sess._send_json = noop
+    sess._send_binary = record
+    sess._speaking = False
+    asyncio.run(sess._speak("Una frase."))
+    assert len(frames) == 12 and set(frames) == {mod._SLICE_BYTES}  # twelve 1 s frames, not one burst
+    assert sleeps and max(sleeps) > 0  # past the lead, the server waited
+
+
+def test_end_of_turn_silence_defaults_to_1400_ms_and_is_clamped(monkeypatch):
+    from dodaios.browser_voice.session import _end_of_turn_silence_ms
+
+    monkeypatch.delenv("JARVIS_BROWSER_VOICE_SILENCE_MS", raising=False)
+    assert _end_of_turn_silence_ms() == 1400
+    monkeypatch.setenv("JARVIS_BROWSER_VOICE_SILENCE_MS", "2000")
+    assert _end_of_turn_silence_ms() == 2000
+    monkeypatch.setenv("JARVIS_BROWSER_VOICE_SILENCE_MS", "50")
+    assert _end_of_turn_silence_ms() == 300
+    monkeypatch.setenv("JARVIS_BROWSER_VOICE_SILENCE_MS", "abc")
+    assert _end_of_turn_silence_ms() == 1400
+
+
+async def test_the_tail_still_playing_in_the_browser_is_not_taken_as_a_new_turn():
+    import time
+
+    from dodaios.browser_voice.session import _ReplyState
+
+    previous = _ReplyState()
+    previous.spoken.append("Il microfono resta in attesa della parola di risveglio")
+
+    # Server finished sending (speaking is False) but the phone plays 5 more seconds: the echo is dropped.
+    sink = _Sink()
+    brain = FakeBrain("risposta")
+    session = _make_session(sink, stt=FakeSTT(["il microfono resta in attesa"]), brain=brain)
+    session._reply_state = previous
+    session._playback_until = time.monotonic() + 5
+    await _drive_one_utterance(session)
+    assert brain.prompts == []
+    assert sink.json_of("vad_silence")
+
+    # Same words once playback has ended are a normal turn.
+    sink = _Sink()
+    brain = FakeBrain("risposta")
+    session = _make_session(sink, stt=FakeSTT(["il microfono resta in attesa"]), brain=brain)
+    session._reply_state = previous
+    await _drive_one_utterance(session)
+    assert brain.prompts == ["il microfono resta in attesa"]
+
+    # A genuinely new request during the tail is answered, and the old audio is flushed first.
+    sink = _Sink()
+    brain = FakeBrain("risposta")
+    session = _make_session(sink, stt=FakeSTT(["che ora e adesso"]), brain=brain)
+    session._reply_state = previous
+    session._playback_until = time.monotonic() + 5
+    await _drive_one_utterance(session)
+    assert brain.prompts == ["che ora e adesso"]
+    assert sink.json_of("tts_cancel")
+
+
+def test_sound_annotations_are_not_speech() -> None:
+    from dodaios.browser_voice.session import _is_phantom, _is_silence_hallucination
+
+    for heard in ("*sospiro*", "[musica]", "(rumore)", "Grazie. *sospiro*", "*sospiro* Grazie."):
+        assert _is_silence_hallucination(heard), heard
+    assert _is_phantom("*sospiro*")
+    assert not _is_silence_hallucination("Grazie, *sospiro* ma adesso raccontami una storia.")
+    assert not _is_silence_hallucination("Dimmi l'ora (per favore)")
+
+
+def test_italian_video_outro_is_a_hallucination() -> None:
+    from dodaios.browser_voice.session import _is_phantom, _is_silence_hallucination
+
+    assert _is_silence_hallucination("Grazie. Grazie per la visione! Grazie.")
+    assert _is_silence_hallucination("Grazie per l'attenzione.")
+    assert _is_phantom("Grazie per la visione!")
+    assert not _is_silence_hallucination("Grazie per la visione che hai condiviso, ora spiegami il piano.")
+
+
+def test_room_noise_does_not_interrupt_jarvis() -> None:
+    from dodaios.browser_voice.session import _is_phantom, _is_weak_barge_in
+
+    for noise in ("Bau bau", "Ahah", "Pff", "Haha. Ahah", "Ah"):
+        assert _is_phantom(noise), noise
+    assert _is_weak_barge_in("cane")  # one ordinary word is not an interruption
+    assert not _is_weak_barge_in("Stop")
+    assert not _is_weak_barge_in("aspetta un attimo")
+    assert not _is_weak_barge_in("No, non intendevo questo")
+    assert not _is_phantom("Ah, adesso ho capito cosa intendi")

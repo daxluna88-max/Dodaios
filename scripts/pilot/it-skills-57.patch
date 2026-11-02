@@ -1,0 +1,55 @@
+diff --git a/dodaios/ui/web/skills_routes.py b/dodaios/ui/web/skills_routes.py
+index f744d4b39..28299e752 100644
+--- a/dodaios/ui/web/skills_routes.py
++++ b/dodaios/ui/web/skills_routes.py
+@@ -17,6 +17,7 @@ from __future__ import annotations
+ 
+ import asyncio
+ import importlib.util
++import logging
+ import re
+ from dataclasses import replace
+ from pathlib import Path
+@@ -1608,6 +1609,26 @@ def get_skill_resource(
+     return PlainTextResponse(content=text, media_type="text/plain; charset=utf-8")
+ 
+ 
++def _sync_runtime_registry(reg: Any) -> None:
++    """Make the registry the skill RUNNER reads see a state change made on the web registry.
++
++    The web server and the brain factory each build their own ``SkillRegistry`` over the same
++    folder. A skill the assistant wrote lands as a draft; promoting it here rewrote the file and
++    reloaded only ``reg``, so ``run-skill`` kept answering "DRAFT state and not invocable".
++    """
++    try:
++        from dodaios.skills.skill_context import try_get_skill_context
++
++        context = try_get_skill_context()
++        other = getattr(context, "registry", None)
++        if other is not None and other is not reg:
++            other.reload_sync()
++    except Exception:  # noqa: BLE001 - the state change itself already succeeded
++        logging.getLogger(__name__).warning(
++            "could not refresh the skill runner's registry", exc_info=True
++        )
++
++
+ def _flip_state(
+     request: Request, name: str, new_state: SkillLifecycleState
+ ) -> dict[str, Any]:
+@@ -1653,6 +1674,7 @@ def _flip_state(
+         from dodaios.skills import prefs
+ 
+         prefs.set_state(name, True)
++        _sync_runtime_registry(reg)
+         return _skill_to_summary(skill)
+ 
+     updated = replace(skill, state=new_state)
+@@ -1663,6 +1685,7 @@ def _flip_state(
+     from dodaios.skills import prefs
+ 
+     prefs.set_state(name, new_state == SkillLifecycleState.ACTIVE)
++    _sync_runtime_registry(reg)
+     return _skill_to_summary(updated)
+ 
+ 

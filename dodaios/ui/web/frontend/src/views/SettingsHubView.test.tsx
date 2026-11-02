@@ -183,6 +183,34 @@ describe("SettingsHubView header and navigation", () => {
   });
 });
 
+describe("SettingsHubView narrow-screen navigation", () => {
+  const nav = () => screen.getByRole("navigation");
+
+  it("folds the page list below md and opens it from the toggle", async () => {
+    render(<SettingsHubView />);
+    await screen.findByTestId("TAB_SETTINGS");
+
+    const toggle = screen.getByTestId("settings-hub-nav-toggle");
+    expect(toggle.className).toContain("md:hidden");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(nav().className).toContain("max-md:hidden");
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(nav().className).not.toContain("max-md:hidden");
+  });
+
+  it("folds the list again once a page is picked", async () => {
+    render(<SettingsHubView />);
+    await screen.findByTestId("TAB_SETTINGS");
+
+    fireEvent.click(screen.getByTestId("settings-hub-nav-toggle"));
+    fireEvent.click(screen.getByTestId("settings-hub-nav-costs"));
+    expect(mockState.setActiveSection).toHaveBeenCalledWith("costs");
+    expect(screen.getByTestId("settings-hub-nav-toggle").getAttribute("aria-expanded")).toBe("false");
+  });
+});
+
 describe("SettingsHubView tab resolution", () => {
   it.each([
     ["settings", "TAB_SETTINGS"],

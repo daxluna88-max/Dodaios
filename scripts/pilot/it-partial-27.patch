@@ -1,0 +1,31 @@
+diff --git a/dodaios/agent_chat/runner_brain.py b/dodaios/agent_chat/runner_brain.py
+index f359bb20b..1fea451c6 100644
+--- a/dodaios/agent_chat/runner_brain.py
++++ b/dodaios/agent_chat/runner_brain.py
+@@ -601,7 +601,10 @@ async def run_brain_turn(
+ 
+     if status == "done" and handle.cancel.is_set():
+         status = "cancelled"
+-    if status == "done":
++    # ``text_delta`` is live only and never stored, so the words already on screen when the
++    # person pressed Stop (or the provider failed) would vanish on the next reload. The partial
++    # answer is kept as the turn's text, marked partial.
++    if status in ("done", "cancelled", "error"):
+         answer = (reply or "").strip() or "".join(seen).strip()
+         from dodaios.brain.action_honesty import memory_claim_language, memory_not_saved_phrase
+ 
+@@ -610,9 +613,11 @@ async def run_brain_turn(
+             log.warning("agent chat %s: reply claimed a save that did not happen", session.session_id)
+             answer = memory_not_saved_phrase(claimed)
+         if answer:
+-            await emit(
+-                "assistant_text", {"turn_id": turn_id, "message_id": message_id, "text": answer}
+-            )
++            payload: dict[str, Any] = {"turn_id": turn_id, "message_id": message_id, "text": answer}
++            if status != "done":
++                payload["partial"] = True
++            await emit("assistant_text", payload)
++    if status == "done":
+         # Keep the safe explanation visible, but distinguish provider success
+         # from an answer rejected by the execution/evidence backstop.
+         if override.receipt.guard_failure:

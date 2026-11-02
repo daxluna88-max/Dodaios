@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
 # Every supported reply language (``SUPPORTED_REPLY_LANGUAGES`` minus "auto");
 # all locales are equal, so every table below carries each of them.
-Lang = Literal["de", "en", "es", "pt"]
+Lang = Literal["de", "en", "es", "pt", "it"]
 TemplateKey = Literal[
     "approved",
     "failed",
@@ -57,6 +57,7 @@ MAX_VOICE_CHARS: Final[int] = 280
 
 READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-allow: German TTS voice-output templates (paired de/en)
     "approved": {
+        "it": ["Fatto. {summary}", "Completato. {summary}"],
         "de": [
             "Fertig. {summary}",  # i18n-allow
             "Erledigt. {summary}",
@@ -76,6 +77,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
         ],
     },
     "failed": {
+        "it": ["L’attività non è riuscita. Motivo: {reason}", "Attività non riuscita. {reason}"],
         "de": [
             "Die Aufgabe ist gescheitert. Grund: {reason}",  # i18n-allow
             "Aufgabe gescheitert. {reason}",
@@ -95,6 +97,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
         ],
     },
     "timeout": {
+        "it": ["L’attività ha superato il tempo limite."],
         "de": [
             "Die Aufgabe ist in einen Timeout gelaufen.",  # i18n-allow
             "Zeitueberschreitung. Aufgabe abgebrochen.",
@@ -110,6 +113,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
         ],
     },
     "cancelled": {
+        "it": ["Attività annullata."],
         "de": [
             "Aufgabe abgebrochen.",
             "Die Aufgabe wurde gestoppt.",  # i18n-allow
@@ -125,6 +129,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
         ],
     },
     "budget_warn_50": {
+        "it": ["È stata utilizzata metà del budget."],
         "de": [
             "Halbes Budget verbraucht.",
             "Fuenfzig Prozent vom Budget weg.",
@@ -140,6 +145,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
         ],
     },
     "budget_warn_80": {
+        "it": ["È stato utilizzato l’ottanta per cento del budget."],
         "de": [
             "Achtzig Prozent vom Budget weg.",
             "Das Budget wird knapp.",  # i18n-allow
@@ -155,6 +161,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
         ],
     },
     "budget_exceeded": {
+        "it": ["Budget esaurito. Attività interrotta."],
         "de": [
             "Budget aufgebraucht. Aufgabe abgebrochen.",
             "Das Limit ist erreicht. Stoppe die Aufgabe.",  # i18n-allow
@@ -170,6 +177,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
         ],
     },
     "injection_blocked": {
+        "it": ["È stato rilevato un tentativo di manipolazione. Attività interrotta."],
         "de": [
             "Injection-Versuch erkannt. Aufgabe abgebrochen.",
             "Ein verdaechtiger Output wurde geblockt. Aufgabe gestoppt.",  # i18n-allow
@@ -185,6 +193,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
         ],
     },
     "path_guard_blocked": {
+        "it": ["È stato toccato un percorso protetto. Attività interrotta."],
         "de": [
             "Ein geschuetzter Pfad wurde angefasst. Aufgabe abgebrochen.",  # i18n-allow
             "Geblockter Pfad in der Aufgabe. Stoppe.",
@@ -200,6 +209,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
         ],
     },
     "destructive_confirm": {
+        "it": ["Questa azione eliminerà {target}. Vuoi continuare? Conferma nell’interfaccia."],
         "de": [
             "Das wird {target} loeschen. Bist du sicher? Bitte in der UI bestaetigen.",  # i18n-allow
             "Destruktive Aktion: {target}. Bestaetigung erforderlich.",
@@ -215,6 +225,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
         ],
     },
     "crash_recovery": {
+        "it": ["Un’attività precedente è stata interrotta a causa di un arresto anomalo."],
         "de": [
             "Eine vorherige Aufgabe wurde wegen Crash abgebrochen.",  # i18n-allow
             "Ich habe eine abgebrochene Aufgabe gefunden und sauber abgeschlossen.",  # i18n-allow
@@ -230,6 +241,7 @@ READBACK_TEMPLATES: Final[dict[TemplateKey, dict[Lang, list[str]]]] = {  # i18n-
         ],
     },
     "iteration_running": {
+        "it": ["Tentativo {n} in corso."],
         "de": [
             "Iteration {n} laeuft.",  # i18n-allow
             "Naechster Versuch laeuft.",  # i18n-allow
