@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Mic, MicOff } from "lucide-react";
 
+import { BrandedSelect } from "@/components/ui/select";
 import { useT } from "@/i18n";
 import {
   refreshMicDevices, setMicDeviceSetting, setMicGateOpen, setMicModeSetting, useMicSettings, type MicMode,
@@ -67,28 +68,30 @@ export function MicControls({ live }: { live: boolean }) {
         </div>
       )}
       <div className="flex flex-wrap items-center gap-1.5">
-      <select
-        aria-label={t("sidebar.mic_mode_label")}
-        data-testid="mic-mode"
+      <BrandedSelect
+        ariaLabel={t("sidebar.mic_mode_label")}
+        testId="mic-mode"
         value={mode}
-        onChange={(e) => setMicModeSetting(e.target.value as MicMode)}
+        onValueChange={(v) => setMicModeSetting(v as MicMode)}
+        options={[
+          { value: "auto", label: t("sidebar.mic_mode_auto") },
+          { value: "push", label: t("sidebar.mic_mode_push") },
+          { value: "always", label: t("sidebar.mic_mode_always") },
+        ]}
         className={SELECT}
-      >
-        <option value="auto">{t("sidebar.mic_mode_auto")}</option>
-        <option value="push">{t("sidebar.mic_mode_push")}</option>
-        <option value="always">{t("sidebar.mic_mode_always")}</option>
-      </select>
+      />
       {devices.length > 1 && (
-        <select
-          aria-label={t("sidebar.mic_device_label")}
-          data-testid="mic-device"
+        <BrandedSelect
+          ariaLabel={t("sidebar.mic_device_label")}
+          testId="mic-device"
           value={devices.some((d) => d.id === deviceId) ? deviceId : ""}
-          onChange={(e) => setMicDeviceSetting(e.target.value)}
+          onValueChange={setMicDeviceSetting}
+          options={[
+            { value: "", label: t("sidebar.mic_device_default") },
+            ...devices.map((d) => ({ value: d.id, label: d.label })),
+          ]}
           className={SELECT}
-        >
-          <option value="">{t("sidebar.mic_device_default")}</option>
-          {devices.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
-        </select>
+        />
       )}
       </div>
     </div>

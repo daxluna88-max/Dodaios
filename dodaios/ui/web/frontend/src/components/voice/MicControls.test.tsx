@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { MicControls } from "@/components/voice/MicControls";
@@ -18,7 +18,7 @@ describe("MicControls", () => {
     render(<MicControls live />);
     fireEvent.click(screen.getByTestId("mic-gate"));
     expect(getMicState().open).toBe(false);
-    fireEvent.change(screen.getByTestId("mic-mode"), { target: { value: "push" } });
+    act(() => setMicModeSetting("push"));
     expect(getMicState().open).toBe(false);
     fireEvent.pointerDown(screen.getByTestId("mic-gate"));
     expect(getMicState().open).toBe(true);
