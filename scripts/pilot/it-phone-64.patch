@@ -1,0 +1,2605 @@
+diff --git a/docs/mobile-panel.md b/docs/mobile-panel.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..429af05d5a067878a09860e8470af06fcfd30d66
+--- /dev/null
++++ b/docs/mobile-panel.md
+@@ -0,0 +1,87 @@
++# Phone companion (`/m/`)
++
++An installable web app for the phone: chat with Jarvis (type or dictate), see what it is doing,
++approve or deny actions, stop a turn, and exchange files in both directions (photos, videos, PDFs,
++audio, anything). Plain static files in `dodaios/ui/web/mobile/` (no build step); server side in
++`dodaios/phone/` (devices, file store) and `dodaios/ui/web/phone_routes.py`.
++
++## Pairing and security model
++1. On the computer open `/m/pair.html` (the computer's own browser; a remote browser must give the
++   Control Key, kept in that page's memory only). It shows a code valid for 5 minutes, one use.
++   A new code invalidates the previous one; 8 wrong codes lock redeeming for 5 minutes.
++2. On the phone open `/m/` and enter the code. The server answers with a random credential set as an
++   **HttpOnly, SameSite=Strict** cookie scoped to `/api/phone` (also `Secure` behind HTTPS), plus a
++   CSRF token the page keeps in memory. Only a hash of the credential is stored.
++3. Every `/api/phone/*` request re-reads the device row, and the long operations re-check
++   membership at the moment they mutate: before a chunk is written, before a file is marked ready
++   (after its hash), when a transfer is created, and before a chat message is dispatched after its
++   attachments were prepared. A **revoked device therefore cannot start anything new**: sessions,
++   uploads, downloads in flight (checked every 4 MiB block) and new chat dispatches stop at once.
++   An agent turn that was already dispatched before the revocation is not cancelled (that is a
++   separate policy; stop it from the desktop). Unsafe methods also need `X-Phone-CSRF` and an
++   Origin equal to the Host.
++4. The phone credential opens only `/api/phone/*`. `/api/phone-admin/*` (pairing, device list and
++   revocation, publishing a file) stays behind the normal owner guard (session, loopback, Control
++   Key); the phone cookie does not open it, nor the rest of the app.
++5. Chat calls reuse the desktop chat routes' own functions, so **controller approvals, cancel and
++   queuing behave as on the desktop**. Sending a file only attaches it; it never approves an action.
++
++## Files
++- Resumable and chunked (4 MiB): the phone hashes the file (SHA-256, in slices), creates the
++  transfer, uploads sequential chunks and finishes; the server verifies the digest before the file is
++  downloadable. After a lost response or connection the client asks for the durable offset and
++  continues; reselecting the same file continues an earlier attempt after the digest is re-checked.
++- Limits: 2 GiB per file, 10 GiB total, 1000 files. Unfinished uploads expire after 24 h, finished
++  files after 14 days; a sweep also removes orphan blobs. Unfinished uploads of a revoked device are
++  deleted.
++- Storage: `<data dir>/phone/files/`, opaque names, mode 0700/0600, owner kept separate from device
++  membership. Files are **not encrypted at rest**: keep the data directory on an encrypted volume.
++- Downloads are `attachment` + `nosniff` + `Range` support; only a short allowlist of images, video
++  and audio may open inline, in a sandboxed response (`CSP: sandbox`). Never a path download.
++- An upload (while hashing or sending) can be cancelled from the File tab or by tapping its chip in
++  a chat: it stops and the server copy is deleted.
++- Phone to Jarvis: upload in the **File** tab, or the **+** in a chat (the file goes through the
++  existing chat attachment pipeline when you send). Jarvis to phone: publish from the pairing page
++  ("Invia un file al telefono") or `POST /api/phone-admin/outbox {"path": ...}`; it appears under
++  "Da Jarvis". Files are data, never commands.
++
++## Client behaviour
++Every asynchronous step is bound to the view and the pairing it started under. A response that
++arrives after the person went elsewhere, signed out or re-paired is dropped, never rendered, and a
++chat's draft and staged files are kept per chat, so finishing a send never touches another chat's
++composer. Signing out aborts in-flight requests and uploads and forgets drafts and files.
++The service worker handles only same-origin GETs under `/m/` and deletes only caches named
++`jarvis-panel-*`.
++
++## Reach it from an iPhone (Tailscale)
++Safari offers install-to-home-screen, the service worker and dictation only on **HTTPS**, so use
++Tailscale's TLS front rather than the plain `100.x` address, and keep Jarvis itself on loopback:
++
++```bash
++tailscale serve --bg https / http://127.0.0.1:47821
++export JARVIS_TRUSTED_HOSTS=<machine>.<tailnet>.ts.net
++```
++
++Then `https://<machine>.<tailnet>.ts.net/m/pair.html` on the computer (it shows the phone URL) and
++`/m/` on the phone. Nothing is exposed to the internet; no router or firewall change.
++
++## What is and is not verified
++- Verified (Linux): store, devices and routes unit tests (resume after restart, hash mismatch, quota,
++  offset conflict, cross-owner denial, crash-tail repair, concurrent writers, expiry/orphans, a long
++  hash not blocking other transfers, anonymous/unpaired/CSRF/foreign-origin refusals, revocation
++  mid-stream, range, inline allowlist, chat reuse); surface-security suites still pass.
++- Browser tests in the repo (`tests/browser/phone_panel`, run by `tests/unit/ui/web/test_phone_panel_browser.py`
++  when Node + Playwright exist, otherwise skipped) against a real server, with deliberately held
++  responses: a poll answered after sign-out, a send finishing in another chat, cancelling an active
++  upload, an upload outliving a sign-out and re-pair, and the service worker's cache ownership. All
++  five fail against the previous client and pass now.
++- Verified end to end in headless Chromium at an iPhone 13 viewport against a REAL running server:
++  pairing (bad then good code), cookie flags, session surviving a reload, chat list and approval
++  route, a 9 MiB upload surviving a dropped connection, download byte-for-byte, owner-published
++  file, chat attachment staging, revocation returning the phone to the pairing screen.
++- NOT verified: a real iPhone/Safari; Tailscale serve and the trusted-host setting; dictation
++  (`webkitSpeechRecognition`, it-IT); a live agent turn with an attached file (the ingest step is
++  covered with a fake); large-file throughput on a phone network; power-loss durability.
++- Not built: native iOS app, Share Extension, push notifications and background transfers (a web
++  page cannot transfer in the background: keep it open while uploading); live push for chat (it polls);
++  answering agent questions and credential requests; creating the very first chat (use the desktop).
+diff --git a/dodaios/phone/__init__.py b/dodaios/phone/__init__.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..36da2c10843b4e2f76aa7d83ac827bcc9d5586b9
+--- /dev/null
++++ b/dodaios/phone/__init__.py
+@@ -0,0 +1,5 @@
++"""The phone companion's server side: paired devices and resumable file transfers.
++
++``devices`` decides who may call ``/api/phone/*``; ``store`` keeps the files. Neither knows HTTP:
++``dodaios/ui/web/phone_routes.py`` is the only adapter.
++"""
+diff --git a/dodaios/phone/devices.py b/dodaios/phone/devices.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..c5e4a02a0c4947f62563b88a6a1ff7e6b56863b3
+--- /dev/null
++++ b/dodaios/phone/devices.py
+@@ -0,0 +1,183 @@
++"""Paired phones: one-use pairing codes, device credentials and revocation (no HTTP).
++
++The owner mints a short pairing code on the computer (an authenticated action). The phone redeems it
++once and receives a random credential that only its hash is stored for. Every request re-reads the
++device row, so revoking a device invalidates its sessions, downloads and uploads at once.
++"""
++
++from __future__ import annotations
++
++import hashlib
++import hmac
++import secrets
++import sqlite3
++import threading
++import time
++from collections.abc import Iterator
++from contextlib import contextmanager
++from pathlib import Path
++from typing import Any
++
++CODE_TTL_S = 300.0
++#: Unambiguous characters (no 0/O, 1/I/L).
++_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
++CODE_LENGTH = 8
++#: Failed redeems tolerated per window before every redeem is refused until it passes.
++MAX_FAILURES = 8
++FAILURE_WINDOW_S = 300.0
++MAX_DEVICES = 20
++_TOUCH_EVERY_S = 60.0
++
++
++class PairingError(ValueError):
++    """The code is wrong, expired, used, or redeeming is rate limited."""
++
++
++def _hash(value: str) -> str:
++    return hashlib.sha256(value.encode("utf-8")).hexdigest()
++
++
++def normalize_code(code: str) -> str:
++    return "".join(ch for ch in str(code).upper() if ch.isalnum())
++
++
++def format_code(code: str) -> str:
++    return f"{code[: CODE_LENGTH // 2]}-{code[CODE_LENGTH // 2 :]}"
++
++
++class DeviceRegistry:
++    def __init__(self, root: Path, owner: str = "owner") -> None:
++        self.owner = owner
++        self.root = Path(root)
++        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
++        self._failures: list[float] = []
++        self._guard = threading.Lock()
++        with self._db() as db:
++            db.execute(
++                """CREATE TABLE IF NOT EXISTS pairing (
++                code_hash TEXT PRIMARY KEY, expires_at REAL NOT NULL)"""
++            )
++            db.execute(
++                """CREATE TABLE IF NOT EXISTS devices (
++                id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
++                csrf TEXT NOT NULL, created_at REAL NOT NULL, last_seen REAL NOT NULL,
++                revoked_at REAL)"""
++            )
++
++    @contextmanager
++    def _db(self) -> Iterator[sqlite3.Connection]:
++        db = sqlite3.connect(self.root / "devices.sqlite3", timeout=30)
++        db.row_factory = sqlite3.Row
++        try:
++            db.execute("BEGIN IMMEDIATE")
++            yield db
++            db.commit()
++        except BaseException:
++            db.rollback()
++            raise
++        finally:
++            db.close()
++
++    # ------------------------------------------------------------ pairing
++    def new_code(self, now: float | None = None) -> tuple[str, float]:
++        """A fresh one-use code; any unused earlier code stops working."""
++        now = time.time() if now is None else now
++        code = "".join(secrets.choice(_ALPHABET) for _ in range(CODE_LENGTH))
++        with self._db() as db:
++            active = db.execute(
++                "SELECT COUNT(*) FROM devices WHERE revoked_at IS NULL"
++            ).fetchone()[0]
++            if active >= MAX_DEVICES:
++                raise PairingError("too many paired devices; revoke one first")
++            db.execute("DELETE FROM pairing")
++            db.execute(
++                "INSERT INTO pairing(code_hash, expires_at) VALUES(?,?)",
++                (_hash(code), now + CODE_TTL_S),
++            )
++        return format_code(code), CODE_TTL_S
++
++    def redeem(self, code: str, name: str, now: float | None = None) -> tuple[dict[str, Any], str]:
++        """Spend a code. Returns the device and its credential (shown to the phone once)."""
++        now = time.time() if now is None else now
++        name = " ".join(str(name or "").split())[:60] or "iPhone"
++        with self._guard:
++            self._failures = [t for t in self._failures if now - t < FAILURE_WINDOW_S]
++            if len(self._failures) >= MAX_FAILURES:
++                raise PairingError("too many wrong codes; wait a few minutes")
++        digest = _hash(normalize_code(code))
++        token = secrets.token_urlsafe(32)
++        device_id = secrets.token_hex(8)
++        with self._db() as db:
++            row = db.execute(
++                "SELECT expires_at FROM pairing WHERE code_hash=?", (digest,)
++            ).fetchone()
++            valid = row is not None and row["expires_at"] >= now
++            db.execute("DELETE FROM pairing WHERE code_hash=?", (digest,))
++            if valid:
++                db.execute(
++                    "INSERT INTO devices(id,name,token_hash,csrf,created_at,last_seen)"
++                    " VALUES(?,?,?,?,?,?)",
++                    (device_id, name, _hash(token), secrets.token_urlsafe(24), now, now),
++                )
++        if not valid:
++            with self._guard:
++                self._failures.append(now)
++            raise PairingError("the code is wrong, expired or already used")
++        device = self.get(device_id)
++        assert device is not None
++        return device, token
++
++    # ------------------------------------------------------------ devices
++    def authenticate(self, token: str | None, now: float | None = None) -> dict[str, Any] | None:
++        """The live device behind a credential, or ``None`` (unknown, malformed, revoked)."""
++        if not token or len(token) > 200:
++            return None
++        now = time.time() if now is None else now
++        with self._db() as db:
++            row = db.execute(
++                "SELECT * FROM devices WHERE token_hash=? AND revoked_at IS NULL", (_hash(token),)
++            ).fetchone()
++            if row is None:
++                return None
++            if now - row["last_seen"] > _TOUCH_EVERY_S:
++                db.execute("UPDATE devices SET last_seen=? WHERE id=?", (now, row["id"]))
++        return self._public(row, csrf=True)
++
++    def is_active(self, device_id: str) -> bool:
++        with self._db() as db:
++            return db.execute(
++                "SELECT 1 FROM devices WHERE id=? AND revoked_at IS NULL", (device_id,)
++            ).fetchone() is not None
++
++    def get(self, device_id: str) -> dict[str, Any] | None:
++        with self._db() as db:
++            row = db.execute("SELECT * FROM devices WHERE id=?", (device_id,)).fetchone()
++        return self._public(row, csrf=True) if row else None
++
++    def list(self) -> list[dict[str, Any]]:
++        with self._db() as db:
++            rows = db.execute("SELECT * FROM devices ORDER BY created_at DESC").fetchall()
++        return [self._public(row, csrf=False) for row in rows]
++
++    def revoke(self, device_id: str, now: float | None = None) -> bool:
++        now = time.time() if now is None else now
++        with self._db() as db:
++            cur = db.execute(
++                "UPDATE devices SET revoked_at=? WHERE id=? AND revoked_at IS NULL",
++                (now, device_id),
++            )
++        return cur.rowcount > 0
++
++    @staticmethod
++    def _public(row: sqlite3.Row, *, csrf: bool) -> dict[str, Any]:
++        out = {
++            "id": row["id"], "name": row["name"], "created_at": row["created_at"],
++            "last_seen": row["last_seen"], "revoked": row["revoked_at"] is not None,
++        }
++        if csrf:
++            out["csrf"] = row["csrf"]
++        return out
++
++
++def csrf_matches(expected: str, presented: str | None) -> bool:
++    return bool(presented) and hmac.compare_digest(expected, str(presented))
+diff --git a/dodaios/phone/store.py b/dodaios/phone/store.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..e35de13daca4f33024188430e693150287df8259
+--- /dev/null
++++ b/dodaios/phone/store.py
+@@ -0,0 +1,356 @@
++"""Private resumable file storage for the phone companion (no HTTP, no authentication).
++
++Ported from the Jarvis integration repo's ``TransferStore`` with the review fixes: the SHA-256 of a
++finishing file is computed outside the database transaction (and under that transfer's own lock,
++so a 2 GiB hash never blocks other transfers), the row exists before the blob (a crash leaves an
++orphan the sweep removes), the quota counts only live transfers that expire, and the directory is
++fsynced after a blob is created.
++
++Ownership and device membership are separate: ``owner`` is the account every file belongs to;
++``device_id`` only records which paired device sent it. The adapter decides whether a device is
++still a member before every call and passes ``owner`` from its own principal, never from a request.
++"""
++
++from __future__ import annotations
++
++import hashlib
++import os
++import re
++import secrets
++import sqlite3
++import threading
++import time
++from collections.abc import Callable, Iterator
++from contextlib import contextmanager
++from pathlib import Path
++from typing import Any
++
++try:  # POSIX advisory file locks; Windows falls back to the in-process lock alone
++    import fcntl
++except ImportError:  # no fcntl on Windows: the in-process lock alone applies (documented above)
++    fcntl = None  # type: ignore[assignment]
++
++DEFAULT_MAX_FILE = 2 * 1024**3
++DEFAULT_QUOTA = 10 * 1024**3
++DEFAULT_CHUNK = 4 * 1024**2
++MAX_TRANSFERS = 1000
++#: An unfinished upload nobody touched for this long is deleted (and its reservation released).
++INCOMPLETE_TTL_S = 24 * 3600
++#: A finished file is kept this long, then deleted.
++READY_TTL_S = 14 * 24 * 3600
++_HASH_BLOCK = 1024 * 1024
++_ID = re.compile(r"[0-9a-f]{32}")
++_PUBLIC = ("id", "name", "size", "offset", "ready", "direction", "device_id", "created_at")
++
++
++class TransferError(ValueError):
++    """A refused operation; the message is safe to show the client."""
++
++
++class Revoked(TransferError):
++    """The caller's guard refused at the moment of the mutation (the device was revoked)."""
++
++
++Guard = Callable[[], bool]
++
++
++class NotFound(KeyError):
++    """No such transfer for this owner."""
++
++
++#: One lock per blob for the whole process, shared by every store opened on the same folder.
++_LOCKS: dict[str, threading.Lock] = {}
++_LOCKS_GUARD = threading.Lock()
++
++
++@contextmanager
++def _flocked(handle: Any) -> Iterator[None]:
++    """An OS-level exclusive lock on an open blob, so a second PROCESS cannot interleave."""
++    if fcntl is None:
++        yield
++        return
++    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
++    try:
++        yield
++    finally:
++        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
++
++
++class TransferStore:
++    def __init__(
++        self,
++        root: Path,
++        *,
++        max_file: int = DEFAULT_MAX_FILE,
++        quota: int = DEFAULT_QUOTA,
++        chunk_size: int = DEFAULT_CHUNK,
++        incomplete_ttl_s: float = INCOMPLETE_TTL_S,
++        ready_ttl_s: float = READY_TTL_S,
++    ) -> None:
++        if min(max_file, quota, chunk_size) <= 0:
++            raise ValueError("limits must be positive")
++        self.root = Path(root).resolve()
++        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
++        self.max_file, self.quota, self.chunk_size = max_file, quota, chunk_size
++        self.incomplete_ttl_s, self.ready_ttl_s = incomplete_ttl_s, ready_ttl_s
++        with self._db() as db:
++            db.execute(
++                """CREATE TABLE IF NOT EXISTS transfers (
++                id TEXT PRIMARY KEY, owner TEXT NOT NULL, device_id TEXT NOT NULL,
++                direction TEXT NOT NULL, name TEXT NOT NULL, size INTEGER NOT NULL,
++                digest TEXT NOT NULL, offset INTEGER NOT NULL DEFAULT 0,
++                ready INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL,
++                updated_at REAL NOT NULL)"""
++            )
++
++    # ------------------------------------------------------------ plumbing
++    @contextmanager
++    def _db(self) -> Iterator[sqlite3.Connection]:
++        db = sqlite3.connect(self.root / "transfers.sqlite3", timeout=30)
++        db.row_factory = sqlite3.Row
++        try:
++            db.execute("BEGIN IMMEDIATE")
++            yield db
++            db.commit()
++        except BaseException:
++            db.rollback()
++            raise
++        finally:
++            db.close()
++
++    def _lock(self, transfer_id: str) -> threading.Lock:
++        with _LOCKS_GUARD:
++            return _LOCKS.setdefault(f"{self.root}/{transfer_id}", threading.Lock())
++
++    def _path(self, transfer_id: str) -> Path:
++        if not _ID.fullmatch(transfer_id):
++            raise TransferError("invalid transfer id")
++        return self.root / (transfer_id + ".blob")
++
++    @staticmethod
++    def _row(db: sqlite3.Connection, owner: str, transfer_id: str) -> sqlite3.Row:
++        if not _ID.fullmatch(str(transfer_id)):
++            raise TransferError("invalid transfer id")
++        row = db.execute(
++            "SELECT * FROM transfers WHERE id=? AND owner=?", (transfer_id, owner)
++        ).fetchone()
++        if row is None:
++            raise NotFound("transfer not found")
++        return row
++
++    def _fsync_dir(self) -> None:
++        try:
++            fd = os.open(self.root, os.O_RDONLY)
++        except OSError:  # directories cannot be opened on Windows: nothing to sync there
++            return
++        try:
++            os.fsync(fd)
++        except OSError:  # a filesystem without directory sync: the blob fsync still holds
++            pass
++        finally:
++            os.close(fd)
++
++    @staticmethod
++    def _public(row: sqlite3.Row) -> dict[str, Any]:
++        view = {key: row[key] for key in _PUBLIC}
++        view["ready"] = bool(view["ready"])
++        return view
++
++    # ------------------------------------------------------------- uploads
++    def create(
++        self, owner: str, device_id: str, name: str, size: int, sha256: str,
++        *, direction: str = "in", guard: Guard | None = None,
++    ) -> str:
++        if not owner or not device_id:
++            raise TransferError("owner and device required")
++        if direction not in ("in", "out"):
++            raise TransferError("invalid direction")
++        if not isinstance(name, str) or not name or len(name) > 255:
++            raise TransferError("a file name of 1-255 characters is required")
++        if any(ord(c) < 32 or c in "/\\" for c in name) or name in (".", ".."):
++            raise TransferError("invalid file name")
++        if type(size) is not int or not 0 <= size <= self.max_file:
++            raise TransferError("file exceeds the size limit")
++        if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
++            raise TransferError("SHA-256 required")
++        now = time.time()
++        transfer_id = secrets.token_hex(16)
++        with self._db() as db:
++            if guard is not None and not guard():
++                raise Revoked("device revoked")
++            used = db.execute("SELECT COALESCE(SUM(size),0) FROM transfers").fetchone()[0]
++            count = db.execute("SELECT COUNT(*) FROM transfers").fetchone()[0]
++            if used + size > self.quota or count >= MAX_TRANSFERS:
++                raise TransferError("storage quota exceeded")
++            db.execute(
++                "INSERT INTO transfers(id,owner,device_id,direction,name,size,digest,"
++                "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
++                (transfer_id, owner, device_id, direction, name, size, sha256, now, now),
++            )
++        try:
++            fd = os.open(self._path(transfer_id), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
++            os.close(fd)
++            self._fsync_dir()
++        except BaseException:
++            with self._db() as db:
++                db.execute("DELETE FROM transfers WHERE id=?", (transfer_id,))
++            raise
++        return transfer_id
++
++    def status(self, owner: str, transfer_id: str) -> dict[str, Any]:
++        with self._db() as db:
++            return self._public(self._row(db, owner, transfer_id))
++
++    def append(
++        self, owner: str, transfer_id: str, offset: int, data: bytes, *, guard: Guard | None = None
++    ) -> int:
++        if type(offset) is not int or offset < 0:
++            raise TransferError("invalid offset")
++        if not isinstance(data, bytes) or not 0 < len(data) <= self.chunk_size:
++            raise TransferError("invalid chunk")
++        with self._lock(transfer_id):
++            with self._db() as db:
++                self._row(db, owner, transfer_id)  # fail early: unknown id or owner
++            try:
++                handle = self._path(transfer_id).open("r+b")
++            except FileNotFoundError as exc:
++                raise TransferError("stored file is missing") from exc
++            with handle, _flocked(handle):
++                with self._db() as db:
++                    row = self._row(db, owner, transfer_id)
++                if row["ready"] or offset != row["offset"] or offset + len(data) > row["size"]:
++                    raise TransferError(
++                        "offset conflict or completed transfer; read the status before retrying"
++                    )
++                if guard is not None and not guard():  # last look before the bytes land
++                    raise Revoked("device revoked")
++                # Repair bytes written before a crash that never reached the database.
++                if handle.seek(0, 2) < offset:
++                    raise TransferError("stored file is truncated")
++                handle.truncate(offset)
++                handle.seek(offset)
++                handle.write(data)
++                handle.flush()
++                os.fsync(handle.fileno())
++                with self._db() as db:
++                    db.execute(
++                        "UPDATE transfers SET offset=?, updated_at=? WHERE id=?",
++                        (offset + len(data), time.time(), transfer_id),
++                    )
++        return offset + len(data)
++
++    def finish(
++        self, owner: str, transfer_id: str, *, guard: Guard | None = None
++    ) -> dict[str, Any]:
++        """Verify the digest, then make the file downloadable. Hashing holds only this
++        transfer's lock, never the database."""
++        with self._lock(transfer_id):
++            with self._db() as db:
++                row = self._row(db, owner, transfer_id)
++            if row["ready"]:
++                return self._public(row)
++            if row["offset"] != row["size"]:
++                raise TransferError("incomplete transfer")
++            digest = hashlib.sha256()
++            try:
++                with self._path(transfer_id).open("rb") as handle:
++                    if os.fstat(handle.fileno()).st_size != row["size"]:
++                        raise TransferError("stored size mismatch")
++                    while block := handle.read(_HASH_BLOCK):
++                        digest.update(block)
++            except FileNotFoundError as exc:
++                raise TransferError("stored file is missing") from exc
++            if digest.hexdigest() != row["digest"]:
++                raise TransferError("checksum mismatch")
++            with self._db() as db:
++                if guard is not None and not guard():  # revoked while the file was hashed
++                    raise Revoked("device revoked")
++                db.execute(
++                    "UPDATE transfers SET ready=1, updated_at=? WHERE id=?",
++                    (time.time(), transfer_id),
++                )
++        return self.status(owner, transfer_id)
++
++    # ----------------------------------------------------------- downloads
++    def open_ready(self, owner: str, transfer_id: str) -> tuple[dict[str, Any], Path]:
++        with self._db() as db:
++            row = self._row(db, owner, transfer_id)
++        if not row["ready"]:
++            raise TransferError("file unavailable")
++        return self._public(row), self._path(transfer_id)
++
++    def read(
++        self, owner: str, transfer_id: str, offset: int = 0, length: int | None = None
++    ) -> bytes:
++        meta, path = self.open_ready(owner, transfer_id)
++        if type(offset) is not int or not 0 <= offset <= meta["size"]:
++            raise TransferError("invalid offset")
++        wanted = min(length if length is not None else self.chunk_size, self.chunk_size)
++        with path.open("rb") as handle:
++            handle.seek(offset)
++            return handle.read(max(0, wanted))
++
++    # ------------------------------------------------------------ listing
++    def list(self, owner: str, *, limit: int = 200) -> list[dict[str, Any]]:
++        with self._db() as db:
++            rows = db.execute(
++                "SELECT * FROM transfers WHERE owner=? ORDER BY created_at DESC LIMIT ?",
++                (owner, max(1, min(limit, 500))),
++            ).fetchall()
++        return [self._public(row) for row in rows]
++
++    def delete(self, owner: str, transfer_id: str) -> None:
++        with self._lock(transfer_id):
++            with self._db() as db:
++                self._row(db, owner, transfer_id)
++                # The reservation is released only after the blob is gone.
++                self._path(transfer_id).unlink(missing_ok=True)
++                db.execute("DELETE FROM transfers WHERE id=?", (transfer_id,))
++
++    def delete_for_device(self, device_id: str) -> int:
++        """Drop a revoked device's unfinished uploads; finished files stay with the owner."""
++        with self._db() as db:
++            rows = db.execute(
++                "SELECT id, owner FROM transfers WHERE device_id=? AND ready=0 AND direction='in'",
++                (device_id,),
++            ).fetchall()
++        dropped = 0
++        for row in rows:
++            try:
++                self.delete(row["owner"], row["id"])
++                dropped += 1
++            except (NotFound, TransferError):  # already gone: the goal (no blob, no row) is met
++                continue
++        return dropped
++
++    # --------------------------------------------------------------- sweep
++    def sweep(self, now: float | None = None) -> dict[str, int]:
++        """Delete expired transfers and reconcile blobs with rows. Safe to call at any time."""
++        now = time.time() if now is None else now
++        removed = {"expired": 0, "orphan_blobs": 0, "missing_blobs": 0}
++        with self._db() as db:
++            rows = db.execute(
++                "SELECT id, ready, updated_at, created_at, owner FROM transfers"
++            ).fetchall()
++        known = {row["id"] for row in rows}
++        for row in rows:
++            ttl = self.ready_ttl_s if row["ready"] else self.incomplete_ttl_s
++            blob = self._path(row["id"])
++            missing = not blob.exists() and now - row["created_at"] > 60
++            if now - row["updated_at"] > ttl or missing:
++                try:
++                    self.delete(row["owner"], row["id"])
++                except (NotFound, TransferError):  # deleted by a caller meanwhile: nothing to do
++                    continue
++                removed["missing_blobs" if missing else "expired"] += 1
++        for blob in self.root.glob("*.blob"):
++            if blob.stem in known:
++                continue
++            try:
++                # A young blob may belong to a create() that has not committed its row yet.
++                if now - blob.stat().st_mtime > 300:
++                    blob.unlink()
++                    removed["orphan_blobs"] += 1
++            except OSError:  # the blob vanished or is unreadable: the next sweep looks again
++                continue
++        return removed
+diff --git a/dodaios/ui/web/mobile/app.js b/dodaios/ui/web/mobile/app.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..1202e5f0c98076f65df99cc75f6f814225e41f05
+--- /dev/null
++++ b/dodaios/ui/web/mobile/app.js
+@@ -0,0 +1,656 @@
++// Jarvis phone companion. Talks only to /api/phone/*: the phone holds an HttpOnly cookie it cannot
++// read (set when a pairing code is redeemed) and a CSRF token kept in memory. No long-lived
++// credential ever touches localStorage or a URL.
++"use strict";
++
++const $ = (id) => document.getElementById(id);
++const POLL_MS = 1500;
++const IDLE_POLL_MS = 4000;
++const RESUME_SLOT = "jm_uploads"; // {fileKey: {id, sha}} - no secret, only lets a retry continue
++
++const state = { csrf: "", device: null, sid: "", timer: 0, pending: [], busy: false, sig: "", rec: null,
++  tab: "chat", staged: [], chunk: 4 * 1024 * 1024, maxFile: 0, uploads: new Map(), listTimer: 0,
++  gen: 0, authGen: 0, ctl: new AbortController(), drafts: new Map() };
++
++// Every async continuation is bound to what was current when it started: `gen` changes on every
++// view change (list, chat, tab, logout), `authGen` only when the pairing ends. A response that
++// arrives for an older view or an older pairing is dropped, never rendered and never applied.
++function scope() {
++  const gen = state.gen;
++  return { gen, auth: state.authGen, signal: state.ctl.signal, stale: () => gen !== state.gen };
++}
++
++function saveDraft() {
++  if (state.sid) state.drafts.set(state.sid, { text: $("input").value, staged: state.staged });
++}
++
++function newView() {
++  saveDraft();
++  state.gen += 1;
++  state.ctl.abort();
++  state.ctl = new AbortController();
++  stopPolling();
++  clearInterval(state.listTimer);
++}
++
++/** The pairing ended (sign-out, revocation, expiry): forget everything private. */
++function endSession() {
++  state.authGen += 1;
++  newView();
++  state.csrf = "";
++  state.device = null;
++  state.tab = "chat";
++  state.sid = "";
++  state.staged = [];
++  state.pending = [];
++  state.sig = "";
++  state.drafts.clear();
++  for (const view of state.uploads.keys()) view.ctl.abort();
++  state.uploads.clear();
++  if (state.rec) { try { state.rec.abort(); } catch { /* already stopped */ } state.rec = null; }
++  $("mic").classList.remove("on");
++  $("input").value = "";
++  $("main").replaceChildren();
++}
++
++function el(tag, className, text) {
++  const node = document.createElement(tag);
++  if (className) node.className = className;
++  if (text !== undefined) node.textContent = text;
++  return node;
++}
++
++function abortError() {
++  const error = new Error("aborted");
++  error.aborted = true;
++  return error;
++}
++
++async function api(path, options = {}) {
++  const headers = { ...(options.headers || {}) };
++  if (state.csrf) headers["X-Phone-CSRF"] = state.csrf;
++  let body = options.body;
++  if (body && typeof body !== "string" && !(body instanceof Blob) && !(body instanceof FormData)) {
++    body = JSON.stringify(body);
++    headers["Content-Type"] = "application/json";
++  }
++  if (options.auth !== undefined && options.auth !== state.authGen) throw abortError();
++  let res;
++  try {
++    res = await fetch(path, { method: options.method, headers, body, credentials: "same-origin", signal: options.signal });
++  } catch (error) {
++    if (error && error.name === "AbortError") throw abortError();
++    throw error;
++  }
++  if (options.auth !== undefined && options.auth !== state.authGen) throw abortError();
++  if (res.status === 401) {
++    const error = new Error("not paired");
++    error.auth = true;
++    throw error;
++  }
++  const data = await res.json().catch(() => ({}));
++  if (!res.ok) {
++    const detail = typeof data.detail === "string" ? data.detail : (data.detail && data.detail.message) || res.statusText;
++    const error = new Error(detail);
++    error.status = res.status;
++    throw error;
++  }
++  return data;
++}
++
++function show(view) {
++  const chat = view === "chat";
++  $("composer").classList.toggle("hide", !chat);
++  $("back").classList.toggle("hide", !chat);
++  $("logout").classList.toggle("hide", view === "pair");
++  $("tabs").classList.toggle("hide", view === "pair");
++  if (!chat) { $("status").classList.add("hide"); }
++  renderChips();
++}
++
++function lost() {
++  endSession();
++  renderPair("Sessione scaduta o dispositivo revocato: collega di nuovo il telefono.");
++}
++
++function fail(error, retry) {
++  if (error.aborted) return;
++  if (error.auth) return lost();
++  const main = $("main");
++  main.replaceChildren(el("p", "msg err", `Errore: ${error.message}`));
++  const again = el("button", "", "Riprova");
++  again.onclick = retry;
++  main.append(again);
++}
++
++// ----------------------------------------------------------------- pairing
++function renderPair(message) {
++  newView();
++  show("pair");
++  $("title").textContent = "Jarvis";
++  const main = $("main");
++  main.replaceChildren();
++  main.append(el("p", "", "Sul computer apri /m/pair.html per ottenere il codice di collegamento (vale 5 minuti, una volta sola)."));
++  const code = el("input");
++  code.type = "text";
++  code.autocomplete = "off";
++  code.autocapitalize = "characters";
++  code.placeholder = "Codice (XXXX-XXXX)";
++  const name = el("input");
++  name.type = "text";
++  name.placeholder = "Nome del telefono";
++  name.value = "iPhone";
++  const go = el("button", "primary", "Collega");
++  const note = el("p", "act", message || "");
++  go.onclick = async () => {
++    if (!code.value.trim()) return;
++    go.disabled = true;
++    try {
++      const out = await api("/api/phone/pair/redeem", { method: "POST", body: { code: code.value, name: name.value } });
++      state.csrf = out.csrf;
++      state.device = out.device;
++      start();
++    } catch (error) {
++      note.textContent = error.message || "Collegamento non riuscito.";
++      go.disabled = false;
++    }
++  };
++  main.append(code, name, go, note);
++}
++
++async function boot() {
++  const t = scope();
++  try {
++    const me = await api("/api/phone/me", { signal: t.signal });
++    if (t.stale()) return;
++    state.csrf = me.csrf;
++    state.device = me.device;
++    start();
++  } catch (error) {
++    if (error.aborted) return;
++    if (error.auth) renderPair(); else renderPair(`Non raggiungo Jarvis (${error.message}).`);
++  }
++}
++
++function start() { setTab(state.tab); }
++
++function setTab(tab) {
++  state.tab = tab;
++  $("tab-chat").classList.toggle("on", tab === "chat");
++  $("tab-files").classList.toggle("on", tab === "files");
++  if (tab === "files") { newView(); state.sid = ""; renderFiles(); } else { renderList(); }
++}
++
++// -------------------------------------------------------------------- chats
++async function renderList() {
++  newView();
++  state.sid = "";
++  state.staged = [];
++  const t = scope();
++  show("list");
++  $("title").textContent = "Chat";
++  const main = $("main");
++  main.replaceChildren(el("p", "act", "Carico…"));
++  let sessions;
++  try {
++    sessions = (await api("/api/phone/chats", { signal: t.signal })).sessions || [];
++  } catch (error) { return fail(error, renderList); }
++  if (t.stale()) return;
++  main.replaceChildren();
++  const fresh = el("button", "primary", "Nuova chat");
++  fresh.style.cssText = "width:100%;margin-bottom:10px";
++  fresh.onclick = newChat;
++  main.append(fresh);
++  if (!sessions.length) main.append(el("p", "act", "Nessuna chat ancora."));
++  for (const session of sessions) {
++    const row = el("div", "row");
++    row.append(el("div", "", session.title || session.preview || "(senza titolo)"));
++    const meta = [session.provider, session.running ? "al lavoro" : ""];
++    if (session.pending_approvals) meta.push(`${session.pending_approvals} da approvare`);
++    row.append(el("small", "", meta.filter(Boolean).join(" · ")));
++    row.onclick = () => openChat(session.session_id, session.title);
++    main.append(row);
++  }
++}
++
++async function newChat() {
++  const t = scope();
++  try {
++    const made = await api("/api/phone/chats", { method: "POST", body: {}, signal: t.signal });
++    if (t.stale()) return;
++    openChat(made.session_id || (made.session && made.session.session_id), "Nuova chat");
++  } catch (error) {
++    if (error.aborted) return;
++    if (error.auth) return lost();
++    alert(error.message);
++  }
++}
++
++function openChat(sid, title) {
++  newView();
++  state.sid = sid;
++  state.sig = "";
++  state.pending = [];
++  const draft = state.drafts.get(sid) || { text: "", staged: [] };
++  state.staged = draft.staged;
++  $("input").value = draft.text;
++  show("chat");
++  $("title").textContent = title || "Chat";
++  $("main").replaceChildren();
++  poll();
++}
++
++function stopPolling() { clearTimeout(state.timer); state.timer = 0; }
++
++async function poll() {
++  stopPolling();
++  const sid = state.sid;
++  if (!sid || state.tab !== "chat") return;
++  const t = scope();
++  let running = false;
++  try {
++    const data = await api(`/api/phone/chats/${encodeURIComponent(sid)}`, { signal: t.signal });
++    if (t.stale() || sid !== state.sid) return;
++    running = !!(data.session && data.session.running);
++    if (data.session && data.session.title) $("title").textContent = data.session.title;
++    renderEvents(data.events || [], running);
++  } catch (error) {
++    if (error.aborted || t.stale()) return;
++    if (error.auth) return lost();
++    $("statustext").textContent = `Connessione persa (${error.message}), riprovo…`;
++    $("status").classList.remove("hide");
++  }
++  if (!t.stale() && sid === state.sid) state.timer = setTimeout(poll, running || state.pending.length ? POLL_MS : IDLE_POLL_MS);
++}
++
++function renderEvents(events, running) {
++  const last = events.length ? events[events.length - 1].seq : -1;
++  const resolved = new Set(events.filter((e) => e.kind === "approval_resolved").map((e) => e.payload.approval_id));
++  state.pending = events.filter((e) => e.kind === "approval_required" && !resolved.has(e.payload.approval_id));
++  const sig = `${last}:${state.pending.map((e) => e.payload.approval_id).join(",")}:${running}`;
++  if (sig === state.sig) return;
++  state.sig = sig;
++  const main = $("main");
++  const stick = main.scrollHeight - main.scrollTop - main.clientHeight < 80;
++  main.replaceChildren();
++  for (const event of events) {
++    const p = event.payload || {};
++    if (event.kind === "user_message") main.append(el("div", "msg user", String(p.typed || p.text || "")));
++    else if (event.kind === "assistant_text") main.append(el("div", "msg bot", String(p.text || "")));
++    else if (event.kind === "tool_call") main.append(el("div", "act", `⚙ ${p.name || "strumento"}`));
++    else if (event.kind === "error") main.append(el("div", "msg bot err", String(p.message || "Errore")));
++    else if (event.kind === "turn_finished" && p.status === "cancelled") main.append(el("div", "act", "Fermato."));
++  }
++  for (const event of state.pending) main.append(approvalCard(event.payload));
++  if (stick) main.scrollTop = main.scrollHeight;
++  const working = running || state.pending.length > 0;
++  $("status").classList.toggle("hide", !working);
++  $("statustext").textContent = state.pending.length ? "Aspetta il tuo ok" : "Jarvis sta lavorando…";
++  $("stop").classList.toggle("hide", !running);
++}
++
++function approvalCard(p) {
++  const card = el("div", "card");
++  card.append(el("strong", "", "Approvare?"));
++  card.append(el("div", "", p.summary || p.name || "Azione"));
++  let detail = "";
++  try { detail = p.input ? JSON.stringify(p.input, null, 2) : ""; } catch { detail = ""; }
++  if (detail) card.append(el("pre", "", detail.slice(0, 1500)));
++  const row = el("div", "btns");
++  for (const [decision, label, cls] of [["allow", "Approva", "primary"], ["deny", "Nega", "danger"], ["allow_always", "Sempre", ""]]) {
++    const button = el("button", cls, label);
++    button.onclick = async () => {
++      row.querySelectorAll("button").forEach((b) => (b.disabled = true));
++      const sid = state.sid;
++      const t = scope();
++      try {
++        await api(`/api/phone/chats/${encodeURIComponent(sid)}/approvals/${encodeURIComponent(p.approval_id)}`, {
++          method: "POST", body: { decision }, auth: t.auth,
++        });
++      } catch (error) {
++        if (error.aborted) return;
++        if (error.auth) return lost();
++        if (error.status !== 410 && error.status !== 404) alert(error.message);
++      }
++      if (state.sid === sid) poll();
++    };
++    row.append(button);
++  }
++  card.append(row);
++  return card;
++}
++
++function renderChips() {
++  const chips = $("chips");
++  const items = state.tab === "chat" && state.sid ? state.staged : [];
++  chips.replaceChildren(...items.map((s) => {
++    const chip = el("span", "chip", s.error ? `${s.name} · errore` : s.ready ? `${s.name} ✓` : `${s.name} · ${s.pct || 0}%`);
++    chip.onclick = () => { if (s.cancel) s.cancel(); state.staged = state.staged.filter((x) => x !== s); renderChips(); };
++    return chip;
++  }));
++  chips.classList.toggle("hide", !items.length);
++}
++
++async function send() {
++  const input = $("input");
++  // Everything the request needs is captured now: a later navigation or sign-out cannot change
++  // where it goes, and its completion only touches the draft of the chat it was sent from.
++  const sid = state.sid;
++  const auth = state.authGen;
++  const text = input.value.trim();
++  const sent = state.staged.filter((s) => s.ready);
++  const ids = sent.map((s) => s.id);
++  if (state.busy || !sid || (!text && !ids.length)) return;
++  if (state.staged.some((s) => !s.ready && !s.error)) { alert("Aspetta che i file finiscano di caricarsi."); return; }
++  state.busy = true;
++  $("send").disabled = true;
++  try {
++    await api(`/api/phone/chats/${encodeURIComponent(sid)}/messages`, {
++      method: "POST", auth,
++      body: { text, file_ids: ids, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone },
++    });
++    if (auth !== state.authGen) return;
++    if (state.sid === sid) {
++      if (input.value.trim() === text) { input.value = ""; input.style.height = ""; }
++      state.staged = state.staged.filter((s) => !sent.includes(s));
++      renderChips();
++      poll();
++    } else {
++      const draft = state.drafts.get(sid);
++      if (draft) {
++        if (draft.text.trim() === text) draft.text = "";
++        draft.staged = draft.staged.filter((s) => !sent.includes(s));
++      }
++    }
++  } catch (error) {
++    if (error.aborted) return;
++    if (error.auth) return lost();
++    alert(error.message);
++  } finally {
++    state.busy = false;
++    $("send").disabled = false;
++  }
++}
++
++// -------------------------------------------------------------------- files
++function resumeMap() {
++  try { return JSON.parse(localStorage.getItem(RESUME_SLOT) || "{}"); } catch { return {}; }
++}
++function saveResume(map) {
++  try { localStorage.setItem(RESUME_SLOT, JSON.stringify(map)); } catch { /* private mode */ }
++}
++const fileKey = (file) => `${file.name}|${file.size}|${file.lastModified}`;
++
++async function hashFile(file, view) {
++  const hash = new Sha256();
++  for (let at = 0; at < file.size; at += 2 * 1024 * 1024) {
++    if (view.ctl.signal.aborted) throw abortError();
++    hash.update(new Uint8Array(await file.slice(at, at + 2 * 1024 * 1024).arrayBuffer()));
++    view.pct = Math.round(Math.min(1, (at + 2 * 1024 * 1024) / file.size) * 10);
++    view.update();
++  }
++  return hash.hex();
++}
++
++/** Upload one file, resuming a previous attempt when the server still has it. */
++async function uploadFile(file, view) {
++  // The calls carry this upload's own signal and the pairing it started under: cancelling the
++  // upload, or ending the pairing, stops the loop and nothing can reuse a newer pairing's CSRF.
++  const call = (path, options = {}) => api(path, { ...options, signal: view.ctl.signal, auth: view.auth });
++  view.status = "Preparo…";
++  view.update();
++  if (state.maxFile && file.size > state.maxFile) throw new Error(`Il file supera il limite (${Math.round(state.maxFile / 2 ** 20)} MB)`);
++  const sha = await hashFile(file, view);
++  const map = resumeMap();
++  const key = fileKey(file);
++  let id = "";
++  let offset = 0;
++  const known = map[key];
++  if (known && known.sha === sha) {
++    try {
++      const st = await call(`/api/phone/files/${known.id}`);
++      id = known.id;
++      offset = st.ready ? st.size : st.offset;
++    } catch (error) {
++      if (error.auth || error.aborted) throw error;
++    }
++  }
++  if (!id) {
++    const made = await call("/api/phone/files", { method: "POST", body: { name: file.name, size: file.size, sha256: sha } });
++    id = made.id;
++    state.chunk = made.chunk_size || state.chunk;
++    map[key] = { id, sha };
++    saveResume(map);
++  }
++  view.id = id;
++  let failures = 0;
++  while (offset < file.size) {
++    const end = Math.min(file.size, offset + state.chunk);
++    try {
++      const out = await call(`/api/phone/files/${id}/chunk?offset=${offset}`, { method: "PUT", body: file.slice(offset, end) });
++      offset = out.offset;
++      failures = 0;
++      view.pct = 10 + Math.round((offset / file.size) * 90);
++      view.status = `${Math.round((offset / file.size) * 100)}%`;
++      view.update();
++    } catch (error) {
++      if (error.auth || error.aborted) throw error;
++      if (++failures > 5) throw new Error("Connessione persa: riprova");
++      await new Promise((r) => setTimeout(r, 1000 * failures));
++      if (view.ctl.signal.aborted) throw abortError();
++      const st = await call(`/api/phone/files/${id}`).catch((e) => { if (e.aborted) throw e; return null; }); // where does the server really stand?
++      if (st) offset = st.offset;
++    }
++  }
++  const done = await call(`/api/phone/files/${id}/finish`, { method: "POST" });
++  delete map[key];
++  saveResume(map);
++  view.ready = true;
++  view.pct = 100;
++  view.status = "Fatto";
++  view.update();
++  return done;
++}
++
++function startUploads(files, onView) {
++  for (const file of files) {
++    const view = {
++      name: file.name, pct: 0, status: "", ready: false, error: "", id: "",
++      ctl: new AbortController(), auth: state.authGen,
++      update() { renderChips(); if (state.tab === "files") paintUploads(); },
++      /** Stop hashing/uploading and delete what the server holds of it. */
++      async cancel() {
++        this.ctl.abort();
++        state.uploads.delete(this);
++        const id = this.id;
++        const map = resumeMap();
++        delete map[fileKey(file)];
++        saveResume(map);
++        if (id && this.auth === state.authGen) await api(`/api/phone/files/${id}`, { method: "DELETE", auth: this.auth }).catch(() => {});
++        paintUploads();
++      },
++    };
++    state.uploads.set(view, file);
++    onView(view);
++    uploadFile(file, view).catch((error) => {
++      if (error.aborted) return;
++      if (error.auth) return lost();
++      view.error = error.message;
++      view.status = error.message;
++      view.update();
++    }).then(() => { if (state.uploads.has(view)) view.update(); });
++  }
++}
++
++function paintUploads() {
++  const box = $("uploads");
++  if (!box) return;
++  box.replaceChildren();
++  for (const [view, file] of state.uploads) {
++    if (view.ready) continue;
++    const row = el("div", "row");
++    row.append(el("div", "name", view.name), el("small", "", view.error || view.status || ""));
++    const bar = el("div", view.error ? "bar err" : "bar");
++    const fill = el("i");
++    fill.style.width = `${view.pct}%`;
++    bar.append(fill);
++    row.append(bar);
++    const line = el("div", "btns");
++    line.style.cssText = "display:flex;gap:8px;margin-top:8px";
++    if (view.error) {
++      const retry = el("button", "", "Riprova");
++      retry.onclick = () => { state.uploads.delete(view); startUploads([file], () => {}); paintUploads(); };
++      line.append(retry);
++    }
++    const drop = el("button", "", "Annulla");
++    drop.onclick = () => view.cancel();
++    line.append(drop);
++    row.append(line);
++    box.append(row);
++  }
++}
++
++const fmtSize = (n) => (n >= 2 ** 30 ? `${(n / 2 ** 30).toFixed(1)} GB` : n >= 2 ** 20 ? `${(n / 2 ** 20).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
++
++async function renderFiles() {
++  const t = scope();
++  show("files");
++  $("title").textContent = "File";
++  const main = $("main");
++  main.replaceChildren();
++  const pick = el("input");
++  pick.type = "file";
++  pick.multiple = true;
++  pick.className = "hide";
++  const media = el("input");
++  media.type = "file";
++  media.multiple = true;
++  media.accept = "image/*,video/*";
++  media.className = "hide";
++  const row = el("div", "");
++  row.style.cssText = "display:flex;gap:8px;margin-bottom:10px";
++  const bMedia = el("button", "primary", "Foto / Video");
++  const bFile = el("button", "", "File");
++  bMedia.style.flex = bFile.style.flex = "1";
++  bMedia.onclick = () => media.click();
++  bFile.onclick = () => pick.click();
++  const onFiles = (e) => { startUploads(Array.from(e.target.files || []), () => {}); e.target.value = ""; paintUploads(); };
++  pick.onchange = onFiles;
++  media.onchange = onFiles;
++  row.append(bMedia, bFile);
++  const uploads = el("div");
++  uploads.id = "uploads";
++  const list = el("div");
++  list.id = "filelist";
++  main.append(pick, media, row, uploads, list);
++  paintUploads();
++  await refreshFiles(t);
++  if (t.stale()) return;
++  state.listTimer = setInterval(() => { if (!t.stale() && !document.hidden) refreshFiles(t); }, 5000);
++}
++
++async function refreshFiles(t) {
++  const list = $("filelist");
++  if (!list || t.stale()) return;
++  let data;
++  try { data = await api("/api/phone/files", { signal: t.signal }); } catch (error) { if (error.aborted) return; if (error.auth) return lost(); return; }
++  if (t.stale()) return;
++  state.chunk = data.chunk_size || state.chunk;
++  state.maxFile = data.max_file || 0;
++  list.replaceChildren();
++  for (const [heading, direction] of [["Da Jarvis", "out"], ["Inviati", "in"]]) {
++    const rows = data.files.filter((f) => f.direction === direction && f.ready);
++    if (!rows.length) continue;
++    list.append(el("h2", "", heading));
++    for (const f of rows) list.append(fileRow(f));
++  }
++  if (!list.children.length) list.append(el("p", "act", "Nessun file. Invia una foto o un documento, oppure aspetta quelli di Jarvis."));
++}
++
++function fileRow(f) {
++  const row = el("div", "row file");
++  const base = `/api/phone/files/${f.id}/download`;
++  if (f.inline && /\.(jpe?g|png|gif|webp)$/i.test(f.name)) {
++    const img = el("img");
++    img.src = `${base}?inline=1`;
++    img.alt = "";
++    img.loading = "lazy";
++    row.append(img);
++  }
++  const text = el("div", "grow");
++  text.append(el("div", "name", f.name), el("small", "", fmtSize(f.size)));
++  row.append(text);
++  if (f.inline) {
++    const open = el("a", "", "Apri");
++    open.href = `${base}?inline=1`;
++    open.target = "_blank";
++    open.rel = "noopener";
++    row.append(open);
++  }
++  const get = el("a", "", "Scarica");
++  get.href = base;
++  row.append(get);
++  const del = el("button", "", "✕");
++  del.setAttribute("aria-label", "Elimina");
++  del.onclick = async () => {
++    if (!confirm(`Eliminare ${f.name}?`)) return;
++    const t = scope();
++    try { await api(`/api/phone/files/${f.id}`, { method: "DELETE", auth: t.auth }); } catch (error) { if (error.aborted) return; if (error.auth) return lost(); }
++    if (!t.stale()) refreshFiles(t);
++  };
++  row.append(del);
++  return row;
++}
++
++// -------------------------------------------------------------------- voice
++function toggleMic() {
++  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
++  if (!Recognition) { alert("Questo browser non offre il riconoscimento vocale."); return; }
++  if (state.rec) { state.rec.stop(); return; }
++  const rec = new Recognition();
++  rec.lang = "it-IT";
++  rec.interimResults = true;
++  const input = $("input");
++  const base = input.value ? `${input.value} ` : "";
++  rec.onresult = (e) => { input.value = base + Array.from(e.results).map((r) => r[0].transcript).join(""); };
++  const done = () => { state.rec = null; $("mic").classList.remove("on"); };
++  rec.onend = done;
++  rec.onerror = done;
++  state.rec = rec;
++  $("mic").classList.add("on");
++  rec.start();
++}
++
++// --------------------------------------------------------------------- boot
++$("back").onclick = renderList;
++$("logout").onclick = async () => {
++  if (!confirm("Scollegare questo telefono da Jarvis?")) return;
++  try { await api("/api/phone/logout", { method: "POST", auth: state.authGen }); } catch { /* already gone */ }
++  endSession();
++  renderPair("Telefono scollegato.");
++};
++$("tab-chat").onclick = () => setTab("chat");
++$("tab-files").onclick = () => setTab("files");
++$("send").onclick = send;
++$("mic").onclick = toggleMic;
++$("attach").onclick = () => $("file").click();
++$("file").onchange = (e) => {
++  startUploads(Array.from(e.target.files || []), (view) => { state.staged.push(view); renderChips(); });
++  e.target.value = "";
++};
++$("stop").onclick = async () => {
++  const sid = state.sid;
++  const auth = state.authGen;
++  $("stop").disabled = true;
++  try { await api(`/api/phone/chats/${encodeURIComponent(sid)}/cancel`, { method: "POST", auth }); } catch (error) { if (!error.aborted) alert(error.message); }
++  $("stop").disabled = false;
++  if (state.sid === sid) poll();
++};
++$("input").addEventListener("input", (e) => {
++  e.target.style.height = "auto";
++  e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
++});
++document.addEventListener("visibilitychange", () => { if (!document.hidden && state.sid && state.tab === "chat") poll(); });
++
++if ("serviceWorker" in navigator) navigator.serviceWorker.register("/m/sw.js").catch(() => {});
++boot();
+diff --git a/dodaios/ui/web/mobile/icon-256.png b/dodaios/ui/web/mobile/icon-256.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..101028cca53474b529d4fb3e14fda6439673eced
+GIT binary patch
+literal 17928
+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
+DF0<SW
+
+literal 0
+HcmV?d00001
+
+diff --git a/dodaios/ui/web/mobile/index.html b/dodaios/ui/web/mobile/index.html
+new file mode 100644
+index 0000000000000000000000000000000000000000..8094badaa3a79db745607d878905abc4a3c57924
+--- /dev/null
++++ b/dodaios/ui/web/mobile/index.html
+@@ -0,0 +1,85 @@
++<!doctype html>
++<html lang="it">
++<head>
++<meta charset="utf-8">
++<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
++<meta name="theme-color" content="#0b0d12">
++<meta name="apple-mobile-web-app-capable" content="yes">
++<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
++<meta name="apple-mobile-web-app-title" content="Jarvis">
++<link rel="manifest" href="/m/manifest.webmanifest">
++<link rel="apple-touch-icon" href="/m/icon-256.png">
++<title>Jarvis</title>
++<style>
++:root{--bg:#0b0d12;--panel:#151922;--line:#262c38;--fg:#e8ebf1;--mute:#8a93a6;--acc:#5b8cff;--ok:#2fbf71;--bad:#e5484d;--warn:#f5a524}
++@media (prefers-color-scheme:light){:root{--bg:#f4f5f8;--panel:#fff;--line:#dfe2ea;--fg:#14171f;--mute:#667085}}
++*{box-sizing:border-box}
++html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 -apple-system,system-ui,sans-serif}
++#app{display:flex;flex-direction:column;height:100dvh;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
++header{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line)}
++header h1{font-size:17px;margin:0;flex:1}
++button{font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;min-height:44px}
++button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
++button.danger{background:var(--bad);border-color:var(--bad);color:#fff}
++button:disabled{opacity:.5}
++main{flex:1;overflow-y:auto;padding:12px 14px;-webkit-overflow-scrolling:touch}
++.row{padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--panel);margin-bottom:8px}
++.row small{color:var(--mute);display:block}
++.msg{width:fit-content;max-width:88%;margin:6px 0;padding:9px 12px;border-radius:14px;white-space:pre-wrap;word-wrap:break-word}
++.msg.user{margin-left:auto;background:var(--acc);color:#fff}
++.msg.bot{background:var(--panel);border:1px solid var(--line)}
++.msg.err{border-color:var(--bad);color:var(--bad)}
++.act{color:var(--mute);font-size:13px;margin:4px 0}
++.card{border:1px solid var(--warn);background:var(--panel);border-radius:12px;padding:12px;margin:8px 0}
++.card pre{white-space:pre-wrap;word-break:break-word;margin:6px 0;font-size:13px;color:var(--mute);max-height:160px;overflow:auto}
++.card .btns{display:flex;gap:8px;flex-wrap:wrap}
++.card .btns button{flex:1}
++#status{padding:6px 14px;font-size:13px;color:var(--mute);display:flex;align-items:center;gap:8px;border-top:1px solid var(--line)}
++#status .grow{flex:1}
++footer{padding:8px 10px;border-top:1px solid var(--line);display:flex;gap:6px;align-items:flex-end}
++footer textarea{flex:1;resize:none;max-height:120px;font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px;min-height:44px}
++.chips{display:flex;gap:6px;flex-wrap:wrap;padding:0 10px}
++.chip{font-size:13px;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:3px 10px}
++input[type=password],input[type=text]{width:100%;font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin:8px 0}
++.tabs{display:flex;border-top:1px solid var(--line)}
++.tabs button{flex:1;border:0;border-radius:0;background:transparent;color:var(--mute)}
++.tabs button.on{color:var(--acc);font-weight:600}
++.file{display:flex;gap:10px;align-items:center}
++.file .grow{flex:1;min-width:0}
++.file .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
++.file img{width:48px;height:48px;object-fit:cover;border-radius:8px}
++.file a{color:var(--acc);text-decoration:none;padding:8px}
++.bar{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin-top:6px}
++.bar i{display:block;height:100%;background:var(--acc);width:0}
++.bar.err i{background:var(--bad)}
++h2{font-size:14px;color:var(--mute);margin:14px 0 6px;font-weight:600;text-transform:uppercase}
++.hide{display:none!important}
++.mic.on{background:var(--bad);border-color:var(--bad);color:#fff}
++</style>
++</head>
++<body>
++<div id="app">
++  <header>
++    <button id="back" class="hide" aria-label="Indietro">‹</button>
++    <h1 id="title">Jarvis</h1>
++    <button id="logout" class="hide">Esci</button>
++  </header>
++  <main id="main"></main>
++  <div id="chips" class="chips hide"></div>
++  <div id="status" class="hide"><span class="grow" id="statustext"></span><button id="stop" class="danger hide">Ferma</button></div>
++  <footer id="composer" class="hide">
++    <button id="attach" aria-label="Allega">＋</button>
++    <textarea id="input" rows="1" placeholder="Scrivi a Jarvis…"></textarea>
++    <button id="mic" class="mic" aria-label="Parla">🎤</button>
++    <button id="send" class="primary">Invia</button>
++    <input id="file" type="file" multiple class="hide">
++  </footer>
++  <nav id="tabs" class="tabs hide">
++    <button id="tab-chat" class="on">Chat</button>
++    <button id="tab-files">File</button>
++  </nav>
++</div>
++<script src="/m/sha256.js"></script>
++<script src="/m/app.js"></script>
++</body>
++</html>
+diff --git a/dodaios/ui/web/mobile/manifest.webmanifest b/dodaios/ui/web/mobile/manifest.webmanifest
+new file mode 100644
+index 0000000000000000000000000000000000000000..d4db407526570ae3cb13c16cd8d8ce0027c31fd1
+--- /dev/null
++++ b/dodaios/ui/web/mobile/manifest.webmanifest
+@@ -0,0 +1,10 @@
++{
++  "name": "Jarvis",
++  "short_name": "Jarvis",
++  "start_url": "/m/",
++  "scope": "/m/",
++  "display": "standalone",
++  "background_color": "#0b0d12",
++  "theme_color": "#0b0d12",
++  "icons": [{"src": "/m/icon-256.png", "sizes": "256x256", "type": "image/png"}]
++}
+diff --git a/dodaios/ui/web/mobile/pair.html b/dodaios/ui/web/mobile/pair.html
+new file mode 100644
+index 0000000000000000000000000000000000000000..a6ee344c9060b9570fd45be7d1568c4999adfa37
+--- /dev/null
++++ b/dodaios/ui/web/mobile/pair.html
+@@ -0,0 +1,52 @@
++<!doctype html>
++<html lang="it">
++<head>
++<meta charset="utf-8">
++<meta name="viewport" content="width=device-width, initial-scale=1">
++<title>Collega il telefono</title>
++<style>
++:root{--bg:#0b0d12;--panel:#151922;--line:#262c38;--fg:#e8ebf1;--mute:#8a93a6;--acc:#5b8cff;--bad:#e5484d}
++@media (prefers-color-scheme:light){:root{--bg:#f4f5f8;--panel:#fff;--line:#dfe2ea;--fg:#14171f;--mute:#667085}}
++body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.45 -apple-system,system-ui,sans-serif}
++main{max-width:560px;margin:0 auto;padding:24px 16px}
++h1{font-size:22px;margin:0 0 4px}h2{font-size:14px;color:var(--mute);text-transform:uppercase;margin:28px 0 8px}
++.box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;margin:8px 0}
++.code{font:600 38px/1.2 ui-monospace,monospace;letter-spacing:.12em;text-align:center;margin:8px 0}
++button,input{font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
++input{width:100%;box-sizing:border-box;margin:6px 0}
++button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
++button.danger{color:var(--bad)}
++small,.mute{color:var(--mute)}
++.dev{display:flex;gap:10px;align-items:center}.dev .g{flex:1}
++</style>
++</head>
++<body>
++<main>
++  <h1>Collega il telefono a Jarvis</h1>
++  <p class="mute">Apri questa pagina sul computer dove gira Jarvis. Il codice vale 5 minuti e si usa una volta sola.</p>
++  <div id="login" class="box" hidden>
++    <p>Serve la Control Key (Impostazioni → API Keys → Control Key). Resta solo in questa pagina.</p>
++    <input id="key" type="password" autocomplete="off" placeholder="jctl_…">
++    <button id="keygo" class="primary">Continua</button>
++  </div>
++  <div id="pair" hidden>
++    <div class="box">
++      <div id="code" class="code">—</div>
++      <p class="mute" id="left"></p>
++      <p>Sul telefono apri: <b id="url"></b></p>
++      <p><small>Safari installa l'app, tiene il servizio in background e permette la dettatura solo su HTTPS: vedi docs/mobile-panel.md (Tailscale).</small></p>
++      <button id="new" class="primary">Nuovo codice</button>
++    </div>
++    <h2>Telefoni collegati</h2>
++    <div id="devices"></div>
++    <h2>Invia un file al telefono</h2>
++    <div class="box">
++      <input id="path" type="text" placeholder="/percorso/del/file/su/questo/computer">
++      <button id="send">Invia al telefono</button>
++      <p id="sent" class="mute"></p>
++    </div>
++  </div>
++</main>
++<script src="/m/pair.js"></script>
++</body>
++</html>
+diff --git a/dodaios/ui/web/mobile/pair.js b/dodaios/ui/web/mobile/pair.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..4cfaa5281768d450dd313ac5675c4b66a86cfe08
+--- /dev/null
++++ b/dodaios/ui/web/mobile/pair.js
+@@ -0,0 +1,93 @@
++// Owner page: mint a pairing code, list and revoke phones, publish a file to them.
++// It runs in the computer's own browser; a remote browser must present the Control Key,
++// which is kept in this page's memory only.
++"use strict";
++const $ = (id) => document.getElementById(id);
++let bearer = "";
++let expiresAt = 0;
++let ticker = 0;
++
++async function call(path, options = {}) {
++  const headers = { ...(options.headers || {}) };
++  if (bearer) headers.Authorization = `Bearer ${bearer}`;
++  if (options.body) headers["Content-Type"] = "application/json";
++  const res = await fetch(path, { ...options, headers, body: options.body ? JSON.stringify(options.body) : undefined, credentials: "same-origin" });
++  if (res.status === 401 || res.status === 403) { const e = new Error("auth"); e.auth = true; throw e; }
++  const data = await res.json().catch(() => ({}));
++  if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : res.statusText);
++  return data;
++}
++
++function needKey() {
++  $("pair").hidden = true;
++  $("login").hidden = false;
++}
++
++async function newCode() {
++  try {
++    const out = await call("/api/phone-admin/pairing", { method: "POST" });
++    $("login").hidden = true;
++    $("pair").hidden = false;
++    $("code").textContent = out.code;
++    $("url").textContent = `${location.origin}/m/`;
++    expiresAt = Date.now() + out.expires_in * 1000;
++    clearInterval(ticker);
++    ticker = setInterval(tick, 1000);
++    tick();
++    await devices();
++  } catch (error) {
++    if (error.auth) return needKey();
++    $("code").textContent = "—";
++    $("left").textContent = error.message;
++    $("login").hidden = true;
++    $("pair").hidden = false;
++  }
++}
++
++function tick() {
++  const left = Math.max(0, Math.round((expiresAt - Date.now()) / 1000));
++  $("left").textContent = left ? `Scade tra ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` : "Scaduto: crea un nuovo codice.";
++  if (!left) $("code").style.opacity = "0.35"; else $("code").style.opacity = "1";
++}
++
++async function devices() {
++  const box = $("devices");
++  box.replaceChildren();
++  const { devices: list } = await call("/api/phone-admin/devices");
++  const live = list.filter((d) => !d.revoked);
++  if (!live.length) { const p = document.createElement("p"); p.className = "mute"; p.textContent = "Nessun telefono collegato."; box.append(p); }
++  for (const d of live) {
++    const row = document.createElement("div");
++    row.className = "box dev";
++    const text = document.createElement("div");
++    text.className = "g";
++    text.textContent = d.name;
++    const seen = document.createElement("small");
++    seen.textContent = ` · visto ${new Date(d.last_seen * 1000).toLocaleString("it-IT")}`;
++    text.append(seen);
++    const revoke = document.createElement("button");
++    revoke.className = "danger";
++    revoke.textContent = "Revoca";
++    revoke.onclick = async () => {
++      if (!confirm(`Revocare ${d.name}? Smette subito di funzionare.`)) return;
++      await call(`/api/phone-admin/devices/${d.id}`, { method: "DELETE" });
++      devices();
++    };
++    row.append(text, revoke);
++    box.append(row);
++  }
++}
++
++$("new").onclick = newCode;
++$("keygo").onclick = () => { bearer = $("key").value.trim(); $("key").value = ""; newCode(); };
++$("send").onclick = async () => {
++  const path = $("path").value.trim();
++  if (!path) return;
++  $("sent").textContent = "Invio…";
++  try {
++    const out = await call("/api/phone-admin/outbox", { method: "POST", body: { path } });
++    $("sent").textContent = `Pronto sul telefono: ${out.name}`;
++    $("path").value = "";
++  } catch (error) { $("sent").textContent = error.auth ? "Non autorizzato." : error.message; }
++};
++newCode();
+diff --git a/dodaios/ui/web/mobile/sha256.js b/dodaios/ui/web/mobile/sha256.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..938a6a2cf2bd126c992d508e07e034b81a50ba94
+--- /dev/null
++++ b/dodaios/ui/web/mobile/sha256.js
+@@ -0,0 +1,74 @@
++// Incremental SHA-256. crypto.subtle cannot hash a stream and does not exist on plain http, and a
++// video must be hashed in slices, so the phone panel carries its own (checked against Node's crypto).
++"use strict";
++
++const SHA256_K = new Uint32Array([
++  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
++  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
++  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
++  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
++  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
++  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
++  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
++  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
++]);
++
++class Sha256 {
++  constructor() {
++    this.h = new Uint32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]);
++    this.buf = new Uint8Array(64);
++    this.fill = 0;
++    this.length = 0;
++    this.w = new Uint32Array(64);
++  }
++
++  update(bytes) {
++    this.length += bytes.length;
++    let i = 0;
++    if (this.fill) {
++      while (i < bytes.length && this.fill < 64) this.buf[this.fill++] = bytes[i++];
++      if (this.fill === 64) { this._block(this.buf, 0); this.fill = 0; }
++    }
++    for (; i + 64 <= bytes.length; i += 64) this._block(bytes, i);
++    while (i < bytes.length) this.buf[this.fill++] = bytes[i++];
++    return this;
++  }
++
++  _block(data, at) {
++    const w = this.w, h = this.h;
++    for (let t = 0; t < 16; t++, at += 4) w[t] = (data[at] << 24) | (data[at + 1] << 16) | (data[at + 2] << 8) | data[at + 3];
++    for (let t = 16; t < 64; t++) {
++      const a = w[t - 15], b = w[t - 2];
++      const s0 = ((a >>> 7) | (a << 25)) ^ ((a >>> 18) | (a << 14)) ^ (a >>> 3);
++      const s1 = ((b >>> 17) | (b << 15)) ^ ((b >>> 19) | (b << 13)) ^ (b >>> 10);
++      w[t] = (w[t - 16] + s0 + w[t - 7] + s1) | 0;
++    }
++    let a = h[0], b = h[1], c = h[2], d = h[3], e = h[4], f = h[5], g = h[6], k = h[7];
++    for (let t = 0; t < 64; t++) {
++      const S1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
++      const ch = (e & f) ^ (~e & g);
++      const t1 = (k + S1 + ch + SHA256_K[t] + w[t]) | 0;
++      const S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
++      const maj = (a & b) ^ (a & c) ^ (b & c);
++      const t2 = (S0 + maj) | 0;
++      k = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
++    }
++    h[0] = (h[0] + a) | 0; h[1] = (h[1] + b) | 0; h[2] = (h[2] + c) | 0; h[3] = (h[3] + d) | 0;
++    h[4] = (h[4] + e) | 0; h[5] = (h[5] + f) | 0; h[6] = (h[6] + g) | 0; h[7] = (h[7] + k) | 0;
++  }
++
++  hex() {
++    const bits = this.length * 8;
++    const pad = new Uint8Array(((this.fill < 56 ? 56 : 120) - this.fill) + 8);
++    pad[0] = 0x80;
++    const view = new DataView(pad.buffer);
++    view.setUint32(pad.length - 8, Math.floor(bits / 0x100000000));
++    view.setUint32(pad.length - 4, bits >>> 0);
++    const keep = this.length;
++    this.update(pad);
++    this.length = keep;
++    return Array.from(this.h, (x) => (x >>> 0).toString(16).padStart(8, "0")).join("");
++  }
++}
++
++if (typeof module !== "undefined") module.exports = { Sha256 };
+diff --git a/dodaios/ui/web/mobile/sw.js b/dodaios/ui/web/mobile/sw.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..e7aea2d2022a3d862f64ab4c96bb077cf4c5a173
+--- /dev/null
++++ b/dodaios/ui/web/mobile/sw.js
+@@ -0,0 +1,15 @@
++// Shell only: the panel opens offline, but every /api call goes to the network (never cached).
++// The cache is owned by this panel: only caches named "jarvis-panel-*" are ever deleted, and only
++// same-origin GETs under /m/ are handled, so installing the panel cannot touch other app caches.
++const PREFIX = "jarvis-panel-";
++const SHELL = `${PREFIX}v3`;
++const FILES = ["/m/", "/m/app.js", "/m/sha256.js", "/m/manifest.webmanifest", "/m/icon-256.png"];
++self.addEventListener("install", (e) => e.waitUntil(caches.open(SHELL).then((c) => c.addAll(FILES))));
++self.addEventListener("activate", (e) => e.waitUntil(
++  caches.keys().then((keys) => Promise.all(
++    keys.filter((k) => k.startsWith(PREFIX) && k !== SHELL).map((k) => caches.delete(k))))));
++self.addEventListener("fetch", (e) => {
++  const url = new URL(e.request.url);
++  if (e.request.method !== "GET" || url.origin !== self.location.origin || !url.pathname.startsWith("/m/")) return;
++  e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
++});
+diff --git a/dodaios/ui/web/phone_routes.py b/dodaios/ui/web/phone_routes.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..93d1570ebb17fe57caec7ce6a1a71bf32ffa1cc4
+--- /dev/null
++++ b/dodaios/ui/web/phone_routes.py
+@@ -0,0 +1,504 @@
++"""Routes behind the phone companion (``/m/``).
++
++Two surfaces, kept apart on purpose:
++
++* ``/api/phone-admin/*`` — what the OWNER does on the computer (mint a pairing code, list and
++  revoke devices, publish a file to the phone). It sits behind the normal Jarvis guard
++  (session cookie, loopback open access, or the Control Key); no phone credential reaches it.
++* ``/api/phone/*`` — what a PAIRED PHONE may do: chat, approvals, stop, and its own file
++  transfers. The outer guard lets these through (:func:`_http_auth_exception`), so every handler
++  authenticates the device itself, re-reading the device row on every request: revocation is
++  immediate for sessions, uploads and downloads in flight.
++
++The phone's credential is a random token in an HttpOnly, SameSite=Strict cookie scoped to
++``/api/phone``; unsafe methods also need the device's CSRF token in ``X-Phone-CSRF`` and an Origin
++that matches the Host. Chat calls reuse the desktop chat routes' own functions, so approvals,
++cancellation and queuing behave exactly as they do there.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import hashlib
++import os
++import re
++import time
++from collections.abc import Iterator
++from pathlib import Path
++from typing import Any
++from urllib.parse import quote, urlsplit
++
++from fastapi import APIRouter, Depends, HTTPException, Request, Response
++from fastapi.responses import StreamingResponse
++from pydantic import BaseModel, Field
++
++from dodaios.agent_chat import attachments as chat_attachments
++from dodaios.phone.devices import DeviceRegistry, PairingError, csrf_matches
++from dodaios.phone.store import NotFound, Revoked, TransferError, TransferStore
++
++router = APIRouter(prefix="/api/phone", tags=["phone"])
++admin_router = APIRouter(prefix="/api/phone-admin", tags=["phone"])
++
++COOKIE = "jphone"
++CSRF_HEADER = "x-phone-csrf"
++COOKIE_MAX_AGE = 90 * 24 * 3600
++_SWEEP_EVERY_S = 600.0
++#: Types a phone may preview inline (in a sandboxed response); everything else downloads.
++_INLINE_TYPES = {
++    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif",
++    ".webp": "image/webp", ".mp4": "video/mp4", ".mov": "video/quicktime",
++    ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".wav": "audio/wav",
++}
++
++
++class _Hub:
++    """The registry and the store of one app, built on first use."""
++
++    def __init__(self, root: Path) -> None:
++        self.registry = DeviceRegistry(root)
++        self.store = TransferStore(root / "files")
++        self._swept = 0.0
++
++    def sweep_if_due(self) -> None:
++        now = time.monotonic()
++        if now - self._swept >= _SWEEP_EVERY_S:
++            self._swept = now
++            self.store.sweep()
++
++
++def _hub(request: Request) -> _Hub:
++    state = request.app.state
++    hub = getattr(state, "phone_hub", None)
++    if hub is None:
++        cfg = getattr(state, "config", None)
++        data_dir = getattr(getattr(cfg, "memory", None), "data_dir", None) or "data"
++        hub = state.phone_hub = _Hub(Path(data_dir) / "phone")
++    return hub
++
++
++def _same_origin(request: Request) -> bool:
++    origin = request.headers.get("origin")
++    host = request.headers.get("host", "").lower()
++    if not origin or not host:
++        return False
++    return urlsplit(origin).netloc.lower() == host
++
++
++def _secure(request: Request) -> bool:
++    return request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
++
++
++def _device(request: Request) -> dict[str, Any]:
++    """The live paired device behind this request, else 401. Also enforces the CSRF rules."""
++    hub = _hub(request)
++    device = hub.registry.authenticate(request.cookies.get(COOKIE))
++    if device is None:
++        raise HTTPException(status_code=401, detail="not paired")
++    if request.method not in ("GET", "HEAD"):
++        if not _same_origin(request) or not csrf_matches(
++            device["csrf"], request.headers.get(CSRF_HEADER)
++        ):
++            raise HTTPException(status_code=403, detail="request refused")
++    return device
++
++
++def _owner(request: Request) -> str:
++    return _hub(request).registry.owner
++
++
++def _guard(request: Request, device: dict[str, Any]) -> Any:
++    """A callable answering "is this device still paired?" for a mutation's last look."""
++    registry = _hub(request).registry
++    return lambda: registry.is_active(device["id"])
++
++
++def _ensure_active(request: Request, device: dict[str, Any]) -> None:
++    """Re-check membership after an await that may have outlived the request's entry check."""
++    if not _hub(request).registry.is_active(device["id"]):
++        raise HTTPException(status_code=401, detail="not paired")
++
++
++def _store_call(fn: Any, *args: Any, **kwargs: Any) -> Any:
++    try:
++        return fn(*args, **kwargs)
++    except Revoked as exc:
++        raise HTTPException(status_code=401, detail="not paired") from exc
++    except NotFound as exc:
++        raise HTTPException(status_code=404, detail="file not found") from exc
++    except TransferError as exc:
++        status = 409 if "offset" in str(exc) else 400
++        raise HTTPException(status_code=status, detail=str(exc)) from exc
++
++
++# ------------------------------------------------------------------ pairing
++class RedeemBody(BaseModel):
++    code: str = Field(max_length=32)
++    name: str = Field(default="", max_length=80)
++
++
++@router.post("/pair/redeem")
++async def redeem(body: RedeemBody, request: Request, response: Response) -> dict[str, Any]:
++    if not _same_origin(request):
++        raise HTTPException(status_code=403, detail="request refused")
++    hub = _hub(request)
++    try:
++        device, token = await asyncio.to_thread(hub.registry.redeem, body.code, body.name)
++    except PairingError as exc:
++        raise HTTPException(status_code=400, detail=str(exc)) from exc
++    response.set_cookie(
++        COOKIE, token, max_age=COOKIE_MAX_AGE, path="/api/phone", httponly=True,
++        samesite="strict", secure=_secure(request),
++    )
++    return {"device": {k: v for k, v in device.items() if k != "csrf"}, "csrf": device["csrf"]}
++
++
++@router.get("/me")
++def me(device: dict[str, Any] = Depends(_device)) -> dict[str, Any]:  # noqa: B008
++    return {"device": {k: v for k, v in device.items() if k != "csrf"}, "csrf": device["csrf"]}
++
++
++@router.post("/logout")
++async def logout(
++    request: Request, response: Response, device: dict[str, Any] = Depends(_device)  # noqa: B008
++) -> dict[str, bool]:
++    hub = _hub(request)
++    await asyncio.to_thread(hub.registry.revoke, device["id"])
++    await asyncio.to_thread(hub.store.delete_for_device, device["id"])
++    response.delete_cookie(COOKIE, path="/api/phone")
++    return {"ok": True}
++
++
++# --------------------------------------------------------------------- chat
++class PhoneMessage(BaseModel):
++    text: str = Field(default="", max_length=20_000)
++    file_ids: list[str] = Field(default_factory=list, max_length=10)
++    timezone: str | None = Field(default=None, max_length=100)
++
++
++class PhoneApproval(BaseModel):
++    decision: str
++
++
++class PhoneNewChat(BaseModel):
++    provider: str = ""
++
++
++def _chat() -> Any:
++    from dodaios.ui.web import agent_chat_routes
++
++    return agent_chat_routes
++
++
++@router.get("/chats")
++async def chats(request: Request, _device: dict[str, Any] = Depends(_device)) -> dict[str, Any]:  # noqa: B008
++    return await asyncio.to_thread(_chat().list_sessions, request, 40, None)
++
++
++@router.post("/chats", status_code=201)
++async def new_chat(
++    body: PhoneNewChat, request: Request, _device: dict[str, Any] = Depends(_device)  # noqa: B008
++) -> dict[str, Any]:
++    routes = _chat()
++    svc = await routes._async_service(request)  # noqa: SLF001 - the chat routes' own accessor
++    latest = (await asyncio.to_thread(svc.store.list_sessions, limit=1, surface=None) or [None])[0]
++    provider = body.provider or (latest.provider if latest else "")
++    if not provider:
++        raise HTTPException(status_code=409, detail="create the first chat on the computer")
++    created = routes.CreateSessionBody(
++        provider=provider, model=getattr(latest, "model", "") or "",
++        surface=getattr(latest, "surface", "agent") or "agent",
++    )
++    return await asyncio.to_thread(routes.create_session, created, request)
++
++
++@router.get("/chats/{session_id}")
++async def chat(
++    session_id: str, request: Request, _device: dict[str, Any] = Depends(_device)  # noqa: B008
++) -> dict[str, Any]:
++    return await _chat().get_session(session_id, request, tail=120)
++
++
++@router.post("/chats/{session_id}/messages", status_code=202)
++async def send_message(
++    session_id: str, body: PhoneMessage, request: Request,
++    device: dict[str, Any] = Depends(_device),  # noqa: B008
++) -> dict[str, Any]:
++    routes = _chat()
++    attachments: list[dict[str, Any]] = []
++    if body.file_ids:
++        svc = await routes._async_service(request)  # noqa: SLF001
++        session = svc.store.get_session(session_id)
++        if session is None:
++            raise HTTPException(status_code=404, detail="session not found")
++        folder = session.cwd or svc.default_cwd(session.surface)
++        hub = _hub(request)
++        handles = []
++        try:
++            uploads = []
++            for file_id in body.file_ids:
++                meta, path = _store_call(hub.store.open_ready, _owner(request), file_id)
++                if meta["direction"] != "in":
++                    raise HTTPException(status_code=400, detail="not an uploaded file")
++                handle = path.open("rb")
++                handles.append(handle)
++                uploads.append((meta["name"], handle))
++            try:
++                found = await chat_attachments.ingest(
++                    folder, uploads=uploads, provider=session.provider
++                )
++            except chat_attachments.AttachmentError as exc:
++                raise HTTPException(status_code=422, detail=str(exc)) from exc
++            attachments = [item.to_dict() for item in found]
++        finally:
++            for handle in handles:
++                handle.close()
++    if not body.text.strip() and not attachments:
++        raise HTTPException(status_code=400, detail="write a message or attach a file")
++    # Preparing the attachments awaited; a device revoked meanwhile must not reach the agent.
++    _ensure_active(request, device)
++    message = routes.MessageBody(text=body.text, attachments=attachments, timezone=body.timezone)
++    return await routes.post_message(session_id, message, request)
++
++
++@router.post("/chats/{session_id}/approvals/{approval_id}")
++async def approve(
++    session_id: str, approval_id: str, body: PhoneApproval, request: Request,
++    _device: dict[str, Any] = Depends(_device),  # noqa: B008
++) -> dict[str, Any]:
++    routes = _chat()
++    return await routes.resolve_approval(
++        session_id, approval_id, routes.ApprovalBody(decision=body.decision), request
++    )
++
++
++@router.post("/chats/{session_id}/cancel", openapi_extra={"x-jarvis-dangerous": True})
++async def cancel(
++    session_id: str, request: Request, _device: dict[str, Any] = Depends(_device)  # noqa: B008
++) -> dict[str, Any]:
++    return await _chat().cancel_turn(session_id, request)
++
++
++# -------------------------------------------------------------------- files
++class NewFile(BaseModel):
++    name: str = Field(max_length=300)
++    size: int
++    sha256: str = Field(max_length=64)
++
++
++def _file_view(hub: _Hub, row: dict[str, Any]) -> dict[str, Any]:
++    view = dict(row)
++    view["inline"] = Path(row["name"]).suffix.lower() in _INLINE_TYPES
++    return view
++
++
++@router.get("/files")
++async def files(request: Request, _device: dict[str, Any] = Depends(_device)) -> dict[str, Any]:  # noqa: B008
++    hub = _hub(request)
++    await asyncio.to_thread(hub.sweep_if_due)
++    rows = await asyncio.to_thread(hub.store.list, _owner(request))
++    return {"files": [_file_view(hub, r) for r in rows], "chunk_size": hub.store.chunk_size,
++            "max_file": hub.store.max_file}
++
++
++@router.post("/files", status_code=201)
++async def create_file(
++    body: NewFile, request: Request, device: dict[str, Any] = Depends(_device)  # noqa: B008
++) -> dict[str, Any]:
++    hub = _hub(request)
++    transfer_id = await asyncio.to_thread(
++        lambda: _store_call(
++            hub.store.create, _owner(request), device["id"], body.name, body.size,
++            body.sha256.lower(), guard=_guard(request, device),
++        )
++    )
++    return {"id": transfer_id, "offset": 0, "chunk_size": hub.store.chunk_size}
++
++
++@router.get("/files/{file_id}")
++async def file_status(
++    file_id: str, request: Request, _device: dict[str, Any] = Depends(_device)  # noqa: B008
++) -> dict[str, Any]:
++    hub = _hub(request)
++    row = await asyncio.to_thread(_store_call, hub.store.status, _owner(request), file_id)
++    return _file_view(hub, row)
++
++
++@router.put("/files/{file_id}/chunk")
++async def put_chunk(
++    file_id: str, offset: int, request: Request,
++    device: dict[str, Any] = Depends(_device),  # noqa: B008
++) -> dict[str, int]:
++    hub = _hub(request)
++    limit = hub.store.chunk_size
++    declared = request.headers.get("content-length")
++    if declared and declared.isdigit() and int(declared) > limit:
++        raise HTTPException(status_code=413, detail="chunk too large")
++    data = bytearray()
++    async for part in request.stream():
++        data.extend(part)
++        if len(data) > limit:
++            raise HTTPException(status_code=413, detail="chunk too large")
++    _ensure_active(request, device)  # the body took time to arrive
++    new_offset = await asyncio.to_thread(
++        lambda: _store_call(
++            hub.store.append, _owner(request), file_id, offset, bytes(data),
++            guard=_guard(request, device),
++        )
++    )
++    return {"offset": new_offset}
++
++
++@router.post("/files/{file_id}/finish")
++async def finish_file(
++    file_id: str, request: Request, device: dict[str, Any] = Depends(_device)  # noqa: B008
++) -> dict[str, Any]:
++    hub = _hub(request)
++    row = await asyncio.to_thread(
++        lambda: _store_call(
++            hub.store.finish, _owner(request), file_id, guard=_guard(request, device)
++        )
++    )
++    return _file_view(hub, row)
++
++
++@router.delete("/files/{file_id}")
++async def delete_file(
++    file_id: str, request: Request, _device: dict[str, Any] = Depends(_device)  # noqa: B008
++) -> dict[str, bool]:
++    hub = _hub(request)
++    await asyncio.to_thread(_store_call, hub.store.delete, _owner(request), file_id)
++    return {"ok": True}
++
++
++def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:
++    """A single ``bytes=a-b`` range as ``(start, end_inclusive)``; ``None`` = whole file."""
++    if not header:
++        return None
++    match = re.fullmatch(r"bytes=(\d*)-(\d*)", header.strip())
++    if not match or (not match.group(1) and not match.group(2)):
++        raise HTTPException(status_code=416, detail="bad range")
++    if not match.group(1):
++        length = min(int(match.group(2)), size)
++        start, end = size - length, size - 1
++    else:
++        start = int(match.group(1))
++        end = min(int(match.group(2)), size - 1) if match.group(2) else size - 1
++    if start > end or start >= size:
++        raise HTTPException(status_code=416, detail="range not satisfiable")
++    return start, end
++
++
++def _stream(hub: _Hub, path: Path, device_id: str, start: int, end: int) -> Iterator[bytes]:
++    remaining = end - start + 1
++    with path.open("rb") as handle:
++        handle.seek(start)
++        while remaining > 0:
++            # A revoked device stops receiving bytes mid-download.
++            if not hub.registry.is_active(device_id):
++                return
++            block = handle.read(min(hub.store.chunk_size, remaining))
++            if not block:
++                return
++            remaining -= len(block)
++            yield block
++
++
++@router.get("/files/{file_id}/download")
++async def download(
++    file_id: str, request: Request, inline: bool = False,
++    device: dict[str, Any] = Depends(_device),  # noqa: B008
++) -> Response:
++    hub = _hub(request)
++    meta, path = await asyncio.to_thread(
++        _store_call, hub.store.open_ready, _owner(request), file_id
++    )
++    size = meta["size"]
++    span = _parse_range(request.headers.get("range"), size) if size else None
++    start, end = span if span else (0, size - 1)
++    media = _INLINE_TYPES.get(Path(meta["name"]).suffix.lower())
++    headers = {
++        "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store",
++        "Accept-Ranges": "bytes", "Content-Length": str(max(0, end - start + 1)),
++        "Content-Security-Policy": "sandbox; default-src 'none'",
++    }
++    if inline and media:
++        disposition = "inline"
++    else:
++        disposition, media = "attachment", "application/octet-stream"
++    ascii_name = re.sub(r"[^A-Za-z0-9._-]", "_", meta["name"]) or "file"
++    headers["Content-Disposition"] = (
++        f"{disposition}; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(meta['name'])}"
++    )
++    status = 200
++    if span:
++        status = 206
++        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
++    if size == 0:
++        return Response(b"", media_type=media, headers=headers)
++    return StreamingResponse(
++        _stream(hub, path, device["id"], start, end), status_code=status, media_type=media,
++        headers=headers,
++    )
++
++
++# -------------------------------------------------------------------- admin
++@admin_router.post("/pairing")
++async def mint_pairing(request: Request) -> dict[str, Any]:
++    try:
++        code, ttl = await asyncio.to_thread(_hub(request).registry.new_code)
++    except PairingError as exc:
++        raise HTTPException(status_code=409, detail=str(exc)) from exc
++    return {"code": code, "expires_in": int(ttl)}
++
++
++@admin_router.get("/devices")
++async def list_devices(request: Request) -> dict[str, Any]:
++    return {"devices": await asyncio.to_thread(_hub(request).registry.list)}
++
++
++@admin_router.delete("/devices/{device_id}")
++async def revoke_device(device_id: str, request: Request) -> dict[str, Any]:
++    hub = _hub(request)
++    revoked = await asyncio.to_thread(hub.registry.revoke, device_id)
++    if not revoked:
++        raise HTTPException(status_code=404, detail="no such active device")
++    dropped = await asyncio.to_thread(hub.store.delete_for_device, device_id)
++    return {"ok": True, "unfinished_uploads_removed": dropped}
++
++
++class OutboxBody(BaseModel):
++    path: str = Field(max_length=4096)
++    name: str = Field(default="", max_length=255)
++
++
++def _publish(hub: _Hub, owner: str, path: str, name: str) -> dict[str, Any]:
++    source = Path(os.path.realpath(os.path.expanduser(path)))
++    if not source.is_file():
++        raise HTTPException(status_code=400, detail="not a file")
++    digest = hashlib.sha256()
++    with source.open("rb") as handle:
++        while block := handle.read(1024 * 1024):
++            digest.update(block)
++    size = source.stat().st_size
++    transfer_id = _store_call(
++        hub.store.create, owner, "owner", name or source.name, size, digest.hexdigest(),
++        direction="out",
++    )
++    try:
++        offset = 0
++        with source.open("rb") as handle:
++            while block := handle.read(hub.store.chunk_size):
++                offset = hub.store.append(owner, transfer_id, offset, block)
++        if offset != size:
++            raise HTTPException(status_code=409, detail="the file changed while it was copied")
++        return _store_call(hub.store.finish, owner, transfer_id)
++    except BaseException:
++        hub.store.delete(owner, transfer_id)
++        raise
++
++
++@admin_router.post("/outbox", status_code=201)
++async def publish_to_phone(body: OutboxBody, request: Request) -> dict[str, Any]:
++    """Make a file on this computer downloadable by the paired phones (owner action)."""
++    hub = _hub(request)
++    return await asyncio.to_thread(_publish, hub, _owner(request), body.path, body.name)
+diff --git a/dodaios/ui/web/server.py b/dodaios/ui/web/server.py
+index eefbe3f526c1708d8bbf73dfa6af340fa989cefa..555aa5f2d9fc5da2f53835e4aa3f38a9a7bd5098 100644
+--- a/dodaios/ui/web/server.py
++++ b/dodaios/ui/web/server.py
+@@ -69,6 +69,9 @@ WEB_DIR = Path(__file__).resolve().parent
+ DIST_DIR = WEB_DIR / "dist"
+ INDEX_FILE = DIST_DIR / "index.html"
+ ASSETS_DIR = DIST_DIR / "assets"
++#: The phone panel (``/m/``): plain static files, no build step. No secret is in them;
++#: every API call it makes is authenticated by the paired device.
++MOBILE_DIR = WEB_DIR / "mobile"
+ 
+ # The Verse ships pre-rendered plates and 3D models; Windows' MIME registry
+ # does not know these types, and a wrong type makes the WebView refuse them.
+@@ -802,6 +805,11 @@ class WebServer:
+         app.state.agent_chat_factory = self._build_agent_chat_service
+         app.include_router(attention_router)
+         app.include_router(agent_chat_router)
++        from .phone_routes import admin_router as phone_admin_router
++        from .phone_routes import router as phone_router
++
++        app.include_router(phone_router)
++        app.include_router(phone_admin_router)
+         from .agent_server_routes import router as agent_server_router
+ 
+         app.include_router(agent_server_router)
+@@ -2406,6 +2414,17 @@ class WebServer:
+     # ------------------------------------------------------------------
+ 
+     def _register_static_or_spa(self, app: FastAPI) -> None:
++        if MOBILE_DIR.is_dir():
++            app.mount("/m", StaticFiles(directory=str(MOBILE_DIR), html=True), name="mobile")
++        # Optional extra static app (e.g. a separately kept phone web app), served at /app-extra/.
++        # Off unless JARVIS_EXTRA_STATIC_DIR names an existing folder; plain files only, no secret in them.
++        extra = os.environ.get("JARVIS_EXTRA_STATIC_DIR", "").strip()
++        if extra and Path(extra).expanduser().is_dir():
++            app.mount(
++                "/app-extra",
++                StaticFiles(directory=str(Path(extra).expanduser()), html=True),
++                name="extra-static",
++            )
+         if self.cfg.ui.dev_mode:
+             return
+ 
+diff --git a/dodaios/ui/web/surface_security.py b/dodaios/ui/web/surface_security.py
+index 57f05bf0940e4bf587d529cdb26fc6a0ff218750..2dabe94117dc3f985a45ea94204262c6b5879f3f 100644
+--- a/dodaios/ui/web/surface_security.py
++++ b/dodaios/ui/web/surface_security.py
+@@ -805,6 +805,9 @@ def _http_auth_exception(path: str, method: str) -> bool:
+             and method == "POST"
+         )
+         or (path == "/api/computers/pairing/enter" and method in {"GET", "POST"})
++        # The phone companion authenticates its paired device inside every handler
++        # (dodaios/ui/web/phone_routes.py); the owner's /api/phone-admin stays behind the guard.
++        or path.startswith("/api/phone/")
+         or _is_static_request(path, method)
+         or (path == "/api/health" and method == "GET")
+         or (path == "/api/ui/shell-painted" and method == "POST")
