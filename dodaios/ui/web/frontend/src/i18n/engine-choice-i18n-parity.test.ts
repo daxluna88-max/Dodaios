@@ -47,6 +47,7 @@ function lookup(trees: Tree[], key: string): unknown {
 const SOURCES = [
   "../views/settings/NetworkPolicyGroup.tsx",
   "../views/settings/ConsumerFanoutGroup.tsx",
+  "../views/settings/MultiEngineChatGroup.tsx",
   "../views/apikeys/VoiceEngine.tsx",
   "../components/providers/LocalVoicePanel.tsx",
 ];
@@ -56,7 +57,7 @@ function requiredKeys(): string[] {
   const keys = new Set<string>();
   for (const file of SOURCES) {
     const text = readFileSync(join(__dirname, file), "utf8");
-    for (const m of text.matchAll(/t\(\s*"((?:settings_view\.(?:network_policy|fanout)|providers_page\.local_voice_section|apikeys_view\.local_voice_answer)[\w.]*)"/g)) {
+    for (const m of text.matchAll(/t\(\s*"((?:settings_view\.(?:network_policy|fanout|multi_engine)|providers_page\.local_voice_section|apikeys_view\.local_voice_answer)[\w.]*)"/g)) {
       keys.add(m[1]);
     }
   }

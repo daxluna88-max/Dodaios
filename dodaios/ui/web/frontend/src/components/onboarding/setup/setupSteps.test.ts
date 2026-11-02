@@ -24,8 +24,8 @@ describe("setup steps", () => {
     expect([...block![1].matchAll(/"([a-z-]+)"/g)].map((m) => m[1])).toEqual([...SETUP_STEP_IDS]);
   });
 
-  it("show three steps in the window, then the walk", () => {
-    expect([...WIZARD_STEP_IDS]).toEqual(["name", "connect", "voice"]);
+  it("show six steps in the window, then the walk", () => {
+    expect([...WIZARD_STEP_IDS]).toEqual(["name", "voice", "personality", "connect", "privacy", "summary"]);
     expect(SETUP_STEP_IDS[SETUP_STEP_IDS.length - 1]).toBe("tour");
   });
 });

@@ -83,3 +83,38 @@ export function parseCost(raw: string): number | null {
   const value = Number(text);
   return Number.isFinite(value) && value >= 0 ? value : null;
 }
+
+/** The chat's "ask several engines" settings (ADR-0055): `GET/PUT /api/consumer/multi-engine`. */
+export interface MultiEngineEngine {
+  provider: string;
+  model?: string;
+  /** Null/absent = no estimate; the backend refuses the engine unless unknown prices are allowed. */
+  est_cost?: number | null;
+  timeout_s?: number;
+  needs_api?: boolean;
+}
+
+export interface MultiEngineSettings {
+  enabled: boolean;
+  engines: MultiEngineEngine[];
+  synthesizer?: MultiEngineEngine | null;
+  budget: number;
+  allow_unknown_cost: boolean;
+  max_concurrent: number;
+}
+
+export type MultiEngineState = { available: false; reason: string } | ({ available: true; reason: string } & MultiEngineSettings);
+
+export async function fetchMultiEngine(): Promise<MultiEngineState> {
+  return readJson<MultiEngineState>(await fetch("/api/consumer/multi-engine"));
+}
+
+export async function saveMultiEngine(settings: MultiEngineSettings): Promise<MultiEngineState> {
+  return readJson<MultiEngineState>(
+    await fetch("/api/consumer/multi-engine", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...settings, synthesizer: settings.synthesizer ?? null }),
+    }),
+  );
+}

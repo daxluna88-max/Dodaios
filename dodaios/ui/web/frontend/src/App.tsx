@@ -19,6 +19,7 @@ import {
 import { PaneResizer } from "@/components/layout/PaneResizer";
 import { useResizablePane } from "@/hooks/useResizablePane";
 import { TopBar } from "@/components/layout/TopBar";
+import { ControlStrip } from "@/components/ControlStrip";
 import { InputIsolationBanner } from "@/components/layout/InputIsolationBanner";
 import { VoiceWarmingBanner } from "@/components/layout/VoiceWarmingBanner";
 import { MainView } from "@/components/layout/MainView";
@@ -401,6 +402,8 @@ export default function App() {
             about, since nothing else reports it. */}
         <InputIsolationBanner />
         <TopBar />
+        {/* STOP, the real state, the engine of the last turn, jobs and decisions (ADR-0058). */}
+        <ControlStrip />
         {!(["agentic-ide", "chat-workspace", "agentic-ide-classic"].includes(activeSection)) && <VoiceWarmingBanner />}
         <SectionStage visualization={visualizationActive}>
           <MainView />

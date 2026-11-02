@@ -60,3 +60,25 @@ def test_chats_db_lives_inside_the_memory_data_dir() -> None:
     assert default_chats_db_path("./data") == Path("./data") / "chats.db"
     # … and a differently named data dir no longer leaks into ``../data``.
     assert default_chats_db_path("/x/data-dev") == Path("/x/data-dev") / "chats.db"
+
+
+def test_product_launch_shifts_every_port_but_keeps_the_data_dir(monkeypatch) -> None:
+    from dodaios.core import config as cfg
+
+    monkeypatch.delenv("JARVIS_INSTANCE", raising=False)
+    monkeypatch.setenv("JARVIS_PRODUCT_ACTIVE", "consumer")
+    out = cfg._apply_instance_overrides({})
+    assert out["ui"]["admin_api_port"] == 47821 + 2000
+    assert out["mcp_server"]["http_port"] == 47822 + 2000
+    assert out["telemetry"]["metrics_port"] == 9090 + 2000
+    assert "memory" not in out
+
+
+def test_unscoped_default_app_is_untouched(monkeypatch) -> None:
+    from dodaios.core import config as cfg
+
+    monkeypatch.delenv("JARVIS_INSTANCE", raising=False)
+    monkeypatch.delenv("JARVIS_PRODUCT_ACTIVE", raising=False)
+    assert cfg._apply_instance_overrides({"ui": {"admin_api_port": 1234}}) == {
+        "ui": {"admin_api_port": 1234}
+    }

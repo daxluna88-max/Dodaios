@@ -527,6 +527,7 @@ class WebServer:
         from .consumer_fanout_routes import router as consumer_fanout_router
         from .contacts_routes import router as contacts_router
         from .control_routes import router as control_router
+        from .control_strip_routes import router as control_strip_router
         from .costs_routes import router as costs_router
         from .custom_api_routes import router as custom_api_router
         from .deck_routes import router as deck_router
@@ -569,6 +570,7 @@ class WebServer:
         from .onboarding_routes import router as onboarding_router
         from .outputs_routes import router as outputs_router
         from .permissions_routes import router as permissions_router
+        from .personality_routes import router as personality_router
         from .pets_routes import router as pets_router
         from .preview_routes import router as preview_router
         from .profile_routes import router as profile_router
@@ -637,6 +639,8 @@ class WebServer:
         app.include_router(local_voice_router)
         app.include_router(consumer_fanout_router)
         app.include_router(network_policy_router)
+        app.include_router(personality_router)
+        app.include_router(control_strip_router)
         app.include_router(live_router)
         from dodaios.agent_chat.tasks import run_subscription_task
         from dodaios.core.task_agent import register_runner

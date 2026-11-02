@@ -734,7 +734,8 @@ def focus_existing_instance_robust() -> bool:
         # Config unreadable: the hardcoded default port below still gets tried,
         # which is the whole point of this being the "robust" variant.
         pass
-    if 47821 not in ports:
+    # The shared default port belongs to the unscoped app; a product never owns it.
+    if 47821 not in ports and not os.environ.get("JARVIS_PRODUCT_ACTIVE"):
         ports.append(47821)
 
     focused = False

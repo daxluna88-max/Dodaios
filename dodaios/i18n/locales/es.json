@@ -61,6 +61,7 @@
     },
     "mid_answer_error": "Ejecuté los pasos, pero algo falló al redactar la respuesta. Vuelve a preguntarme en un momento.",
     "action_failed": "Reconocí la acción, pero no pude ejecutarla.",
+    "stopped_waiting_resume": "Estoy detenido. Reanúdame desde la barra de control y seguiré.",
     "lang_switch_confirm": "Listo — a partir de ahora respondo en español.",
     "lang_switch_confirm_auto": "Listo — a partir de ahora respondo en el idioma que uses.",
     "ack": {
