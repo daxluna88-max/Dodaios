@@ -1,4 +1,4 @@
-sha=8336be23cfed8608d095a554be60eb33a0a5b5dc started=2026-11-02T20:45:01Z
+sha=ed2006be15ee70479206e393aed7133f757f320e started=2026-11-03T07:51:02Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -62,7 +62,8 @@ sha=8336be23cfed8608d095a554be60eb33a0a5b5dc started=2026-11-02T20:45:01Z
 = it-browser-61.patch (already applied)
 = it-voice-62.patch (already applied)
 = it-privacy-63.patch (already applied)
-+ it-phone-64.patch applied
+= it-phone-64.patch (already applied)
++ it-phone-65.patch applied
 = env JARVIS__BRAIN__WORKER__PROVIDER (already set)
 = env JARVIS__BRAIN__WORKER__MODEL (already set)
 = env JARVIS__BRAIN__PROVIDERS__OPENROUTER__MODEL (already set)
@@ -81,10 +82,10 @@ sha=8336be23cfed8608d095a554be60eb33a0a5b5dc started=2026-11-02T20:45:01Z
 = env JARVIS_BROWSER_VOICE_SILENCE_MS (already switched: voice-silence-1)
 RESTARTED: jarvis running
 update_exit=0
-PASS     CHK-TIME: real_rome_time=21:45 status=done secs=3 tool_errors=0 reply='Sono le ventuno e quarantacinque, Davide.'
-PASS     CHK-STOP: first=cancelled second=done second_len=53 resumed=False leaked_internal_text=False reply='Sono le 21:45 di lunedì 2 novembre 2026, ora di Roma.'
+PASS     CHK-TIME: real_rome_time=08:51 status=done secs=1 tool_errors=0 reply='Sono le otto e cinquantuno del mattino, martedì tre novembre.'
+PASS     CHK-STOP: first=cancelled second=done second_len=53 resumed=False leaked_internal_text=False reply='Sono le otto e cinquantuno del mattino, ora italiana.'
 SKIPPED  CHK-WIKI-HONEST: live memory check is off: it writes to the real profile
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
 SUMMARY: 3 PASS, 0 FAIL, 0 BLOCKED, 1 SKIPPED
 check_exit=0
-finished=2026-11-02T20:45:39Z
+finished=2026-11-03T07:51:39Z
