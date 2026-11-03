@@ -554,3 +554,94 @@ def test_speech_reports_a_voice_that_cannot_start(app, owner, monkeypatch: pytes
     monkeypatch.setattr("dodaios.plugins.tts.build_tts_from_config", boom)
     res = phone.post("/api/phone/speak", json={"text": "ciao"})
     assert res.status_code == 503 and "key" not in res.text
+
+
+# ----------------------------------------------------------------- push notifications
+GOOD_ENDPOINT = "https://web.push.apple.com/abc123"
+
+
+def test_vapid_header_is_a_valid_es256_token_for_the_servers_public_key(tmp_path: Path) -> None:
+    import base64
+    import json
+
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+
+    from dodaios.ui.web.phone_push import PushStore
+
+    store = PushStore(tmp_path)
+    auth = store.vapid_headers(GOOD_ENDPOINT, "https://example.test")["Authorization"]
+    token, key = auth.removeprefix("vapid t=").split(", k=")
+    assert key == store.public_key()
+    head, body, sig = token.split(".")
+    pad = lambda x: x + "=" * (-len(x) % 4)  # noqa: E731
+    claims = json.loads(base64.urlsafe_b64decode(pad(body)))
+    assert claims["aud"] == "https://web.push.apple.com" and claims["sub"] == "https://example.test"
+    raw = base64.urlsafe_b64decode(pad(sig))
+    pub = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), base64.urlsafe_b64decode(pad(key)))
+    pub.verify(
+        encode_dss_signature(int.from_bytes(raw[:32], "big"), int.from_bytes(raw[32:], "big")),
+        f"{head}.{body}".encode(), ec.ECDSA(hashes.SHA256()),
+    )  # raises if wrong
+    assert PushStore(tmp_path).public_key() == store.public_key()  # persisted, not regenerated
+    assert (tmp_path / "push-vapid.pem").stat().st_mode & 0o077 == 0
+
+
+def test_only_real_push_services_are_accepted() -> None:
+    from dodaios.ui.web.phone_push import allowed_endpoint
+
+    assert allowed_endpoint("https://web.push.apple.com/x")
+    assert allowed_endpoint("https://fcm.googleapis.com/fcm/send/x")
+    for bad in ("http://web.push.apple.com/x", "https://127.0.0.1/x", "https://evil.test/x",
+                "https://web.push.apple.com.evil.test/x", "https://u:p@web.push.apple.com/x"):
+        assert not allowed_endpoint(bad), bad
+
+
+def test_push_routes_need_a_paired_device_and_refuse_unknown_services(app, owner) -> None:
+    anon = browser(app)
+    with anon:
+        assert anon.get("/api/phone/push/key").status_code == 401
+        assert anon.get("/api/phone/push/last").status_code == 401
+    phone, _ = pair(app, owner)
+    with phone:
+        key = phone.get("/api/phone/push/key").json()
+        assert key["key"] and key["subscribed"] is False
+        assert phone.post("/api/phone/push/subscribe", json={"endpoint": "https://evil.test/x"}).status_code == 400
+        bare = browser(app)
+        bare.cookies.update(phone.cookies)
+        with bare:
+            assert bare.post("/api/phone/push/subscribe", json={"endpoint": GOOD_ENDPOINT}).status_code == 403
+        assert phone.post("/api/phone/push/subscribe", json={"endpoint": GOOD_ENDPOINT}).status_code == 200
+        assert phone.get("/api/phone/push/key").json()["subscribed"] is True
+        assert phone.delete("/api/phone/push/subscribe").status_code == 200
+        assert phone.get("/api/phone/push/key").json()["subscribed"] is False
+
+
+def test_a_finished_turn_of_a_chat_the_phone_wrote_to_sends_one_push(app, owner, monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    from dodaios.ui.web import phone_push
+
+    sent: list[str] = []
+    monkeypatch.setattr(phone_push, "_deliver", lambda store, dev, active: sent.append(dev))
+    svc = app.state.agent_chat
+    phone_routes.attach_push(app.state, svc)
+    phone, _ = pair(app, owner)
+    with phone:
+        phone.post("/api/phone/push/subscribe", json={"endpoint": GOOD_ENDPOINT})
+        push = phone_routes.hub_for_state(app.state).push
+        device_id = push.device_ids()[0]
+        # a chat the phone never wrote to stays silent
+        svc._event_listeners[-1]("other-chat", {"kind": "turn_finished"})
+        push.watch("mine")
+        svc._event_listeners[-1]("mine", {"kind": "assistant_text"})  # not a notifying kind
+        svc._event_listeners[-1]("mine", {"kind": "turn_finished"})
+        svc._event_listeners[-1]("mine", {"kind": "turn_finished"})  # inside the gap: one push only
+        for _ in range(50):
+            if sent:
+                break
+            time.sleep(0.02)
+        assert sent == [device_id]
+        notice = phone.get("/api/phone/push/last").json()["notice"]
+        assert notice["title"] == "Jarvis ha finito" and notice["session"] == "mine"

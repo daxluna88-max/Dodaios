@@ -330,6 +330,12 @@ def _service_from_state(state: Any) -> AgentChatService | None:
             log.warning("agent chat: service could not be built: %s", exc)
             return None
         state.agent_chat = svc
+        try:  # a finished turn can notify a paired phone whose app is closed
+            from dodaios.ui.web.phone_routes import attach_push
+
+            attach_push(state, svc)
+        except Exception:  # noqa: BLE001 — optional
+            pass
         return svc
 
 

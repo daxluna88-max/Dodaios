@@ -35,6 +35,7 @@ from pydantic import BaseModel, Field
 from dodaios.agent_chat import attachments as chat_attachments
 from dodaios.phone.devices import DeviceRegistry, PairingError, csrf_matches
 from dodaios.phone.store import NotFound, Revoked, TransferError, TransferStore
+from dodaios.ui.web import phone_push
 
 router = APIRouter(prefix="/api/phone", tags=["phone"])
 admin_router = APIRouter(prefix="/api/phone-admin", tags=["phone"])
@@ -57,6 +58,7 @@ class _Hub:
     def __init__(self, root: Path) -> None:
         self.registry = DeviceRegistry(root)
         self.store = TransferStore(root / "files")
+        self.push = phone_push.PushStore(root)
         self._swept = 0.0
 
     def sweep_if_due(self) -> None:
@@ -66,14 +68,25 @@ class _Hub:
             self.store.sweep()
 
 
-def _hub(request: Request) -> _Hub:
-    state = request.app.state
+def hub_for_state(state: Any) -> _Hub:
     hub = getattr(state, "phone_hub", None)
     if hub is None:
         cfg = getattr(state, "config", None)
         data_dir = getattr(getattr(cfg, "memory", None), "data_dir", None) or "data"
         hub = state.phone_hub = _Hub(Path(data_dir) / "phone")
     return hub
+
+
+def attach_push(state: Any, service: Any) -> None:
+    """Called once when the chat service is built: lets a finished turn reach a closed phone app."""
+    try:
+        phone_push.attach(service, hub_for_state(state))
+    except Exception:  # noqa: BLE001 — notifications are optional
+        pass
+
+
+def _hub(request: Request) -> _Hub:
+    return hub_for_state(request.app.state)
 
 
 def _same_origin(request: Request) -> bool:
@@ -168,6 +181,41 @@ async def logout(
     return {"ok": True}
 
 
+# ------------------------------------------------------------- notifications
+class PushSub(BaseModel):
+    endpoint: str = Field(max_length=2048)
+
+
+@router.get("/push/key")
+def push_key(request: Request, device: dict[str, Any] = Depends(_device)) -> dict[str, Any]:  # noqa: B008
+    push = _hub(request).push
+    return {"key": push.public_key(), "subscribed": push.subscription(device["id"]) is not None}
+
+
+@router.post("/push/subscribe")
+async def push_subscribe(
+    body: PushSub, request: Request, device: dict[str, Any] = Depends(_device)  # noqa: B008
+) -> dict[str, bool]:
+    if not phone_push.allowed_endpoint(body.endpoint):
+        raise HTTPException(status_code=400, detail="unsupported push service")
+    host = request.headers.get("host", "")
+    subject = f"https://{host}" if host else "mailto:jarvis@example.com"
+    await asyncio.to_thread(_hub(request).push.subscribe, device["id"], body.endpoint, subject)
+    return {"ok": True}
+
+
+@router.delete("/push/subscribe")
+async def push_unsubscribe(request: Request, device: dict[str, Any] = Depends(_device)) -> dict[str, bool]:  # noqa: B008
+    await asyncio.to_thread(_hub(request).push.unsubscribe, device["id"])
+    return {"ok": True}
+
+
+@router.get("/push/last")
+def push_last(request: Request, device: dict[str, Any] = Depends(_device)) -> dict[str, Any]:  # noqa: B008
+    notice = _hub(request).push.last(device["id"])
+    return {"notice": notice}
+
+
 # --------------------------------------------------------------------- chat
 class PhoneMessage(BaseModel):
     text: str = Field(default="", max_length=20_000)
@@ -257,6 +305,7 @@ async def send_message(
     # Preparing the attachments awaited; a device revoked meanwhile must not reach the agent.
     _ensure_active(request, device)
     message = routes.MessageBody(text=body.text, attachments=attachments, timezone=body.timezone)
+    _hub(request).push.watch(session_id)
     return await routes.post_message(session_id, message, request)
 
 
