@@ -510,3 +510,47 @@ def test_the_phone_reads_a_providers_model_list(app, owner, monkeypatch: pytest.
     assert res.json()["models"][0] == {"id": "a/b", "label": "A B", "free": True, "frontier": False,
                                        "value": False, "starred": True, "vision": None}
     assert phone.get("/api/phone/brain/models", params={"provider": "../x"}).status_code == 400
+
+
+class _Chunk:
+    def __init__(self, pcm: bytes, sample_rate: int = 24000) -> None:
+        self.pcm, self.sample_rate = pcm, sample_rate
+
+
+class _FakeTts:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str | None]] = []
+
+    async def synthesize(self, text: str, language_code: str | None = None):
+        self.calls.append((text, language_code))
+        yield _Chunk(b"\x01\x00" * 100)
+        yield _Chunk(b"\x02\x00" * 100)
+
+
+def test_the_phone_can_have_a_reply_spoken(app, owner, monkeypatch: pytest.MonkeyPatch) -> None:
+    phone, csrf = pair(app, owner)
+    fake = _FakeTts()
+    monkeypatch.setattr("dodaios.plugins.tts.build_tts_from_config", lambda _cfg: fake)
+    res = phone.post("/api/phone/speak", json={"text": "Ciao **Davide**"})
+    assert res.status_code == 200, res.text
+    assert res.headers["content-type"] == "audio/wav"
+    assert res.content[:4] == b"RIFF" and res.content[8:12] == b"WAVE"
+    assert len(res.content) == 44 + 400
+    assert fake.calls and fake.calls[0][1] == "it-IT" and "**" not in fake.calls[0][0]
+    assert phone.post("/api/phone/speak", json={"text": "  "}).status_code == 400
+    assert phone.post("/api/phone/speak", json={"text": "x" * 1600}).status_code == 422
+    del phone.headers["X-Phone-CSRF"]
+    assert phone.post("/api/phone/speak", json={"text": "ciao"}).status_code == 403
+    with browser(app) as stranger:
+        assert stranger.post("/api/phone/speak", json={"text": "ciao"}).status_code == 401
+
+
+def test_speech_reports_a_voice_that_cannot_start(app, owner, monkeypatch: pytest.MonkeyPatch) -> None:
+    phone, _csrf = pair(app, owner)
+
+    def boom(_cfg):
+        raise RuntimeError("no key")
+
+    monkeypatch.setattr("dodaios.plugins.tts.build_tts_from_config", boom)
+    res = phone.post("/api/phone/speak", json={"text": "ciao"})
+    assert res.status_code == 503 and "key" not in res.text

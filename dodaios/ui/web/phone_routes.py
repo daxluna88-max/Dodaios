@@ -415,6 +415,79 @@ async def transcribe(
         _transcribing.discard(device["id"])
 
 
+# ------------------------------------------------------------------- speech
+class PhoneSpeak(BaseModel):
+    text: str = Field(max_length=1500)
+    lang: str = Field(default="it", pattern=r"^(it|fr|en|de|es|pt)$")
+
+
+_SPEECH_LANG = {"it": "it-IT", "fr": "fr-FR", "en": "en-US", "de": "de-DE", "es": "es-ES", "pt": "pt-PT"}
+
+
+_speaking: set[str] = set()
+_MAX_WAV_BYTES = 8 * 1024 * 1024
+
+
+def _wav(pcm: bytes, rate: int) -> bytes:
+    import struct
+
+    header = (
+        b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
+        + b"data" + struct.pack("<I", len(pcm))
+    )
+    return header + pcm
+
+
+@router.post("/speak")
+async def speak(
+    body: PhoneSpeak, request: Request, device: dict[str, Any] = Depends(_device)  # noqa: B008
+) -> Response:
+    """Text -> speech with Jarvis' configured TTS voice, as a WAV the phone can play. Not stored."""
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="nothing to say")
+    if device["id"] in _speaking:
+        raise HTTPException(status_code=409, detail="a reply is already being voiced")
+    _speaking.add(device["id"])
+    try:
+        from dodaios.brain.output_filter import scrub_for_voice
+        from dodaios.plugins.tts import build_tts_from_config
+
+        cfg = getattr(request.app.state, "config", None)
+        try:
+            tts = await asyncio.to_thread(build_tts_from_config, cfg.tts)
+        except Exception as exc:  # noqa: BLE001 — a missing key or voice is the owner's to fix
+            raise HTTPException(status_code=503, detail="text-to-speech is not available") from exc
+        scrubbed = scrub_for_voice(text)
+        spoken = str(getattr(scrubbed, "cleaned", scrubbed) or text)
+        pcm = bytearray()
+        rate = 24000
+
+        async def collect() -> None:
+            nonlocal rate
+            async for chunk in tts.synthesize(spoken, language_code=_SPEECH_LANG[body.lang]):
+                rate = int(getattr(chunk, "sample_rate", rate) or rate)
+                pcm.extend(bytes(chunk.pcm))
+                if len(pcm) > _MAX_WAV_BYTES:
+                    raise HTTPException(status_code=413, detail="reply too long to voice")
+
+        try:
+            await asyncio.wait_for(collect(), timeout=45)
+        except TimeoutError as exc:
+            raise HTTPException(status_code=504, detail="speech took too long") from exc
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail="speech failed") from exc
+        if not pcm:
+            raise HTTPException(status_code=502, detail="speech failed")
+        _ensure_active(request, device)
+        return Response(_wav(bytes(pcm), rate), media_type="audio/wav",
+                        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+    finally:
+        _speaking.discard(device["id"])
+
+
 # ------------------------------------------------------------------- drops
 _DROP_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,200}")
 
