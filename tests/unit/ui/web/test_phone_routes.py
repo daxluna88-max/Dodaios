@@ -767,6 +767,8 @@ def test_status_reports_the_engine_and_what_the_voice_calls_did(
         return acr.ProviderHealthResponse(providers=[acr.ProviderHealthRow(provider=provider, status="ok")])
 
     monkeypatch.setattr(acr, "get_provider_health", fine)
+    assert phone.get("/api/phone/status").json()["checks"][0]["state"] == "bad"  # held for five minutes
+    phone_routes.hub_for_state(app.state).brain_checks.clear()
     # a voice call that fails server-side is remembered; one that works clears it
     assert phone.post("/api/phone/speak", json={"text": "ciao"}).status_code in {502, 503}
     by = {c["id"]: c for c in phone.get("/api/phone/status").json()["checks"]}
