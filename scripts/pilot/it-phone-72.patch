@@ -1,0 +1,147 @@
+diff --git a/dodaios/ui/web/phone_routes.py b/dodaios/ui/web/phone_routes.py
+index 9532e8ab107ec59e609b8d8bac564eba38ff8a95..b0796e997d9683bd5813cd17c89535a598fab5c1 100644
+--- a/dodaios/ui/web/phone_routes.py
++++ b/dodaios/ui/web/phone_routes.py
+@@ -60,6 +60,8 @@ class _Hub:
+         self.store = TransferStore(root / "files")
+         self.push = phone_push.PushStore(root)
+         self.auto = phone_auto.AutoGrants(root)
++        #: Last outcome of the voice calls: key -> (ok, detail, unix time). Memory only.
++        self.notes: dict[str, tuple[bool, str, float]] = {}
+         self._swept = 0.0
+ 
+     def sweep_if_due(self) -> None:
+@@ -188,6 +190,73 @@ async def logout(
+     return {"ok": True}
+ 
+ 
++# ------------------------------------------------------------------- status
++_REASONS = {
++    "bad_key": "chiave rifiutata", "no_credits": "crediti finiti", "not_configured": "non configurato",
++    "timeout": "nessuna risposta in tempo", "check_failed": "controllo non riuscito",
++}
++_RANK = {"ok": 0, "unknown": 0, "warn": 1, "bad": 2}
++
++
++@router.get("/status")
++async def status(
++    request: Request, session_id: str = "", device: dict[str, Any] = Depends(_device)  # noqa: B008
++) -> dict[str, Any]:
++    """One honest line about whether Jarvis can work: the engine, the voice calls, notifications."""
++    routes = _chat()
++    svc = await routes._async_service(request)  # noqa: SLF001
++    hub = _hub(request)
++    session = svc.store.get_session(session_id) if session_id else None
++    if session is None:
++        found = await asyncio.to_thread(svc.store.list_sessions, limit=1, surface=None)
++        session = found[0] if found else None
++    checks: list[dict[str, str]] = []
++    if session is not None:
++        state, detail = "unknown", "non ancora verificato"
++        try:
++            health = await routes.get_provider_health(request, surface=session.surface)
++            row = next((r for r in health.providers if r.provider == session.provider), None)
++            if row is not None and row.status == "ok":
++                state, detail = "ok", "risponde"
++            elif row is not None and row.status in ("needs_setup", "error"):
++                state, detail = "bad", _REASONS.get(row.reason, "problema con questo motore")
++        except Exception:  # noqa: BLE001 - a failed check is "unknown", never an error page
++            state, detail = "unknown", "controllo non disponibile"
++        checks.append({"id": "brain", "label": "Cervello · " + session.provider, "state": state, "detail": detail})
++    for key, label in (("listen", "Dettatura"), ("speak", "Voce di Jarvis")):
++        note = hub.notes.get(key)
++        if note is None:
++            checks.append({"id": key, "label": label, "state": "unknown", "detail": "non ancora usata"})
++        elif note[0]:
++            checks.append({"id": key, "label": label, "state": "ok", "detail": "ha funzionato"})
++        else:
++            checks.append({"id": key, "label": label, "state": "bad", "detail": "ultimo tentativo non riuscito"})
++    worst = max((c["state"] for c in checks), key=lambda x: _RANK[x], default="ok")
++    return {
++        "overall": worst, "checks": checks,
++        "push": hub.push.subscription(device["id"]) is not None,
++    }
++
++
++class AutoWindow(BaseModel):
++    window: str
++
++
++@router.post("/chats/{session_id}/auto")
++async def auto_grant(
++    session_id: str, body: AutoWindow, request: Request,
++    _device: dict[str, Any] = Depends(_device),  # noqa: B008
++) -> dict[str, Any]:
++    """Switch a chat to automatic approvals for a window, without waiting for an approval card."""
++    if body.window not in phone_auto.WINDOWS:
++        raise HTTPException(status_code=400, detail="invalid window")
++    svc = await _chat()._async_service(request)  # noqa: SLF001
++    try:
++        return {"auto": await _hub(request).auto.grant(svc, session_id, body.window)}
++    except LookupError as exc:
++        raise HTTPException(status_code=404, detail="session not found") from exc
++
++
+ # --------------------------------------------------------------------- to do
+ def _vault(request: Request) -> Path:
+     from dodaios.memory.wiki.vault_root import resolve_vault_root
+@@ -485,10 +554,8 @@ _MAX_PCM_BYTES = 3 * 1024 * 1024
+ _transcribing: set[str] = set()
+ 
+ 
+-@router.post("/transcribe")
+-async def transcribe(
+-    request: Request, rate: int = 16000, lang: str = "it",
+-    device: dict[str, Any] = Depends(_device),  # noqa: B008
++async def _transcribe_impl(
++    request: Request, rate: int, lang: str, device: dict[str, Any]
+ ) -> dict[str, Any]:
+     """Raw int16 mono PCM from the phone's microphone -> text, with Jarvis' configured STT engine.
+ 
+@@ -554,10 +621,7 @@ def _wav(pcm: bytes, rate: int) -> bytes:
+     return header + pcm
+ 
+ 
+-@router.post("/speak")
+-async def speak(
+-    body: PhoneSpeak, request: Request, device: dict[str, Any] = Depends(_device)  # noqa: B008
+-) -> Response:
++async def _speak_impl(body: PhoneSpeak, request: Request, device: dict[str, Any]) -> Response:
+     """Text -> speech with Jarvis' configured TTS voice, as a WAV the phone can play. Not stored."""
+     text = body.text.strip()
+     if not text:
+@@ -604,6 +668,34 @@ async def speak(
+         _speaking.discard(device["id"])
+ 
+ 
++async def _recorded(request: Request, key: str, work: Any) -> Any:
++    """Run a voice call and remember whether it worked, for the status line."""
++    hub = _hub(request)
++    try:
++        out = await work
++    except HTTPException as exc:
++        if exc.status_code >= 500:
++            hub.notes[key] = (False, str(exc.detail), time.time())
++        raise
++    hub.notes[key] = (True, "", time.time())
++    return out
++
++
++@router.post("/transcribe")
++async def transcribe(
++    request: Request, rate: int = 16000, lang: str = "it",
++    device: dict[str, Any] = Depends(_device),  # noqa: B008
++) -> dict[str, Any]:
++    return await _recorded(request, "listen", _transcribe_impl(request, rate, lang, device))
++
++
++@router.post("/speak")
++async def speak(
++    body: PhoneSpeak, request: Request, device: dict[str, Any] = Depends(_device)  # noqa: B008
++) -> Response:
++    return await _recorded(request, "speak", _speak_impl(body, request, device))
++
++
+ # ------------------------------------------------------------------- drops
+ _DROP_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,200}")
+ 
