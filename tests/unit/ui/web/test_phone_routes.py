@@ -670,3 +670,43 @@ def test_no_push_while_the_app_is_open_in_front(tmp_path: Path) -> None:
         assert posted == [GOOD_ENDPOINT]  # app away: sent
     finally:
         httpx.post = orig  # type: ignore[assignment]
+
+
+# ------------------------------------------------------------------ timed approve-always
+def test_approve_always_for_a_window_switches_to_auto_and_can_be_undone(
+    app, owner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phone, _ = pair(app, owner)
+    svc = app.state.agent_chat
+    sid = _chat_id(app)
+    before = svc.store.get_session(sid).permission_mode
+    assert before != "auto"
+    monkeypatch.setattr(svc, "resolve_approval", lambda *_a: True)
+    url = f"/api/phone/chats/{sid}/approvals/a1"
+    assert phone.post(url, json={"decision": "deny", "auto": "30m"}).status_code == 400
+    assert phone.post(url, json={"decision": "allow", "auto": "forever"}).status_code == 400
+    assert svc.store.get_session(sid).permission_mode == before
+    res = phone.post(url, json={"decision": "allow", "auto": "30m"})
+    assert res.status_code == 200 and res.json()["auto"]["until"] > 0
+    assert svc.store.get_session(sid).permission_mode == "auto"
+    assert phone.get(f"/api/phone/chats/{sid}/auto").json()["auto"]["until"] > 0
+    assert phone.post(f"/api/phone/chats/{sid}/auto/off").status_code == 200
+    assert svc.store.get_session(sid).permission_mode == before
+    assert phone.get(f"/api/phone/chats/{sid}/auto").json()["auto"] is None
+
+
+def test_an_expired_window_is_put_back_after_a_restart(app, owner, tmp_path: Path) -> None:
+    import asyncio
+    import json
+    import time
+
+    svc = app.state.agent_chat
+    sid = _chat_id(app)
+    before = svc.store.get_session(sid).permission_mode
+    svc.store.update_session(sid, permission_mode="auto")
+    grants = phone_routes.hub_for_state(app.state).auto
+    (grants._path).write_text(  # noqa: SLF001
+        json.dumps({sid: {"until": time.time() - 5, "previous": before}}), "utf-8"
+    )
+    asyncio.run(grants.restore(svc))
+    assert svc.store.get_session(sid).permission_mode == before

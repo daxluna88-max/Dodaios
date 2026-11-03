@@ -35,7 +35,7 @@ from pydantic import BaseModel, Field
 from dodaios.agent_chat import attachments as chat_attachments
 from dodaios.phone.devices import DeviceRegistry, PairingError, csrf_matches
 from dodaios.phone.store import NotFound, Revoked, TransferError, TransferStore
-from dodaios.ui.web import phone_push
+from dodaios.ui.web import phone_auto, phone_push
 
 router = APIRouter(prefix="/api/phone", tags=["phone"])
 admin_router = APIRouter(prefix="/api/phone-admin", tags=["phone"])
@@ -59,6 +59,7 @@ class _Hub:
         self.registry = DeviceRegistry(root)
         self.store = TransferStore(root / "files")
         self.push = phone_push.PushStore(root)
+        self.auto = phone_auto.AutoGrants(root)
         self._swept = 0.0
 
     def sweep_if_due(self) -> None:
@@ -82,6 +83,11 @@ def attach_push(state: Any, service: Any) -> None:
     try:
         phone_push.attach(service, hub_for_state(state))
     except Exception:  # noqa: BLE001 — notifications are optional
+        pass
+    try:  # chats whose "approve always" ran out while the server was off go back to asking
+        loop = asyncio.get_running_loop()
+        loop.create_task(hub_for_state(state).auto.restore(service))
+    except RuntimeError:
         pass
 
 
@@ -226,6 +232,8 @@ class PhoneMessage(BaseModel):
 
 class PhoneApproval(BaseModel):
     decision: str
+    #: "approve always" for this chat: "30m", "1h" or "chat" (until the chat is over).
+    auto: str = ""
 
 
 class PhoneNewChat(BaseModel):
@@ -316,9 +324,34 @@ async def approve(
     _device: dict[str, Any] = Depends(_device),  # noqa: B008
 ) -> dict[str, Any]:
     routes = _chat()
-    return await routes.resolve_approval(
+    if body.auto and (body.decision != "allow" or body.auto not in phone_auto.WINDOWS):
+        raise HTTPException(status_code=400, detail="invalid auto-approval request")
+    result = await routes.resolve_approval(
         session_id, approval_id, routes.ApprovalBody(decision=body.decision), request
     )
+    if body.auto:
+        svc = await routes._async_service(request)  # noqa: SLF001
+        try:
+            result["auto"] = await _hub(request).auto.grant(svc, session_id, body.auto)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="session not found") from exc
+    return result
+
+
+@router.get("/chats/{session_id}/auto")
+async def auto_state(
+    session_id: str, request: Request, _device: dict[str, Any] = Depends(_device)  # noqa: B008
+) -> dict[str, Any]:
+    return {"auto": _hub(request).auto.state(session_id)}
+
+
+@router.post("/chats/{session_id}/auto/off")
+async def auto_off(
+    session_id: str, request: Request, _device: dict[str, Any] = Depends(_device)  # noqa: B008
+) -> dict[str, Any]:
+    svc = await _chat()._async_service(request)  # noqa: SLF001
+    await _hub(request).auto.revoke(svc, session_id)
+    return {"auto": None}
 
 
 @router.post("/chats/{session_id}/cancel", openapi_extra={"x-jarvis-dangerous": True})
