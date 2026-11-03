@@ -359,3 +359,71 @@ def test_a_device_revoked_during_the_chunk_stream_or_finish_changes_nothing(
     monkeypatch.undo()
     assert phone.get(f"/api/phone/files/{fid}").json()["ready"] is False
     assert phone.post(f"/api/phone/files/{fid}/finish").json()["ready"] is True
+
+
+def _chat_id(app) -> str:
+    made = app.state.agent_chat.store.create_session(
+        provider="claude-api", title="x", surface="agent", model="", effort="", cwd="")
+    return made.session_id if hasattr(made, "session_id") else made["session_id"]
+
+
+def test_a_phone_reads_and_switches_the_brain_of_its_chat(app, owner) -> None:
+    phone, _csrf = pair(app, owner)
+    svc = app.state.agent_chat
+    sid = _chat_id(app)
+    seen = phone.get(f"/api/phone/chats/{sid}/brain")
+    assert seen.status_code == 200, seen.text
+    body = seen.json()
+    assert body["current"]["provider"] == "claude-api"
+    ids = {row["id"] for row in body["providers"]}
+    assert {"claude-api", "openrouter"} <= ids
+    assert all(set(row) == {"id", "label", "models", "default_model", "keyless", "free_model"}
+               for row in body["providers"])
+    # An unknown provider is refused by the desktop picker's own rule.
+    assert phone.patch(f"/api/phone/chats/{sid}/brain", json={"provider": "nope"}).status_code == 400
+    moved = phone.patch(f"/api/phone/chats/{sid}/brain",
+                        json={"provider": "openrouter", "model": "some/model"})
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["current"] == {"provider": "openrouter", "model": "some/model"}
+    assert svc.store.get_session(sid).provider == "openrouter"
+    assert phone.patch(f"/api/phone/chats/{sid}/brain", json={}).status_code == 400
+    assert phone.get("/api/phone/chats/missing/brain").status_code == 404
+
+
+def test_the_brain_routes_need_a_paired_device_and_csrf(app, owner) -> None:
+    phone, csrf = pair(app, owner)
+    sid = _chat_id(app)
+    with browser(app) as stranger:
+        assert stranger.get(f"/api/phone/chats/{sid}/brain").status_code == 401
+        assert stranger.patch(f"/api/phone/chats/{sid}/brain", json={"model": "m"}).status_code == 401
+    del phone.headers["X-Phone-CSRF"]
+    assert phone.patch(f"/api/phone/chats/{sid}/brain", json={"model": "m"}).status_code == 403
+    phone.headers["X-Phone-CSRF"] = csrf
+    assert phone.patch(f"/api/phone/chats/{sid}/brain", json={"model": "m"}).status_code == 200
+
+
+def test_the_brain_cannot_change_while_a_turn_runs(app, owner, monkeypatch: pytest.MonkeyPatch) -> None:
+    phone, _csrf = pair(app, owner)
+    svc = app.state.agent_chat
+    sid = _chat_id(app)
+    monkeypatch.setattr(svc, "is_running", lambda _sid: True)
+    res = phone.patch(f"/api/phone/chats/{sid}/brain", json={"provider": "openrouter"})
+    assert res.status_code == 409
+    assert svc.store.get_session(sid).provider == "claude-api"
+
+
+def test_an_extra_static_app_is_served_only_when_its_folder_is_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "web").mkdir()
+    (tmp_path / "web" / "index.html").write_text("<p>extra</p>")
+    monkeypatch.setenv("JARVIS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("JARVIS_CONTROL_API_KEY", KEY)
+    for value, expected in ((str(tmp_path / "web"), 200), ("", 404), (str(tmp_path / "nope"), 404)):
+        monkeypatch.setenv("JARVIS_EXTRA_STATIC_DIR", value)
+        cfg = JarvisConfig()
+        cfg.memory.data_dir = str(tmp_path / "data")
+        cfg.ui.dev_mode = True
+        srv = WebServer(cfg, bus=EventBus())
+        with browser(srv.app) as client:
+            assert client.get("/app-extra/").status_code == expected

@@ -2417,6 +2417,15 @@ class WebServer:
     def _register_static_or_spa(self, app: FastAPI) -> None:
         if MOBILE_DIR.is_dir():
             app.mount("/m", StaticFiles(directory=str(MOBILE_DIR), html=True), name="mobile")
+        # Optional extra static app (e.g. a separately kept phone web app), served at /app-extra/.
+        # Off unless JARVIS_EXTRA_STATIC_DIR names an existing folder; plain files only, no secret in them.
+        extra = os.environ.get("JARVIS_EXTRA_STATIC_DIR", "").strip()
+        if extra and Path(extra).expanduser().is_dir():
+            app.mount(
+                "/app-extra",
+                StaticFiles(directory=str(Path(extra).expanduser()), html=True),
+                name="extra-static",
+            )
         if self.cfg.ui.dev_mode:
             return
 

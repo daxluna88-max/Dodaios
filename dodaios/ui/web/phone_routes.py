@@ -278,6 +278,68 @@ async def cancel(
     return await _chat().cancel_turn(session_id, request)
 
 
+# -------------------------------------------------------------------- brain
+class PhoneBrain(BaseModel):
+    """Which engine answers in this chat. Nothing else about the chat can be changed from a phone."""
+
+    provider: str | None = Field(default=None, max_length=80)
+    model: str | None = Field(default=None, max_length=200)
+
+
+def _brain_rows(catalog: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = []
+    for row in catalog.get("providers", []):
+        models = [
+            {"id": str(m.get("id", "")), "label": str(m.get("label") or m.get("id") or "")}
+            for m in (row.get("curated_models") or [])
+            if isinstance(m, dict) and m.get("id")
+        ]
+        rows.append({
+            "id": str(row.get("id", "")), "label": str(row.get("label") or row.get("id") or ""),
+            "models": models, "default_model": str(row.get("default_model") or ""),
+            "keyless": bool(row.get("keyless")), "free_model": row.get("models_source") == "live",
+        })
+    return rows
+
+
+@router.get("/chats/{session_id}/brain")
+async def get_brain(
+    session_id: str, request: Request, _device: dict[str, Any] = Depends(_device)  # noqa: B008
+) -> dict[str, Any]:
+    """The engines this chat may use and the one it uses now (read-only projection of the catalog)."""
+    routes = _chat()
+    svc = await routes._async_service(request)  # noqa: SLF001
+    session = svc.store.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    catalog = await routes.get_catalog(request, surface=session.surface, session_id=session_id)
+    return {
+        "current": {"provider": session.provider, "model": getattr(session, "model", "") or ""},
+        "running": bool(svc.is_running(session_id)),
+        "providers": _brain_rows(catalog),
+    }
+
+
+@router.patch("/chats/{session_id}/brain")
+async def set_brain(
+    session_id: str, body: PhoneBrain, request: Request,
+    device: dict[str, Any] = Depends(_device),  # noqa: B008
+) -> dict[str, Any]:
+    """Switch provider and/or model. Same rules as the desktop picker; not while a turn is running."""
+    if body.provider is None and body.model is None:
+        raise HTTPException(status_code=400, detail="nothing to change")
+    routes = _chat()
+    svc = await routes._async_service(request)  # noqa: SLF001
+    if svc.store.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    if svc.is_running(session_id):
+        raise HTTPException(status_code=409, detail="Jarvis is working: wait or stop first")
+    _ensure_active(request, device)
+    patch = routes.PatchSessionBody(provider=body.provider, model=body.model)
+    await routes.patch_session(session_id, patch, request)
+    return await get_brain(session_id, request, device)
+
+
 # -------------------------------------------------------------------- files
 class NewFile(BaseModel):
     name: str = Field(max_length=300)
