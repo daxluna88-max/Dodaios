@@ -681,7 +681,7 @@ def test_approve_always_for_a_window_switches_to_auto_and_can_be_undone(
     sid = _chat_id(app)
     before = svc.store.get_session(sid).permission_mode
     assert before != "auto"
-    monkeypatch.setattr(svc, "resolve_approval", lambda *_a: True)
+    monkeypatch.setattr(svc, "resolve_approval", lambda *_a, **_k: True)
     url = f"/api/phone/chats/{sid}/approvals/a1"
     assert phone.post(url, json={"decision": "deny", "auto": "30m"}).status_code == 400
     assert phone.post(url, json={"decision": "allow", "auto": "forever"}).status_code == 400
