@@ -740,3 +740,50 @@ def test_the_todo_list_reads_the_agents_note_and_ticks_only_what_it_listed(
     anon = browser(app)
     with anon:
         assert anon.get("/api/phone/todo").status_code == 401
+
+
+# ------------------------------------------------------------------ status and quick controls
+def test_status_reports_the_engine_and_what_the_voice_calls_did(
+    app, owner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dodaios.ui.web import agent_chat_routes as acr
+
+    phone, _ = pair(app, owner)
+    _chat_id(app)
+    provider = app.state.agent_chat.store.list_sessions(limit=1, surface=None)[0].provider
+
+    async def health(_request, surface="agent", refresh=False):
+        return acr.ProviderHealthResponse(
+            providers=[acr.ProviderHealthRow(provider=provider, status="error", reason="no_credits")]
+        )
+
+    monkeypatch.setattr(acr, "get_provider_health", health)
+    got = phone.get("/api/phone/status").json()
+    by = {c["id"]: c for c in got["checks"]}
+    assert got["overall"] == "bad" and by["brain"]["state"] == "bad" and "crediti" in by["brain"]["detail"]
+    assert by["listen"]["state"] == "unknown" and by["speak"]["state"] == "unknown" and got["push"] is False
+
+    async def fine(_request, surface="agent", refresh=False):
+        return acr.ProviderHealthResponse(providers=[acr.ProviderHealthRow(provider=provider, status="ok")])
+
+    monkeypatch.setattr(acr, "get_provider_health", fine)
+    # a voice call that fails server-side is remembered; one that works clears it
+    assert phone.post("/api/phone/speak", json={"text": "ciao"}).status_code in {502, 503}
+    by = {c["id"]: c for c in phone.get("/api/phone/status").json()["checks"]}
+    assert by["speak"]["state"] == "bad" and by["brain"]["state"] == "ok"
+    anon = browser(app)
+    with anon:
+        assert anon.get("/api/phone/status").status_code == 401
+
+
+def test_a_chat_can_be_switched_to_auto_from_the_dashboard(app, owner) -> None:
+    phone, _ = pair(app, owner)
+    svc = app.state.agent_chat
+    sid = _chat_id(app)
+    before = svc.store.get_session(sid).permission_mode
+    assert phone.post(f"/api/phone/chats/{sid}/auto", json={"window": "forever"}).status_code == 400
+    assert phone.post("/api/phone/chats/nope/auto", json={"window": "30m"}).status_code == 404
+    assert phone.post(f"/api/phone/chats/{sid}/auto", json={"window": "30m"}).json()["auto"]["until"] > 0
+    assert svc.store.get_session(sid).permission_mode == "auto"
+    assert phone.post(f"/api/phone/chats/{sid}/auto/off").status_code == 200
+    assert svc.store.get_session(sid).permission_mode == before
