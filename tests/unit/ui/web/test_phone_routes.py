@@ -710,3 +710,33 @@ def test_an_expired_window_is_put_back_after_a_restart(app, owner, tmp_path: Pat
     )
     asyncio.run(grants.restore(svc))
     assert svc.store.get_session(sid).permission_mode == before
+
+
+# ------------------------------------------------------------------------------ to do list
+def test_the_todo_list_reads_the_agents_note_and_ticks_only_what_it_listed(
+    app, owner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    (vault / "projects").mkdir(parents=True)
+    note = vault / "projects" / "promemoria.md"
+    note.write_text("---\ntitle: x\n---\n# Lavoro\n- [ ] CRM\n- [x] Sistema di voto\n## Casa\n- Comprare pane\ntesto libero\n", "utf-8")
+    monkeypatch.setattr(phone_routes, "_vault", lambda _request: vault)
+    phone, _ = pair(app, owner)
+    got = phone.get("/api/phone/todo").json()
+    assert [(i["text"], i["done"], i["group"]) for i in got["items"]] == [
+        ("CRM", False, "Lavoro"), ("Sistema di voto", True, "Lavoro"), ("Comprare pane", False, "Casa"),
+    ]
+    crm, pane = got["items"][0], got["items"][2]
+    assert phone.post("/api/phone/todo/tick", json={"line": crm["line"], "tag": crm["tag"], "done": True}).status_code == 200
+    assert phone.post("/api/phone/todo/tick", json={"line": pane["line"], "tag": pane["tag"], "done": True}).status_code == 200
+    assert "- [x] CRM" in note.read_text("utf-8") and "- [x] Comprare pane" in note.read_text("utf-8")
+    assert note.read_text("utf-8").startswith("---\ntitle: x\n---\n")
+    # the line moved under the phone's feet: refused, nothing written
+    before = note.read_text("utf-8")
+    assert phone.post("/api/phone/todo/tick", json={"line": crm["line"], "tag": "deadbeef00", "done": False}).status_code == 409
+    assert note.read_text("utf-8") == before
+    note.unlink()
+    assert phone.get("/api/phone/todo").json() == {"available": False, "items": []}
+    anon = browser(app)
+    with anon:
+        assert anon.get("/api/phone/todo").status_code == 401

@@ -35,7 +35,7 @@ from pydantic import BaseModel, Field
 from dodaios.agent_chat import attachments as chat_attachments
 from dodaios.phone.devices import DeviceRegistry, PairingError, csrf_matches
 from dodaios.phone.store import NotFound, Revoked, TransferError, TransferStore
-from dodaios.ui.web import phone_auto, phone_push
+from dodaios.ui.web import phone_auto, phone_push, phone_todo
 
 router = APIRouter(prefix="/api/phone", tags=["phone"])
 admin_router = APIRouter(prefix="/api/phone-admin", tags=["phone"])
@@ -186,6 +186,39 @@ async def logout(
     await asyncio.to_thread(hub.store.delete_for_device, device["id"])
     response.delete_cookie(COOKIE, path="/api/phone")
     return {"ok": True}
+
+
+# --------------------------------------------------------------------- to do
+def _vault(request: Request) -> Path:
+    from dodaios.memory.wiki.vault_root import resolve_vault_root
+
+    wiki_cfg = getattr(getattr(request.app.state, "config", None), "wiki_integration", None)
+    raw = getattr(wiki_cfg, "vault_root", None)
+    if raw is not None and str(raw).strip() == "":
+        raw = None
+    return resolve_vault_root(raw).path
+
+
+class TodoTick(BaseModel):
+    line: int = Field(ge=0, le=100000)
+    tag: str = Field(max_length=16)
+    done: bool
+
+
+@router.get("/todo")
+async def todo(request: Request, _device: dict[str, Any] = Depends(_device)) -> dict[str, Any]:  # noqa: B008
+    return await asyncio.to_thread(phone_todo.list_items, _vault(request))
+
+
+@router.post("/todo/tick")
+async def todo_tick(
+    body: TodoTick, request: Request, _device: dict[str, Any] = Depends(_device)  # noqa: B008
+) -> dict[str, Any]:
+    try:
+        await asyncio.to_thread(phone_todo.set_done, _vault(request), body.line, body.tag, body.done)
+    except phone_todo.Stale as exc:
+        raise HTTPException(status_code=409, detail="the list changed: reload it") from exc
+    return await asyncio.to_thread(phone_todo.list_items, _vault(request))
 
 
 # ------------------------------------------------------------- notifications
