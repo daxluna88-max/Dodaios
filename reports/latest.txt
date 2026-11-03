@@ -1,4 +1,4 @@
-sha=2ae3c97c2808bdca9840352b293bb17de391c4fa started=2026-11-03T13:14:02Z
+sha=0b250569b245d1826afa98c58c1e35e7e4740d55 started=2026-11-03T13:48:01Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -69,7 +69,8 @@ sha=2ae3c97c2808bdca9840352b293bb17de391c4fa started=2026-11-03T13:14:02Z
 = it-phone-68.patch (already applied)
 = it-phone-69.patch (already applied)
 = it-phone-70.patch (already applied)
-+ it-phone-71.patch applied
+= it-phone-71.patch (already applied)
++ it-phone-72.patch applied
 = env JARVIS__BRAIN__WORKER__PROVIDER (already set)
 = env JARVIS__BRAIN__WORKER__MODEL (already set)
 = env JARVIS__BRAIN__PROVIDERS__OPENROUTER__MODEL (already set)
@@ -88,10 +89,10 @@ sha=2ae3c97c2808bdca9840352b293bb17de391c4fa started=2026-11-03T13:14:02Z
 = env JARVIS_BROWSER_VOICE_SILENCE_MS (already switched: voice-silence-1)
 RESTARTED: jarvis running
 update_exit=0
-PASS     CHK-TIME: real_rome_time=14:14 status=done secs=1 tool_errors=0 reply='Sono le quattordici e quattordici, ora italiana.'
-PASS     CHK-STOP: first=cancelled second=done second_len=48 resumed=False leaked_internal_text=False reply='Sono le quattordici e quattordici, ora italiana.'
+PASS     CHK-TIME: real_rome_time=14:48 status=done secs=3 tool_errors=0 reply='Sono le due e quarantotto del pomeriggio, ora italiana.'
+PASS     CHK-STOP: first=cancelled second=done second_len=48 resumed=False leaked_internal_text=False reply='Sono le quattordici e quarantotto, ora italiana.'
 SKIPPED  CHK-WIKI-HONEST: live memory check is off: it writes to the real profile
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
 SUMMARY: 3 PASS, 0 FAIL, 0 BLOCKED, 1 SKIPPED
 check_exit=0
-finished=2026-11-03T13:14:40Z
+finished=2026-11-03T13:48:40Z
