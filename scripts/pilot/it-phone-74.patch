@@ -1,0 +1,189 @@
+diff --git a/dodaios/ui/web/phone_routes.py b/dodaios/ui/web/phone_routes.py
+index 389aa3fb6cf1a1fb38ccee474637f9f740b19c90..af2e7dd91547ea82a3967541c880dc42c79bbf72 100644
+--- a/dodaios/ui/web/phone_routes.py
++++ b/dodaios/ui/web/phone_routes.py
+@@ -35,7 +35,7 @@ from pydantic import BaseModel, Field
+ from dodaios.agent_chat import attachments as chat_attachments
+ from dodaios.phone.devices import DeviceRegistry, PairingError, csrf_matches
+ from dodaios.phone.store import NotFound, Revoked, TransferError, TransferStore
+-from dodaios.ui.web import phone_auto, phone_push, phone_todo
++from dodaios.ui.web import phone_auto, phone_push, phone_todo, phone_usage
+ 
+ router = APIRouter(prefix="/api/phone", tags=["phone"])
+ admin_router = APIRouter(prefix="/api/phone-admin", tags=["phone"])
+@@ -60,6 +60,7 @@ class _Hub:
+         self.store = TransferStore(root / "files")
+         self.push = phone_push.PushStore(root)
+         self.auto = phone_auto.AutoGrants(root)
++        self.usage = phone_usage.VoiceUsage(root)
+         #: Last outcome of the voice calls: key -> (ok, detail, unix time). Memory only.
+         self.notes: dict[str, tuple[bool, str, float]] = {}
+         #: Which voice actually spoke the last reply: engine, voice, whether the backup did.
+@@ -249,6 +250,13 @@ async def status(
+                 checks.append({"id": key, "label": label, "state": "ok", "detail": who or "ha funzionato"})
+         else:
+             checks.append({"id": key, "label": label, "state": "bad", "detail": "ultimo tentativo non riuscito"})
++    level = hub.usage.level()
++    if level != "ok":
++        snap = hub.usage.snapshot()
++        checks.append({
++            "id": "usage", "label": "Voce: uso del mese", "state": "bad" if level == "bad" else "warn",
++            "detail": f"{snap['chars_month']:,} caratteri su {snap['limit_month']:,} (limite che hai impostato)".replace(",", "."),
++        })
+     worst = max((c["state"] for c in checks), key=lambda x: _RANK[x], default="ok")
+     return {
+         "overall": worst, "checks": checks,
+@@ -275,6 +283,55 @@ async def auto_grant(
+         raise HTTPException(status_code=404, detail="session not found") from exc
+ 
+ 
++# ------------------------------------------------------------------- costs
++def _cost_windows(request: Request) -> dict[str, Any]:
++    """Spend over the last 24 hours, 7 and 30 days, from the same ledger the desktop Costs page reads."""
++    from dodaios.costs import build_report
++    from dodaios.ui.web import costs_routes as cr
++
++    sources = cr._sources(request)  # noqa: SLF001 - one reader for one ledger
++    out: dict[str, Any] = {"windows": {}, "by_provider": []}
++    for key, days in (("day", 1), ("week", 7), ("month", 30)):
++        start, end = cr._range(days, None, None)  # noqa: SLF001
++        report = build_report(cr._cache.get(sources, start, end), since_ms=start, until_ms=end, top_n=6)  # noqa: SLF001
++        data = report.to_dict()
++        t = data["totals"]
++        out["windows"][key] = {
++            "usd": round(float(t["cost_usd"]), 4), "entries": int(t["entries"]),
++            "gap_entries": int(t["gap_entries"]), "subscription_usd": round(float(t["subscription_usd"]), 4),
++        }
++        if key == "month":
++            out["by_provider"] = [
++                {"provider": str(b["key"]), "usd": round(float(b["cost_usd"]), 4), "chars": int(b.get("chars") or 0),
++                 "audio_s": round(int(b.get("audio_ms") or 0) / 1000)}
++                for b in data["by_provider"][:6]
++            ]
++    out["eur_per_usd"] = cr._currency().eur_per_usd  # noqa: SLF001
++    return out
++
++
++class UsageLimit(BaseModel):
++    voice_chars_month: int | None = Field(default=None, ge=0, le=100_000_000)
++
++
++@router.get("/costs")
++async def costs(request: Request, _device: dict[str, Any] = Depends(_device)) -> dict[str, Any]:  # noqa: B008
++    try:
++        data = await asyncio.to_thread(_cost_windows, request)
++    except Exception:  # noqa: BLE001 - the page still shows the phone's own voice count
++        data = {"windows": {}, "by_provider": [], "eur_per_usd": 0.0}
++    data["voice"] = _hub(request).usage.snapshot()
++    return data
++
++
++@router.put("/costs/limit")
++async def costs_limit(
++    body: UsageLimit, request: Request, _device: dict[str, Any] = Depends(_device)  # noqa: B008
++) -> dict[str, Any]:
++    await asyncio.to_thread(_hub(request).usage.set_limit, body.voice_chars_month)
++    return {"voice": _hub(request).usage.snapshot()}
++
++
+ # --------------------------------------------------------------------- to do
+ def _vault(request: Request) -> Path:
+     from dodaios.memory.wiki.vault_root import resolve_vault_root
+@@ -680,6 +737,7 @@ async def _speak_impl(body: PhoneSpeak, request: Request, device: dict[str, Any]
+         if not pcm:
+             raise HTTPException(status_code=502, detail="speech failed")
+         _ensure_active(request, device)
++        _hub(request).usage.add(len(spoken))
+         primary = getattr(tts, "_primary", None)
+         _hub(request).voice_info = {
+             "engine": str(getattr(tts, "name", "") or ""),
+diff --git a/dodaios/ui/web/phone_usage.py b/dodaios/ui/web/phone_usage.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..a9965c0a2eca3a82e900bd08a5f9fd0ecea8a8cf
+--- /dev/null
++++ b/dodaios/ui/web/phone_usage.py
+@@ -0,0 +1,84 @@
++"""What the phone's voice uses, counted here (the one cost the server cannot always see).
++
++Cartesia bills credits, one per character of text spoken; the phone counts the characters it
++asks the server to voice, per day and per month, and compares them with a limit the owner sets.
++"""
++
++from __future__ import annotations
++
++import json
++import os
++import threading
++import time
++from pathlib import Path
++from typing import Any
++
++
++class VoiceUsage:
++    def __init__(self, root: Path) -> None:
++        self._path = Path(root) / "voice-usage.json"
++        self._lock = threading.Lock()
++        self._data: dict[str, Any] | None = None
++
++    def _load(self) -> dict[str, Any]:
++        if self._data is None:
++            try:
++                raw = json.loads(self._path.read_text("utf-8"))
++                self._data = raw if isinstance(raw, dict) else {}
++            except (OSError, ValueError):
++                self._data = {}
++        return self._data
++
++    def _save(self) -> None:
++        self._path.parent.mkdir(parents=True, exist_ok=True)
++        tmp = self._path.with_suffix(".tmp")
++        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
++        with os.fdopen(fd, "w", encoding="utf-8") as fh:
++            json.dump(self._data, fh)
++        os.replace(tmp, self._path)
++
++    @staticmethod
++    def _keys() -> tuple[str, str]:
++        now = time.localtime()
++        return time.strftime("%Y-%m", now), time.strftime("%Y-%m-%d", now)
++
++    def add(self, chars: int) -> None:
++        month, day = self._keys()
++        with self._lock:
++            data = self._load()
++            months = data.setdefault("months", {})
++            days = data.setdefault("days", {})
++            months[month] = int(months.get(month, 0)) + chars
++            days[day] = int(days.get(day, 0)) + chars
++            for old in sorted(days)[:-62]:  # two months of days are plenty
++                del days[old]
++            self._save()
++
++    def snapshot(self) -> dict[str, Any]:
++        month, day = self._keys()
++        with self._lock:
++            data = self._load()
++            limit = data.get("limit_month")
++            return {
++                "chars_day": int(data.get("days", {}).get(day, 0)),
++                "chars_month": int(data.get("months", {}).get(month, 0)),
++                "limit_month": int(limit) if isinstance(limit, int) and limit > 0 else None,
++            }
++
++    def set_limit(self, limit: int | None) -> None:
++        with self._lock:
++            data = self._load()
++            if limit and limit > 0:
++                data["limit_month"] = int(limit)
++            else:
++                data.pop("limit_month", None)
++            self._save()
++
++    def level(self) -> str:
++        """``ok`` | ``warn`` (80% of the limit) | ``bad`` (over it), for the status line."""
++        snap = self.snapshot()
++        limit = snap["limit_month"]
++        if not limit:
++            return "ok"
++        used = snap["chars_month"]
++        return "bad" if used >= limit else "warn" if used >= 0.8 * limit else "ok"
