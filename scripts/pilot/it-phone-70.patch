@@ -1,0 +1,199 @@
+diff --git a/dodaios/ui/web/phone_auto.py b/dodaios/ui/web/phone_auto.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..1f5b3d30f6a0762e356e2ae7d8641ac2b0c56d4c
+--- /dev/null
++++ b/dodaios/ui/web/phone_auto.py
+@@ -0,0 +1,115 @@
++"""Timed "approve always" for a chat opened from the phone.
++
++The chat's permission mode is switched to ``auto`` and put back to what it was when the time
++is up (or on request). The deadline is written to disk so a restart still puts it back.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import json
++import logging
++import os
++import time
++from pathlib import Path
++from typing import Any
++
++from dodaios.agent_chat.events import make_event
++
++log = logging.getLogger(__name__)
++
++#: Choices the phone offers, in seconds; ``None`` = until the chat is over (no deadline).
++WINDOWS: dict[str, int | None] = {"30m": 30 * 60, "1h": 3600, "chat": None}
++
++
++class AutoGrants:
++    def __init__(self, root: Path) -> None:
++        self._path = Path(root) / "auto-grants.json"
++        self._data: dict[str, dict[str, Any]] | None = None
++        self._timers: dict[str, asyncio.TimerHandle] = {}
++
++    def _load(self) -> dict[str, dict[str, Any]]:
++        if self._data is None:
++            try:
++                data = json.loads(self._path.read_text("utf-8"))
++                self._data = data if isinstance(data, dict) else {}
++            except (OSError, ValueError):
++                self._data = {}
++        return self._data
++
++    def _save(self) -> None:
++        self._path.parent.mkdir(parents=True, exist_ok=True)
++        tmp = self._path.with_suffix(".tmp")
++        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
++        with os.fdopen(fd, "w", encoding="utf-8") as fh:
++            json.dump(self._data, fh)
++        os.replace(tmp, self._path)
++
++    def state(self, session_id: str) -> dict[str, Any] | None:
++        entry = self._load().get(session_id)
++        return None if entry is None else {"until": entry.get("until")}
++
++    async def grant(self, svc: Any, session_id: str, window: str) -> dict[str, Any]:
++        if window not in WINDOWS:
++            raise ValueError("unknown window")
++        session = svc.store.get_session(session_id)
++        if session is None:
++            raise LookupError(session_id)
++        data = self._load()
++        seconds = WINDOWS[window]
++        until = None if seconds is None else time.time() + seconds
++        previous = data[session_id]["previous"] if session_id in data else session.permission_mode
++        data[session_id] = {"until": until, "previous": previous}
++        self._save()
++        if session.permission_mode != "auto":
++            svc.store.update_session(session_id, permission_mode="auto")
++            await svc._emit(  # noqa: SLF001 - the service's own event path
++                session_id, make_event("session_updated", {"permission_mode": "auto"})
++            )
++        self._arm(svc, session_id, until)
++        return {"until": until}
++
++    def _arm(self, svc: Any, session_id: str, until: float | None) -> None:
++        old = self._timers.pop(session_id, None)
++        if old is not None:
++            old.cancel()
++        if until is None:
++            return
++        loop = asyncio.get_running_loop()
++        self._timers[session_id] = loop.call_later(
++            max(0.0, until - time.time()),
++            lambda: loop.create_task(self.revoke(svc, session_id)),
++        )
++
++    async def revoke(self, svc: Any, session_id: str) -> bool:
++        timer = self._timers.pop(session_id, None)
++        if timer is not None:
++            timer.cancel()
++        data = self._load()
++        entry = data.pop(session_id, None)
++        if entry is None:
++            return False
++        self._save()
++        previous = str(entry.get("previous") or "default")
++        try:
++            session = svc.store.get_session(session_id)
++            if session is not None and session.permission_mode == "auto":
++                svc.store.update_session(session_id, permission_mode=previous)
++                await svc._emit(  # noqa: SLF001
++                    session_id, make_event("session_updated", {"permission_mode": previous})
++                )
++        except Exception:  # noqa: BLE001
++            log.warning("phone auto: could not restore chat %s", session_id, exc_info=True)
++        return True
++
++    async def restore(self, svc: Any) -> None:
++        """After a restart: put back the chats whose time ran out, re-arm the others."""
++        now = time.time()
++        for session_id, entry in list(self._load().items()):
++            until = entry.get("until")
++            if until is None:
++                continue
++            if until <= now:
++                await self.revoke(svc, session_id)
++            else:
++                self._arm(svc, session_id, until)
+diff --git a/dodaios/ui/web/phone_routes.py b/dodaios/ui/web/phone_routes.py
+index f55b55951cee8fc28b550e53a400c9c2640756c2..3a9680c2417903cdf45b3acddca58dca1fe57bc3 100644
+--- a/dodaios/ui/web/phone_routes.py
++++ b/dodaios/ui/web/phone_routes.py
+@@ -35,7 +35,7 @@ from pydantic import BaseModel, Field
+ from dodaios.agent_chat import attachments as chat_attachments
+ from dodaios.phone.devices import DeviceRegistry, PairingError, csrf_matches
+ from dodaios.phone.store import NotFound, Revoked, TransferError, TransferStore
+-from dodaios.ui.web import phone_push
++from dodaios.ui.web import phone_auto, phone_push
+ 
+ router = APIRouter(prefix="/api/phone", tags=["phone"])
+ admin_router = APIRouter(prefix="/api/phone-admin", tags=["phone"])
+@@ -59,6 +59,7 @@ class _Hub:
+         self.registry = DeviceRegistry(root)
+         self.store = TransferStore(root / "files")
+         self.push = phone_push.PushStore(root)
++        self.auto = phone_auto.AutoGrants(root)
+         self._swept = 0.0
+ 
+     def sweep_if_due(self) -> None:
+@@ -83,6 +84,11 @@ def attach_push(state: Any, service: Any) -> None:
+         phone_push.attach(service, hub_for_state(state))
+     except Exception:  # noqa: BLE001 — notifications are optional
+         pass
++    try:  # chats whose "approve always" ran out while the server was off go back to asking
++        loop = asyncio.get_running_loop()
++        loop.create_task(hub_for_state(state).auto.restore(service))
++    except RuntimeError:
++        pass
+ 
+ 
+ def _hub(request: Request) -> _Hub:
+@@ -226,6 +232,8 @@ class PhoneMessage(BaseModel):
+ 
+ class PhoneApproval(BaseModel):
+     decision: str
++    #: "approve always" for this chat: "30m", "1h" or "chat" (until the chat is over).
++    auto: str = ""
+ 
+ 
+ class PhoneNewChat(BaseModel):
+@@ -316,9 +324,34 @@ async def approve(
+     _device: dict[str, Any] = Depends(_device),  # noqa: B008
+ ) -> dict[str, Any]:
+     routes = _chat()
+-    return await routes.resolve_approval(
++    if body.auto and (body.decision != "allow" or body.auto not in phone_auto.WINDOWS):
++        raise HTTPException(status_code=400, detail="invalid auto-approval request")
++    result = await routes.resolve_approval(
+         session_id, approval_id, routes.ApprovalBody(decision=body.decision), request
+     )
++    if body.auto:
++        svc = await routes._async_service(request)  # noqa: SLF001
++        try:
++            result["auto"] = await _hub(request).auto.grant(svc, session_id, body.auto)
++        except LookupError as exc:
++            raise HTTPException(status_code=404, detail="session not found") from exc
++    return result
++
++
++@router.get("/chats/{session_id}/auto")
++async def auto_state(
++    session_id: str, request: Request, _device: dict[str, Any] = Depends(_device)  # noqa: B008
++) -> dict[str, Any]:
++    return {"auto": _hub(request).auto.state(session_id)}
++
++
++@router.post("/chats/{session_id}/auto/off")
++async def auto_off(
++    session_id: str, request: Request, _device: dict[str, Any] = Depends(_device)  # noqa: B008
++) -> dict[str, Any]:
++    svc = await _chat()._async_service(request)  # noqa: SLF001
++    await _hub(request).auto.revoke(svc, session_id)
++    return {"auto": None}
+ 
+ 
+ @router.post("/chats/{session_id}/cancel", openapi_extra={"x-jarvis-dangerous": True})
