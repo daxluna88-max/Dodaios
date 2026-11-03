@@ -787,3 +787,38 @@ def test_a_chat_can_be_switched_to_auto_from_the_dashboard(app, owner) -> None:
     assert svc.store.get_session(sid).permission_mode == "auto"
     assert phone.post(f"/api/phone/chats/{sid}/auto/off").status_code == 200
     assert svc.store.get_session(sid).permission_mode == before
+
+
+def test_status_names_the_voice_that_spoke_and_flags_the_backup(app, owner, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dodaios.plugins import tts as tts_pkg
+
+    class Chunk:
+        pcm = b"\x00\x01" * 400
+        sample_rate = 24000
+
+    class Primary:
+        name = "cartesia"
+
+    class Wrapper:
+        name = "cartesia"
+        _primary = Primary()
+        _last_speaker: Any = _primary
+        last_voice = "Voce A"
+
+        async def synthesize(self, _text, language_code="it-IT"):
+            yield Chunk()
+
+    wrapper = Wrapper()
+    monkeypatch.setattr(tts_pkg, "build_tts_from_config", lambda _cfg: wrapper)
+    phone, _ = pair(app, owner)
+    _chat_id(app)
+    assert phone.post("/api/phone/speak", json={"text": "ciao"}).status_code == 200
+    by = {c["id"]: c for c in phone.get("/api/phone/status").json()["checks"]}
+    assert by["speak"]["state"] == "ok" and "cartesia" in by["speak"]["detail"] and "Voce A" in by["speak"]["detail"]
+    wrapper._last_speaker = object()  # the backup spoke this time
+    wrapper.last_voice = "Charon"
+    assert phone.post("/api/phone/speak", json={"text": "ciao"}).status_code == 200
+    got = phone.get("/api/phone/status").json()
+    by = {c["id"]: c for c in got["checks"]}
+    assert by["speak"]["state"] == "warn" and "riserva" in by["speak"]["detail"] and "Charon" in by["speak"]["detail"]
+    assert got["overall"] in {"warn", "bad"}

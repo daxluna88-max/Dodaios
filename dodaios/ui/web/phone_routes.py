@@ -62,6 +62,10 @@ class _Hub:
         self.auto = phone_auto.AutoGrants(root)
         #: Last outcome of the voice calls: key -> (ok, detail, unix time). Memory only.
         self.notes: dict[str, tuple[bool, str, float]] = {}
+        #: Which voice actually spoke the last reply: engine, voice, whether the backup did.
+        self.voice_info: dict[str, Any] = {}
+        #: Engine check by provider: the sweep is not free, so it stands for five minutes.
+        self.brain_checks: dict[str, tuple[float, str, str]] = {}
         self._swept = 0.0
 
     def sweep_if_due(self) -> None:
@@ -213,22 +217,36 @@ async def status(
     checks: list[dict[str, str]] = []
     if session is not None:
         state, detail = "unknown", "non ancora verificato"
-        try:
-            health = await routes.get_provider_health(request, surface=session.surface)
-            row = next((r for r in health.providers if r.provider == session.provider), None)
-            if row is not None and row.status == "ok":
-                state, detail = "ok", "risponde"
-            elif row is not None and row.status in ("needs_setup", "error"):
-                state, detail = "bad", _REASONS.get(row.reason, "problema con questo motore")
-        except Exception:  # noqa: BLE001 - a failed check is "unknown", never an error page
-            state, detail = "unknown", "controllo non disponibile"
+        held = hub.brain_checks.get(session.provider)
+        if held is not None and time.monotonic() - held[0] < 300:
+            state, detail = held[1], held[2]
+        else:
+            try:
+                health = await routes.get_provider_health(request, surface=session.surface)
+                row = next((r for r in health.providers if r.provider == session.provider), None)
+                if row is not None and row.status == "ok":
+                    state, detail = "ok", "risponde"
+                elif row is not None and row.status in ("needs_setup", "error"):
+                    state, detail = "bad", _REASONS.get(row.reason, "problema con questo motore")
+            except Exception:  # noqa: BLE001 - a failed check is "unknown", never an error page
+                state, detail = "unknown", "controllo non disponibile"
+            hub.brain_checks[session.provider] = (time.monotonic(), state, detail)
         checks.append({"id": "brain", "label": "Cervello · " + session.provider, "state": state, "detail": detail})
     for key, label in (("listen", "Dettatura"), ("speak", "Voce di Jarvis")):
         note = hub.notes.get(key)
         if note is None:
             checks.append({"id": key, "label": label, "state": "unknown", "detail": "non ancora usata"})
         elif note[0]:
-            checks.append({"id": key, "label": label, "state": "ok", "detail": "ha funzionato"})
+            info = hub.voice_info if key == "speak" else {}
+            who = " · ".join(x for x in (info.get("engine"), info.get("voice")) if x)
+            if info.get("fallback"):
+                checks.append({
+                    "id": key, "label": label, "state": "warn",
+                    "detail": "ha parlato la voce di riserva" + (f" ({who})" if who else "")
+                    + (f"; impostata: {info['configured']}" if info.get("configured") else ""),
+                })
+            else:
+                checks.append({"id": key, "label": label, "state": "ok", "detail": who or "ha funzionato"})
         else:
             checks.append({"id": key, "label": label, "state": "bad", "detail": "ultimo tentativo non riuscito"})
     worst = max((c["state"] for c in checks), key=lambda x: _RANK[x], default="ok")
@@ -662,6 +680,13 @@ async def _speak_impl(body: PhoneSpeak, request: Request, device: dict[str, Any]
         if not pcm:
             raise HTTPException(status_code=502, detail="speech failed")
         _ensure_active(request, device)
+        primary = getattr(tts, "_primary", None)
+        _hub(request).voice_info = {
+            "engine": str(getattr(tts, "name", "") or ""),
+            "voice": str(getattr(tts, "last_voice", "") or ""),
+            "configured": str(getattr(getattr(cfg, "tts", None), "provider", "") or ""),
+            "fallback": primary is not None and getattr(tts, "_last_speaker", primary) is not primary,
+        }
         return Response(_wav(bytes(pcm), rate), media_type="audio/wav",
                         headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
     finally:
