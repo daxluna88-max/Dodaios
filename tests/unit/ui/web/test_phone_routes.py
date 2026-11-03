@@ -427,3 +427,86 @@ def test_an_extra_static_app_is_served_only_when_its_folder_is_configured(
         srv = WebServer(cfg, bus=EventBus())
         with browser(srv.app) as client:
             assert client.get("/app-extra/").status_code == expected
+
+
+class _FakeStt:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, int, str | None]] = []
+
+    async def transcribe_pcm(self, pcm: bytes, sample_rate: int = 16000, language: str | None = None):
+        self.calls.append((len(pcm), sample_rate, language))
+        return type("T", (), {"text": " ciao Jarvis "})()
+
+
+def test_dictation_turns_phone_audio_into_text(app, owner, monkeypatch: pytest.MonkeyPatch) -> None:
+    phone, csrf = pair(app, owner)
+    fake = _FakeStt()
+    monkeypatch.setattr("dodaios.plugins.stt.build_stt_from_config", lambda _cfg: fake)
+    pcm = b"\x01\x00" * 16000
+    ok = phone.post("/api/phone/transcribe", content=pcm)
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["text"] == "ciao Jarvis"
+    assert fake.calls == [(len(pcm), 16000, "it")]
+    assert phone.post("/api/phone/transcribe", content=b"\x00\x00").status_code == 400  # too short
+    assert phone.post("/api/phone/transcribe", content=b"\x01\x00" * 3 * 1024 * 1024).status_code == 413
+    assert phone.post("/api/phone/transcribe", params={"rate": 123}, content=pcm).status_code == 400
+    assert phone.post("/api/phone/transcribe", params={"lang": "../x"}, content=pcm).status_code == 400
+    del phone.headers["X-Phone-CSRF"]
+    assert phone.post("/api/phone/transcribe", content=pcm).status_code == 403
+    with browser(app) as stranger:
+        assert stranger.post("/api/phone/transcribe", content=pcm).status_code == 401
+
+
+def test_dictation_reports_an_engine_that_cannot_start(app, owner, monkeypatch: pytest.MonkeyPatch) -> None:
+    phone, _csrf = pair(app, owner)
+
+    def boom(_cfg):
+        raise RuntimeError("no key")
+
+    monkeypatch.setattr("dodaios.plugins.stt.build_stt_from_config", boom)
+    res = phone.post("/api/phone/transcribe", content=b"\x01\x00" * 16000)
+    assert res.status_code == 503
+    assert "key" not in res.text  # the owner's problem is not spelled out to the phone
+
+
+def test_a_phone_can_view_only_files_in_its_chats_drops_folder(app, owner, tmp_path: Path) -> None:
+    phone, _csrf = pair(app, owner)
+    svc = app.state.agent_chat
+    folder = tmp_path / "chat"
+    drops_dir = folder / ".jarvis" / "drops"
+    drops_dir.mkdir(parents=True)
+    (drops_dir / "20261103-foto.jpg").write_bytes(b"\xff\xd8jpegbytes")
+    (drops_dir / "notes.txt").write_text("secret")
+    (tmp_path / "outside.jpg").write_bytes(b"outside")
+    (drops_dir / "link.jpg").symlink_to(tmp_path / "outside.jpg")
+    made = svc.store.create_session(provider="claude-api", title="x", surface="agent",
+                                    model="", effort="", cwd=str(folder))
+    sid = made.session_id if hasattr(made, "session_id") else made["session_id"]
+    ok = phone.get(f"/api/phone/chats/{sid}/drops/20261103-foto.jpg")
+    assert ok.status_code == 200 and ok.content == b"\xff\xd8jpegbytes"
+    assert ok.headers["content-type"] == "image/jpeg"
+    assert "sandbox" in ok.headers["content-security-policy"]
+    assert phone.get(f"/api/phone/chats/{sid}/drops/notes.txt").status_code == 415
+    assert phone.get(f"/api/phone/chats/{sid}/drops/link.jpg").status_code == 404
+    assert phone.get(f"/api/phone/chats/{sid}/drops/missing.jpg").status_code == 404
+    assert phone.get(f"/api/phone/chats/{sid}/drops/..%2Foutside.jpg").status_code in (400, 404)
+    assert phone.get("/api/phone/chats/nope/drops/20261103-foto.jpg").status_code == 404
+    with browser(app) as stranger:
+        assert stranger.get(f"/api/phone/chats/{sid}/drops/20261103-foto.jpg").status_code == 401
+
+
+def test_the_phone_reads_a_providers_model_list(app, owner, monkeypatch: pytest.MonkeyPatch) -> None:
+    phone, _csrf = pair(app, owner)
+    from dodaios.ui.web import provider_routes
+
+    async def fake(provider_id: str, request, refresh: bool = False):
+        info = provider_routes.BrainModelInfo(id="a/b", label="A B", free=True, starred=True)
+        return provider_routes.BrainModelsResponse(provider=provider_id, current_model="", models=[info],
+                                                   source="live")
+
+    monkeypatch.setattr(provider_routes, "list_brain_models", fake)
+    res = phone.get("/api/phone/brain/models", params={"provider": "openrouter"})
+    assert res.status_code == 200, res.text
+    assert res.json()["models"][0] == {"id": "a/b", "label": "A B", "free": True, "frontier": False,
+                                       "value": False, "starred": True, "vision": None}
+    assert phone.get("/api/phone/brain/models", params={"provider": "../x"}).status_code == 400
