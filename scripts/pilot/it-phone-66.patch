@@ -1,0 +1,129 @@
+diff --git a/dodaios/ui/web/phone_routes.py b/dodaios/ui/web/phone_routes.py
+index 740366b1304b54561ace22bb1c962660259b32c1..2b15d565a064d65e04ee253cf01578f45742f856 100644
+--- a/dodaios/ui/web/phone_routes.py
++++ b/dodaios/ui/web/phone_routes.py
+@@ -340,6 +340,124 @@ async def set_brain(
+     return await get_brain(session_id, request, device)
+ 
+ 
++@router.get("/brain/models")
++async def brain_models(
++    request: Request, provider: str, _device: dict[str, Any] = Depends(_device)  # noqa: B008
++) -> dict[str, Any]:
++    """The model catalog of one provider (live for OpenRouter and the like), trimmed for a phone."""
++    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,60}", provider):
++        raise HTTPException(status_code=400, detail="bad provider")
++    from dodaios.ui.web import provider_routes
++
++    try:
++        out = await provider_routes.list_brain_models(provider, request)
++    except HTTPException as exc:
++        if exc.status_code == 404:
++            return {"provider": provider, "source": "none", "models": []}
++        raise
++    models = [
++        {"id": m.id, "label": m.label, "free": m.free, "frontier": m.frontier, "value": m.value,
++         "starred": m.starred, "vision": m.vision}
++        for m in out.models[:1500]
++    ]
++    return {"provider": provider, "source": out.source, "models": models}
++
++
++# --------------------------------------------------------------- dictation
++#: A minute of 16 kHz mono int16 is ~1.9 MB; a little headroom, nothing more.
++_MAX_PCM_BYTES = 3 * 1024 * 1024
++_transcribing: set[str] = set()
++
++
++@router.post("/transcribe")
++async def transcribe(
++    request: Request, rate: int = 16000, lang: str = "it",
++    device: dict[str, Any] = Depends(_device),  # noqa: B008
++) -> dict[str, Any]:
++    """Raw int16 mono PCM from the phone's microphone -> text, with Jarvis' configured STT engine.
++
++    The audio is not stored. Which engine hears it (local or a cloud one) is the Jarvis STT setting;
++    the answer names it so the phone can say so.
++    """
++    if rate not in (8000, 16000, 24000, 44100, 48000) or not re.fullmatch(r"[a-z]{2,3}(-[A-Za-z]{2,4})?", lang):
++        raise HTTPException(status_code=400, detail="bad audio parameters")
++    declared = request.headers.get("content-length")
++    if declared and declared.isdigit() and int(declared) > _MAX_PCM_BYTES:
++        raise HTTPException(status_code=413, detail="recording too long")
++    data = await request.body()
++    if len(data) > _MAX_PCM_BYTES:
++        raise HTTPException(status_code=413, detail="recording too long")
++    if len(data) < rate // 10 * 2 or len(data) % 2:
++        raise HTTPException(status_code=400, detail="recording too short")
++    if device["id"] in _transcribing:
++        raise HTTPException(status_code=409, detail="a recording is already being transcribed")
++    _transcribing.add(device["id"])
++    try:
++        from dodaios.plugins.stt import build_stt_from_config
++
++        cfg = getattr(request.app.state, "config", None)
++        try:
++            stt = await asyncio.to_thread(build_stt_from_config, cfg.stt)
++        except Exception as exc:  # noqa: BLE001 — a missing key or engine is the owner's to fix
++            raise HTTPException(status_code=503, detail="speech-to-text is not available") from exc
++        try:
++            result = await asyncio.wait_for(
++                stt.transcribe_pcm(data, sample_rate=rate, language=lang), timeout=45
++            )
++        except TimeoutError as exc:
++            raise HTTPException(status_code=504, detail="transcription took too long") from exc
++        except Exception as exc:  # noqa: BLE001
++            raise HTTPException(status_code=502, detail="transcription failed") from exc
++        _ensure_active(request, device)
++        text = str(getattr(result, "text", result) or "").strip()
++        return {"text": text, "engine": str(getattr(cfg.stt, "provider", "") or "")}
++    finally:
++        _transcribing.discard(device["id"])
++
++
++# ------------------------------------------------------------------- drops
++_DROP_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,200}")
++
++
++@router.get("/chats/{session_id}/drops/{name}")
++async def drop_file(
++    session_id: str, name: str, request: Request,
++    _device: dict[str, Any] = Depends(_device),  # noqa: B008
++) -> Response:
++    """A picture/video/audio file in THIS chat's drops folder, so the phone can show what Jarvis refers to.
++
++    Only plain files directly inside ``<chat folder>/.jarvis/drops``, only the inline-safe media types,
++    served sandboxed. No path ever comes from the phone: a name, looked up in one folder.
++    """
++    if not _DROP_NAME.fullmatch(name) or ".." in name:
++        raise HTTPException(status_code=400, detail="bad name")
++    media = _INLINE_TYPES.get(Path(name).suffix.lower())
++    if media is None:
++        raise HTTPException(status_code=415, detail="not a viewable type")
++    routes = _chat()
++    svc = await routes._async_service(request)  # noqa: SLF001
++    session = svc.store.get_session(session_id)
++    if session is None:
++        raise HTTPException(status_code=404, detail="session not found")
++    from dodaios.agentic_ide import drops
++
++    folder = Path(session.cwd or svc.default_cwd(session.surface))
++    root = (folder / drops.DROP_DIRNAME).resolve()
++    candidate = root / name
++    path = candidate.resolve()
++    if candidate.is_symlink() or path.parent != root or not path.is_file():
++        raise HTTPException(status_code=404, detail="file not found")
++    if path.stat().st_size > 25 * 1024 * 1024:
++        raise HTTPException(status_code=413, detail="file too large to preview")
++    return Response(
++        await asyncio.to_thread(path.read_bytes),
++        media_type=media,
++        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store",
++                 "Content-Security-Policy": "sandbox; default-src 'none'",
++                 "Content-Disposition": "inline"},
++    )
++
++
+ # -------------------------------------------------------------------- files
+ class NewFile(BaseModel):
+     name: str = Field(max_length=300)
