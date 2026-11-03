@@ -1,4 +1,4 @@
-sha=ab1cef09cc9c0fe0a04a8ebf4c98502e2996c5e0 started=2026-11-03T08:17:01Z
+sha=a6100b0932d99ffeca6530b3481ddf9bfc17cec8 started=2026-11-03T08:37:02Z
 = it-upstream.patch (already applied)
 = it-detect-2.patch (already applied)
 = it-time-3.patch (already applied)
@@ -64,7 +64,8 @@ sha=ab1cef09cc9c0fe0a04a8ebf4c98502e2996c5e0 started=2026-11-03T08:17:01Z
 = it-privacy-63.patch (already applied)
 = it-phone-64.patch (already applied)
 = it-phone-65.patch (already applied)
-+ it-phone-66.patch applied
+= it-phone-66.patch (already applied)
++ it-phone-67.patch applied
 = env JARVIS__BRAIN__WORKER__PROVIDER (already set)
 = env JARVIS__BRAIN__WORKER__MODEL (already set)
 = env JARVIS__BRAIN__PROVIDERS__OPENROUTER__MODEL (already set)
@@ -83,10 +84,10 @@ sha=ab1cef09cc9c0fe0a04a8ebf4c98502e2996c5e0 started=2026-11-03T08:17:01Z
 = env JARVIS_BROWSER_VOICE_SILENCE_MS (already switched: voice-silence-1)
 RESTARTED: jarvis running
 update_exit=0
-PASS     CHK-TIME: real_rome_time=09:17 status=done secs=1 tool_errors=0 reply='Sono le nove e diciassette del mattino, ora italiana.'
-FAIL     CHK-STOP: first=cancelled second=done second_len=194 resumed=True leaked_internal_text=False reply="Sono le nove e diciassette del mattino, ora italiana.\n\nL'ultima richiesta, il racconto sul pane rosso, è stata interrotta prima che finissi: se vuoi te lo riprendo da capo o da dove era rimasto."
+PASS     CHK-TIME: real_rome_time=09:37 status=done secs=2 tool_errors=0 reply='Sono le nove e trentasette del mattino, ora italiana.'
+FAIL     CHK-STOP: first=cancelled second=error second_len=0 resumed=False leaked_internal_text=False reply=''
 SKIPPED  CHK-WIKI-HONEST: live memory check is off: it writes to the real profile
 PASS     CHK-WINPATH: guard returned 'C:\\Users\\x\\a.md'
 SUMMARY: 2 PASS, 1 FAIL, 0 BLOCKED, 1 SKIPPED
 check_exit=1
-finished=2026-11-03T08:17:34Z
+finished=2026-11-03T08:37:37Z
