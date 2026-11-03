@@ -1,0 +1,148 @@
+diff --git a/dodaios/ui/web/phone_routes.py b/dodaios/ui/web/phone_routes.py
+index 3a9680c2417903cdf45b3acddca58dca1fe57bc3..9532e8ab107ec59e609b8d8bac564eba38ff8a95 100644
+--- a/dodaios/ui/web/phone_routes.py
++++ b/dodaios/ui/web/phone_routes.py
+@@ -35,7 +35,7 @@ from pydantic import BaseModel, Field
+ from dodaios.agent_chat import attachments as chat_attachments
+ from dodaios.phone.devices import DeviceRegistry, PairingError, csrf_matches
+ from dodaios.phone.store import NotFound, Revoked, TransferError, TransferStore
+-from dodaios.ui.web import phone_auto, phone_push
++from dodaios.ui.web import phone_auto, phone_push, phone_todo
+ 
+ router = APIRouter(prefix="/api/phone", tags=["phone"])
+ admin_router = APIRouter(prefix="/api/phone-admin", tags=["phone"])
+@@ -188,6 +188,39 @@ async def logout(
+     return {"ok": True}
+ 
+ 
++# --------------------------------------------------------------------- to do
++def _vault(request: Request) -> Path:
++    from dodaios.memory.wiki.vault_root import resolve_vault_root
++
++    wiki_cfg = getattr(getattr(request.app.state, "config", None), "wiki_integration", None)
++    raw = getattr(wiki_cfg, "vault_root", None)
++    if raw is not None and str(raw).strip() == "":
++        raw = None
++    return resolve_vault_root(raw).path
++
++
++class TodoTick(BaseModel):
++    line: int = Field(ge=0, le=100000)
++    tag: str = Field(max_length=16)
++    done: bool
++
++
++@router.get("/todo")
++async def todo(request: Request, _device: dict[str, Any] = Depends(_device)) -> dict[str, Any]:  # noqa: B008
++    return await asyncio.to_thread(phone_todo.list_items, _vault(request))
++
++
++@router.post("/todo/tick")
++async def todo_tick(
++    body: TodoTick, request: Request, _device: dict[str, Any] = Depends(_device)  # noqa: B008
++) -> dict[str, Any]:
++    try:
++        await asyncio.to_thread(phone_todo.set_done, _vault(request), body.line, body.tag, body.done)
++    except phone_todo.Stale as exc:
++        raise HTTPException(status_code=409, detail="the list changed: reload it") from exc
++    return await asyncio.to_thread(phone_todo.list_items, _vault(request))
++
++
+ # ------------------------------------------------------------- notifications
+ class PushSub(BaseModel):
+     endpoint: str = Field(max_length=2048)
+diff --git a/dodaios/ui/web/phone_todo.py b/dodaios/ui/web/phone_todo.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..b84de4cb3e5dea5b3e895b2380776095cbc0d45d
+--- /dev/null
++++ b/dodaios/ui/web/phone_todo.py
+@@ -0,0 +1,89 @@
++"""The phone's "to do" list: the agent's own reminders note, read (and ticked) from the vault.
++
++The agent keeps reminders in ``<vault>/projects/promemoria.md``. The phone reads that one fixed
++file, never a path it is given, and can only flip the checkbox of a line it just listed.
++"""
++
++from __future__ import annotations
++
++import hashlib
++import os
++import re
++from pathlib import Path
++from typing import Any
++
++NOTE = Path("projects") / "promemoria.md"
++MAX_BYTES = 256 * 1024
++_ITEM = re.compile(r"^(\s*)(?:[-*+]|\d+[.)])\s+(?:\[( |x|X)\]\s+)?(.+?)\s*$")
++_HEAD = re.compile(r"^#{1,6}\s+(.+?)\s*#*\s*$")
++
++
++def note_path(vault: Path) -> Path:
++    return Path(vault) / NOTE
++
++
++def _read(path: Path) -> list[str] | None:
++    try:
++        if path.is_symlink() or path.stat().st_size > MAX_BYTES:
++            return None
++        return path.read_text("utf-8").split("\n")
++    except OSError:
++        return None
++
++
++def _tag(text: str) -> str:
++    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:10]  # noqa: S324 - a line fingerprint, not security
++
++
++def list_items(vault: Path) -> dict[str, Any]:
++    lines = _read(note_path(vault))
++    if lines is None:
++        return {"available": False, "items": []}
++    items: list[dict[str, Any]] = []
++    group = ""
++    start = 1 if lines and lines[0].strip() == "---" else 0
++    if start:  # skip the frontmatter block
++        for i in range(1, len(lines)):
++            if lines[i].strip() == "---":
++                start = i + 1
++                break
++        else:
++            start = 0
++    for number in range(start, len(lines)):
++        line = lines[number]
++        head = _HEAD.match(line)
++        if head:
++            group = head.group(1)
++            continue
++        item = _ITEM.match(line)
++        if item:
++            box, text = item.group(2), item.group(3)
++            items.append({
++                "line": number, "tag": _tag(line), "text": text, "group": group,
++                "done": box in ("x", "X"), "checkbox": box is not None,
++            })
++    return {"available": True, "items": items}
++
++
++class Stale(Exception):
++    """The note changed since the phone listed it."""
++
++
++def set_done(vault: Path, line: int, tag: str, done: bool) -> None:
++    path = note_path(vault)
++    lines = _read(path)
++    if lines is None or not 0 <= line < len(lines) or _tag(lines[line]) != tag:
++        raise Stale
++    m = _ITEM.match(lines[line])
++    if m is None:
++        raise Stale
++    mark = "x" if done else " "
++    rest = lines[line][m.start(3):]
++    prefix = lines[line][: m.start(3)]
++    if m.group(2) is not None:  # "- [ ] text": flip the box in place
++        lines[line] = re.sub(r"\[( |x|X)\]", f"[{mark}]", prefix, count=1) + rest
++    else:  # "- text": add a box
++        lines[line] = prefix + f"[{mark}] " + rest
++    tmp = path.with_suffix(".md.tmp")
++    tmp.write_text("\n".join(lines), "utf-8")
++    os.replace(tmp, path)
