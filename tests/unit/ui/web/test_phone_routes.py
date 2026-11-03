@@ -824,3 +824,40 @@ def test_status_names_the_voice_that_spoke_and_flags_the_backup(app, owner, monk
     by = {c["id"]: c for c in got["checks"]}
     assert by["speak"]["state"] == "warn" and "riserva" in by["speak"]["detail"] and "Charon" in by["speak"]["detail"]
     assert got["overall"] in {"warn", "bad"}
+
+
+# ----------------------------------------------------------------------- costs and limits
+def test_costs_page_reads_the_ledger_and_counts_the_phones_voice(app, owner, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dodaios.plugins import tts as tts_pkg
+
+    class Chunk:
+        pcm = b"\x00\x01" * 400
+        sample_rate = 24000
+
+    class Voice:
+        name = "cartesia"
+
+        async def synthesize(self, _text, language_code="it-IT"):
+            yield Chunk()
+
+    monkeypatch.setattr(tts_pkg, "build_tts_from_config", lambda _cfg: Voice())
+    phone, _ = pair(app, owner)
+    _chat_id(app)
+    got = phone.get("/api/phone/costs").json()
+    assert got["voice"] == {"chars_day": 0, "chars_month": 0, "limit_month": None}
+    assert set(got["windows"]) <= {"day", "week", "month"}
+    assert phone.post("/api/phone/speak", json={"text": "Ciao Dax, come stai oggi?"}).status_code == 200
+    got = phone.get("/api/phone/costs").json()["voice"]
+    assert got["chars_month"] == got["chars_day"] > 10
+    # a limit below the use turns the status line red; above 80% it warns; nothing set = silent
+    assert phone.put("/api/phone/costs/limit", json={"voice_chars_month": 10_000}).json()["voice"]["limit_month"] == 10_000
+    assert "usage" not in {c["id"] for c in phone.get("/api/phone/status").json()["checks"]}
+    phone.put("/api/phone/costs/limit", json={"voice_chars_month": 20})
+    by = {c["id"]: c for c in phone.get("/api/phone/status").json()["checks"]}
+    assert by["usage"]["state"] == "bad"
+    phone.put("/api/phone/costs/limit", json={"voice_chars_month": None})
+    assert "usage" not in {c["id"] for c in phone.get("/api/phone/status").json()["checks"]}
+    assert phone.put("/api/phone/costs/limit", json={"voice_chars_month": -5}).status_code == 422
+    anon = browser(app)
+    with anon:
+        assert anon.get("/api/phone/costs").status_code == 401

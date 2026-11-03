@@ -35,7 +35,7 @@ from pydantic import BaseModel, Field
 from dodaios.agent_chat import attachments as chat_attachments
 from dodaios.phone.devices import DeviceRegistry, PairingError, csrf_matches
 from dodaios.phone.store import NotFound, Revoked, TransferError, TransferStore
-from dodaios.ui.web import phone_auto, phone_push, phone_todo
+from dodaios.ui.web import phone_auto, phone_push, phone_todo, phone_usage
 
 router = APIRouter(prefix="/api/phone", tags=["phone"])
 admin_router = APIRouter(prefix="/api/phone-admin", tags=["phone"])
@@ -60,6 +60,7 @@ class _Hub:
         self.store = TransferStore(root / "files")
         self.push = phone_push.PushStore(root)
         self.auto = phone_auto.AutoGrants(root)
+        self.usage = phone_usage.VoiceUsage(root)
         #: Last outcome of the voice calls: key -> (ok, detail, unix time). Memory only.
         self.notes: dict[str, tuple[bool, str, float]] = {}
         #: Which voice actually spoke the last reply: engine, voice, whether the backup did.
@@ -249,6 +250,13 @@ async def status(
                 checks.append({"id": key, "label": label, "state": "ok", "detail": who or "ha funzionato"})
         else:
             checks.append({"id": key, "label": label, "state": "bad", "detail": "ultimo tentativo non riuscito"})
+    level = hub.usage.level()
+    if level != "ok":
+        snap = hub.usage.snapshot()
+        checks.append({
+            "id": "usage", "label": "Voce: uso del mese", "state": "bad" if level == "bad" else "warn",
+            "detail": f"{snap['chars_month']:,} caratteri su {snap['limit_month']:,} (limite che hai impostato)".replace(",", "."),
+        })
     worst = max((c["state"] for c in checks), key=lambda x: _RANK[x], default="ok")
     return {
         "overall": worst, "checks": checks,
@@ -273,6 +281,55 @@ async def auto_grant(
         return {"auto": await _hub(request).auto.grant(svc, session_id, body.window)}
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="session not found") from exc
+
+
+# ------------------------------------------------------------------- costs
+def _cost_windows(request: Request) -> dict[str, Any]:
+    """Spend over the last 24 hours, 7 and 30 days, from the same ledger the desktop Costs page reads."""
+    from dodaios.costs import build_report
+    from dodaios.ui.web import costs_routes as cr
+
+    sources = cr._sources(request)  # noqa: SLF001 - one reader for one ledger
+    out: dict[str, Any] = {"windows": {}, "by_provider": []}
+    for key, days in (("day", 1), ("week", 7), ("month", 30)):
+        start, end = cr._range(days, None, None)  # noqa: SLF001
+        report = build_report(cr._cache.get(sources, start, end), since_ms=start, until_ms=end, top_n=6)  # noqa: SLF001
+        data = report.to_dict()
+        t = data["totals"]
+        out["windows"][key] = {
+            "usd": round(float(t["cost_usd"]), 4), "entries": int(t["entries"]),
+            "gap_entries": int(t["gap_entries"]), "subscription_usd": round(float(t["subscription_usd"]), 4),
+        }
+        if key == "month":
+            out["by_provider"] = [
+                {"provider": str(b["key"]), "usd": round(float(b["cost_usd"]), 4), "chars": int(b.get("chars") or 0),
+                 "audio_s": round(int(b.get("audio_ms") or 0) / 1000)}
+                for b in data["by_provider"][:6]
+            ]
+    out["eur_per_usd"] = cr._currency().eur_per_usd  # noqa: SLF001
+    return out
+
+
+class UsageLimit(BaseModel):
+    voice_chars_month: int | None = Field(default=None, ge=0, le=100_000_000)
+
+
+@router.get("/costs")
+async def costs(request: Request, _device: dict[str, Any] = Depends(_device)) -> dict[str, Any]:  # noqa: B008
+    try:
+        data = await asyncio.to_thread(_cost_windows, request)
+    except Exception:  # noqa: BLE001 - the page still shows the phone's own voice count
+        data = {"windows": {}, "by_provider": [], "eur_per_usd": 0.0}
+    data["voice"] = _hub(request).usage.snapshot()
+    return data
+
+
+@router.put("/costs/limit")
+async def costs_limit(
+    body: UsageLimit, request: Request, _device: dict[str, Any] = Depends(_device)  # noqa: B008
+) -> dict[str, Any]:
+    await asyncio.to_thread(_hub(request).usage.set_limit, body.voice_chars_month)
+    return {"voice": _hub(request).usage.snapshot()}
 
 
 # --------------------------------------------------------------------- to do
@@ -680,6 +737,7 @@ async def _speak_impl(body: PhoneSpeak, request: Request, device: dict[str, Any]
         if not pcm:
             raise HTTPException(status_code=502, detail="speech failed")
         _ensure_active(request, device)
+        _hub(request).usage.add(len(spoken))
         primary = getattr(tts, "_primary", None)
         _hub(request).voice_info = {
             "engine": str(getattr(tts, "name", "") or ""),
