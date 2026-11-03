@@ -645,3 +645,28 @@ def test_a_finished_turn_of_a_chat_the_phone_wrote_to_sends_one_push(app, owner,
         assert sent == [device_id]
         notice = phone.get("/api/phone/push/last").json()["notice"]
         assert notice["title"] == "Jarvis ha finito" and notice["session"] == "mine"
+
+
+def test_no_push_while_the_app_is_open_in_front(tmp_path: Path) -> None:
+    from dodaios.ui.web import phone_push
+    from dodaios.ui.web.phone_push import PushStore, _deliver
+
+    store = PushStore(tmp_path)
+    store.subscribe("d1", GOOD_ENDPOINT, "https://x.test")
+    store.seen("d1")
+    assert store.present("d1")
+    posted: list[str] = []
+    import httpx
+
+    orig = httpx.post
+    httpx.post = lambda *a, **k: posted.append(a[0])  # type: ignore[assignment]
+    try:
+        _deliver(store, "d1", lambda _id: True)
+        assert posted == []  # app in front: skipped
+        store._seen["d1"] -= phone_push._PRESENT_S + 1  # noqa: SLF001
+        res = type("R", (), {"status_code": 201})()
+        httpx.post = lambda *a, **k: (posted.append(a[0]), res)[1]  # type: ignore[assignment]
+        _deliver(store, "d1", lambda _id: True)
+        assert posted == [GOOD_ENDPOINT]  # app away: sent
+    finally:
+        httpx.post = orig  # type: ignore[assignment]

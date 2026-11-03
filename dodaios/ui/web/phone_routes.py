@@ -107,6 +107,7 @@ def _device(request: Request) -> dict[str, Any]:
     device = hub.registry.authenticate(request.cookies.get(COOKIE))
     if device is None:
         raise HTTPException(status_code=401, detail="not paired")
+    hub.push.seen(device["id"])
     if request.method not in ("GET", "HEAD"):
         if not _same_origin(request) or not csrf_matches(
             device["csrf"], request.headers.get(CSRF_HEADER)

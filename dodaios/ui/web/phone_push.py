@@ -38,6 +38,8 @@ _NOTIFY = {
 }
 _WATCH_TTL_S = 6 * 3600.0  # a chat the phone wrote to stays "watched" this long
 _MIN_GAP_S = 3.0
+#: A device that called the API this recently has the app open in front: no banner for it.
+_PRESENT_S = 15.0
 
 
 def _b64u(raw: bytes) -> str:
@@ -65,6 +67,7 @@ class PushStore:
         self._watched: dict[str, float] = {}
         self._last: dict[str, dict[str, Any]] = {}
         self._gap: dict[tuple[str, str], float] = {}
+        self._seen: dict[str, float] = {}
 
     # ---- keys
     def _private(self) -> ec.EllipticCurvePrivateKey:
@@ -171,6 +174,13 @@ class PushStore:
                 self._last[dev] = notice
             return notice
 
+    def seen(self, device_id: str) -> None:
+        """The app just talked to us (it polls every few seconds while it is open in front)."""
+        self._seen[device_id] = time.monotonic()
+
+    def present(self, device_id: str) -> bool:
+        return time.monotonic() - self._seen.get(device_id, -1e9) < _PRESENT_S
+
     def last(self, device_id: str) -> dict[str, Any] | None:
         with self._lock:
             return self._last.get(device_id)
@@ -186,6 +196,8 @@ def _deliver(store: PushStore, device_id: str, is_active: Any) -> None:
         return
     if not is_active(device_id):
         store.unsubscribe(device_id)
+        return
+    if store.present(device_id):
         return
     if not allowed_endpoint(sub["endpoint"]):
         store.unsubscribe(device_id)
